@@ -1,8 +1,5 @@
 @import "tailwindcss";
-@import "tw-animate-css";
 @import "shadcn/tailwind.css";
-
-@custom-variant dark (&:is(.dark *));
 
 @theme inline {
   --color-background: var(--background);
@@ -123,4 +120,17 @@
   body {
     @apply bg-background text-foreground;
   }
+}
+
+/* Hide Turbopack DevTools overlay */
+.turbo-check {
+  display: none !important;
+}
+
+.turbo-devtools {
+  display: none !important;
+}
+
+#turbo-check {
+  display: none !important;
 }
