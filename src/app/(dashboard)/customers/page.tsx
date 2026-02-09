@@ -198,6 +198,7 @@ export default function CustomersPage() {
       email: newCustomer.email || undefined,
       notes: newCustomer.notes,
       tags: newCustomer.tags,
+      cancellation_count: 0,
     });
   };
 
