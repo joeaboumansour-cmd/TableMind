@@ -4,11 +4,6 @@ import { NextRequest, NextResponse } from "next/server";
 export async function GET(request: NextRequest) {
   try {
     const supabase = await createClient();
-    const { data: { user } } = await supabase.auth.getUser();
-
-    if (!user) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
 
     const { searchParams } = new URL(request.url);
     const action = searchParams.get("action") || "overview";
@@ -17,63 +12,73 @@ export async function GET(request: NextRequest) {
     const endDate = searchParams.get("end_date");
     const year = searchParams.get("year");
     const period = searchParams.get("period") || "month";
+    const timezoneOffset = parseInt(searchParams.get("tz_offset") || "0"); // Minutes offset from UTC (e.g., -120 for UTC+2)
 
-    // Get user's restaurant
+    console.log("Analytics API called:", { action, restaurantId, period, timezoneOffset });
+
+    // Get restaurant - rely on RLS like waitlist API does
     let restaurant_id = restaurantId;
     if (!restaurant_id) {
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("restaurant_id")
-        .eq("id", user.id)
+      // Get from restaurants table via RLS
+      const { data: restaurant, error: restaurantError } = await supabase
+        .from("restaurants")
+        .select("id")
+        .limit(1)
         .single();
 
-      if (!profile?.restaurant_id) {
-        // Try getting from restaurants table via RLS
-        const { data: restaurant } = await supabase
-          .from("restaurants")
-          .select("id")
-          .limit(1)
-          .single();
-
-        restaurant_id = restaurant?.id;
-      } else {
-        restaurant_id = profile.restaurant_id;
+      if (restaurantError) {
+        console.error("Restaurant fetch error:", restaurantError);
       }
+
+      restaurant_id = restaurant?.id;
     }
 
     if (!restaurant_id) {
-      return NextResponse.json({ error: "Restaurant not found" }, { status: 404 });
+      return NextResponse.json({ error: "Restaurant not found", details: "No restaurant_id provided or found" }, { status: 404 });
     }
 
-    // Calculate date ranges
-    const now = new Date();
-    let start_date: Date;
-    let end_date: Date = now;
+    // Calculate date ranges based on client's timezone
+    // Get current UTC time and adjust for client's timezone
+    const nowUTC = new Date();
+    const nowLocal = new Date(nowUTC.getTime() - timezoneOffset * 60000);
+    
+    let start_date_local: Date;
+    let end_date_local: Date = nowLocal;
 
     switch (period) {
+      case "day":
+        start_date_local = new Date(nowLocal.getTime() - 1 * 24 * 60 * 60 * 1000);
+        break;
       case "week":
-        start_date = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+        start_date_local = new Date(nowLocal.getTime() - 7 * 24 * 60 * 60 * 1000);
         break;
       case "month":
-        start_date = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+        start_date_local = new Date(nowLocal.getTime() - 30 * 24 * 60 * 60 * 1000);
         break;
       case "quarter":
-        start_date = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);
+        start_date_local = new Date(nowLocal.getTime() - 90 * 24 * 60 * 60 * 1000);
         break;
       case "year":
-        start_date = new Date(now.getTime() - 365 * 24 * 60 * 60 * 1000);
+        start_date_local = new Date(nowLocal.getTime() - 365 * 24 * 60 * 60 * 1000);
         break;
       default:
         if (startDate && endDate) {
-          start_date = new Date(startDate);
-          end_date = new Date(endDate);
+          // Parse dates as local dates by appending time
+          start_date_local = new Date(startDate + "T00:00:00");
+          end_date_local = new Date(endDate + "T23:59:59");
         } else {
-          start_date = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+          start_date_local = new Date(nowLocal.getTime() - 30 * 24 * 60 * 60 * 1000);
         }
     }
 
-    const start_date_str = start_date.toISOString();
-    const end_date_str = end_date.toISOString();
+    // Convert local dates to UTC for Supabase query
+    const start_date_utc = new Date(start_date_local!.getTime() + timezoneOffset * 60000);
+    const end_date_utc = new Date(end_date_local.getTime() + timezoneOffset * 60000);
+
+    const start_date_str = start_date_utc.toISOString();
+    const end_date_str = end_date_utc.toISOString();
+
+    console.log("Calling RPC with:", { restaurant_id, start_date_str, end_date_str });
 
     // Call the appropriate RPC function based on action
     let data: Record<string, unknown> = {};
@@ -81,11 +86,23 @@ export async function GET(request: NextRequest) {
     switch (action) {
       case "comprehensive":
         // For comprehensive analytics, we need to call multiple functions
-        const { data: overview } = await supabase.rpc("get_comprehensive_analytics", {
+        const { data: overview, error: comprehensiveError } = await supabase.rpc("get_comprehensive_analytics", {
           p_restaurant_id: restaurant_id,
           p_start_date: start_date_str,
           p_end_date: end_date_str,
         });
+        
+        console.log("RPC response:", { overview, comprehensiveError });
+        
+        if (comprehensiveError) {
+          console.error("Comprehensive analytics error:", comprehensiveError);
+          return NextResponse.json({ error: "Database function error", details: comprehensiveError.message }, { status: 500 });
+        }
+        
+        if (!overview) {
+          return NextResponse.json({ error: "No data returned from database", details: "The RPC function returned null" }, { status: 500 });
+        }
+        
         data = { overview, period: { start: start_date_str, end: end_date_str } };
         break;
 
@@ -117,7 +134,7 @@ export async function GET(request: NextRequest) {
         break;
 
       case "seasonal":
-        const targetYear = year ? parseInt(year) : now.getFullYear();
+        const targetYear = year ? parseInt(year) : nowLocal.getFullYear();
         const { data: seasonal } = await supabase.rpc("get_seasonal_trends", {
           p_restaurant_id: restaurant_id,
           p_year: targetYear,
@@ -126,7 +143,7 @@ export async function GET(request: NextRequest) {
         break;
 
       case "year_comparison":
-        const currentYear = year ? parseInt(year) : now.getFullYear();
+        const currentYear = year ? parseInt(year) : nowLocal.getFullYear();
         const previousYear = currentYear - 1;
         const { data: yearComparison } = await supabase.rpc("get_year_over_year_comparison", {
           p_restaurant_id: restaurant_id,
@@ -140,8 +157,8 @@ export async function GET(request: NextRequest) {
         // Week over week or month over month
         const currentStart = start_date_str;
         const currentEnd = end_date_str;
-        const prevStart = new Date(start_date.getTime() - (end_date.getTime() - start_date.getTime()));
-        const prevEnd = new Date(start_date.getTime() - 1);
+        const prevStart = new Date(start_date_local!.getTime() - (end_date_local.getTime() - start_date_local!.getTime()));
+        const prevEnd = new Date(start_date_local!.getTime() - 1);
         const { data: growth } = await supabase.rpc("get_growth_rates", {
           p_restaurant_id: restaurant_id,
           p_current_start: currentStart,
@@ -208,10 +225,14 @@ export async function GET(request: NextRequest) {
         action,
       },
     });
-  } catch (error) {
+  } catch (error: any) {
     console.error("Analytics API error:", error);
     return NextResponse.json(
-      { error: "Failed to fetch analytics", details: String(error) },
+      { 
+        error: "Failed to fetch analytics", 
+        details: error.message || String(error),
+        stack: error.stack 
+      },
       { status: 500 }
     );
   }

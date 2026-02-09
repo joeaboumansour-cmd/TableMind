@@ -81,6 +81,11 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
+  // Skip analytics API to avoid auth issues
+  if (url.pathname.startsWith("/api/analytics")) {
+    return;
+  }
+
   // API requests - Network first, fall back to cache
   if (API_ROUTES.some((route) => url.pathname.startsWith(route))) {
     event.respondWith(

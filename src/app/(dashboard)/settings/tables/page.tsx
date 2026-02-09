@@ -28,13 +28,6 @@ interface Table {
   sort_order: number;
 }
 
-// Mock data for fallback
-const mockTables: Table[] = [
-  { id: "1", name: "Table 1", capacity: 2, shape: "rect", sort_order: 1 },
-  { id: "2", name: "Table 2", capacity: 4, shape: "rect", sort_order: 2 },
-  { id: "3", name: "Table 3", capacity: 4, shape: "circle", sort_order: 3 },
-  { id: "4", name: "Table 4", capacity: 6, shape: "rect", sort_order: 4 },
-];
 
 export default function TablesPage() {
   const queryClient = useQueryClient();
@@ -54,17 +47,17 @@ export default function TablesPage() {
   });
 
   // Fetch tables
-  const { data: tables = mockTables, isLoading } = useQuery({
+  const { data: tables = [], isLoading } = useQuery({
     queryKey: ["tables", restaurantId],
     queryFn: async () => {
-      if (!restaurantId) return mockTables;
+      if (!restaurantId) return [];
       const { data, error } = await supabase
         .from("tables")
         .select("*")
         .eq("restaurant_id", restaurantId)
         .order("sort_order", { ascending: true });
-      if (error) return mockTables;
-      return data || mockTables;
+      if (error) return [];
+      return data || [];
     },
     enabled: true,
   });

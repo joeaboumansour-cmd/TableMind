@@ -288,7 +288,7 @@ $$;
 
 -- =============================================
 -- 6. GROWTH RATE (WoW, MoM)
-// ============================================
+-- =============================================
 
 CREATE OR REPLACE FUNCTION get_growth_rates(
   p_restaurant_id UUID,
@@ -392,7 +392,7 @@ $$;
 
 -- =============================================
 -- 8. POPULAR DINING TIMES (Hourly Heatmap)
-// =============================================
+-- =============================================
 
 CREATE OR REPLACE FUNCTION get_dining_times_heatmap(
   p_restaurant_id UUID,

@@ -37,8 +37,13 @@ export async function updateSession(request: NextRequest) {
     }
   );
 
-  // refreshing the auth token
-  await supabase.auth.getUser();
+  // refreshing the auth token - this is critical for API routes
+  const { data: { user }, error } = await supabase.auth.getUser();
+  
+  if (error) {
+    console.error("Middleware auth error:", error.message);
+  }
 
+  // Return the response with updated cookies
   return supabaseResponse;
 }

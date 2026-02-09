@@ -38,15 +38,6 @@ interface Customer {
   notes?: string;
 }
 
-// Mock customers data
-const mockCustomers: Customer[] = [
-  { id: "1", name: "John Smith", phone: "555-0101", email: "john@email.com", tags: ["VIP", "Regular"], total_visits: 15, no_show_count: 0, cancellation_count: 0, notes: "Prefers window seating" },
-  { id: "2", name: "Sarah Johnson", phone: "555-0102", email: "sarah@email.com", tags: ["Regular"], total_visits: 8, no_show_count: 1, cancellation_count: 1, notes: "" },
-  { id: "3", name: "Mike Brown", phone: "555-0103", email: "mike@email.com", tags: ["Family"], total_visits: 3, no_show_count: 0, cancellation_count: 0, notes: "Has 2 children" },
-  { id: "4", name: "Emily Davis", phone: "555-0104", email: "emily@email.com", tags: ["Date Night"], total_visits: 12, no_show_count: 2, cancellation_count: 3, notes: "Anniversary every June" },
-  { id: "5", name: "Robert Wilson", phone: "555-0105", tags: ["VIP", "High Value"], total_visits: 25, no_show_count: 0, cancellation_count: 0, notes: "Always orders wine" },
-  { id: "6", name: "Lisa Chen", phone: "555-0106", email: "lisa@email.com", tags: ["Regular"], total_visits: 6, no_show_count: 0, cancellation_count: 0, notes: "" },
-];
 
 export default function CustomersPage() {
   const queryClient = useQueryClient();
@@ -79,17 +70,17 @@ export default function CustomersPage() {
   });
 
   // Fetch customers
-  const { data: customers = mockCustomers, isLoading } = useQuery({
+  const { data: customers = [], isLoading } = useQuery({
     queryKey: ["customers", restaurantId],
     queryFn: async () => {
-      if (!restaurantId) return mockCustomers;
+      if (!restaurantId) return [];
       const { data, error } = await supabase
         .from("customers")
         .select("*")
         .eq("restaurant_id", restaurantId)
         .order("name", { ascending: true });
-      if (error) return mockCustomers;
-      return data || mockCustomers;
+      if (error) return [];
+      return data || [];
     },
     enabled: true,
   });

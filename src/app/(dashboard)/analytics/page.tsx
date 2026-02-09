@@ -12,81 +12,104 @@ import type { AnalyticsResponse, ComprehensiveAnalytics } from "@/lib/types/anal
 
 const supabase = createClient();
 
-const mockReservations = [
-  { id: "1", customer_name: "John Smith", party_size: 2, start_time: "2024-01-15T19:00:00", status: "finished", table_id: "1" },
-  { id: "2", customer_name: "Sarah Johnson", party_size: 4, start_time: "2024-01-15T19:30:00", status: "finished", table_id: "2" },
-  { id: "3", customer_name: "Mike Brown", party_size: 3, start_time: "2024-01-15T17:00:00", status: "cancelled", table_id: "2" },
-  { id: "4", customer_name: "Emily Davis", party_size: 6, start_time: "2024-01-15T20:00:00", status: "finished", table_id: "4" },
-  { id: "5", customer_name: "Robert Wilson", party_size: 8, start_time: "2024-01-15T18:00:00", status: "no_show", table_id: "5" },
-  { id: "6", customer_name: "Lisa Chen", party_size: 2, start_time: "2024-01-16T19:00:00", status: "finished", table_id: "3" },
-  { id: "7", customer_name: "David Lee", party_size: 4, start_time: "2024-01-16T20:00:00", status: "finished", table_id: "2" },
-  { id: "8", customer_name: "Anna White", party_size: 2, start_time: "2024-01-16T18:30:00", status: "cancelled", table_id: "1" },
-  { id: "9", customer_name: "James Brown", party_size: 6, start_time: "2024-01-17T19:00:00", status: "finished", table_id: "4" },
-  { id: "10", customer_name: "Maria Garcia", party_size: 3, start_time: "2024-01-17T20:30:00", status: "finished", table_id: "2" },
-];
-
-const mockCustomers = [
-  { id: "1", name: "John Smith", total_visits: 15, no_show_count: 0, cancellation_count: 1, tags: ["VIP", "Regular"], reliability_score: 94 },
-  { id: "2", name: "Sarah Johnson", total_visits: 8, no_show_count: 1, cancellation_count: 2, tags: ["Regular"], reliability_score: 63 },
-  { id: "3", name: "Mike Brown", total_visits: 3, no_show_count: 0, cancellation_count: 0, tags: ["Family"], reliability_score: 100 },
-  { id: "4", name: "Emily Davis", total_visits: 12, no_show_count: 2, cancellation_count: 1, tags: ["Date Night"], reliability_score: 71 },
-  { id: "5", name: "Robert Wilson", total_visits: 25, no_show_count: 0, cancellation_count: 0, tags: ["VIP", "High Value"], reliability_score: 100 },
-];
-
-const mockTables = [
-  { id: "1", name: "Table 1", capacity: 2 },
-  { id: "2", name: "Table 2", capacity: 4 },
-  { id: "3", name: "Table 3", capacity: 4 },
-  { id: "4", name: "Table 4", capacity: 6 },
-  { id: "5", name: "Table 5", capacity: 8 },
-];
-
 const STATUS_COLORS: Record<string, string> = { finished: "#22c55e", booked: "#3b82f6", confirmed: "#8b5cf6", seated: "#06b6d4", cancelled: "#ef4444", no_show: "#f59e0b" };
 const PARTY_COLORS = ["#3b82f6", "#22c55e", "#f59e0b", "#8b5cf6", "#ef4444"];
 
 export default function AnalyticsPage() {
-  const [period, setPeriod] = useState<"day" | "week" | "month">("week");
+  const [period, setPeriod] = useState<"day" | "week" | "month" | "year">("week");
 
-  const { data: restaurantId } = useQuery({ queryKey: ["restaurant-id"], queryFn: async () => { const { data } = await supabase.from("restaurants").select("id").limit(1).single(); return data?.id || null; } });
-
-  const { data: reservations = mockReservations } = useQuery({
-    queryKey: ["analytics-reservations", restaurantId, period],
-    queryFn: async () => { if (!restaurantId) return mockReservations; const { data } = await supabase.from("reservations").select("id, customer_name, party_size, start_time, status, table_id").eq("restaurant_id", restaurantId).gte("start_time", new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()).order("start_time", { ascending: true }); return data?.length ? data : mockReservations; },
-    enabled: !!restaurantId,
-  });
-
-  const { data: customers = mockCustomers } = useQuery({
-    queryKey: ["analytics-customers", restaurantId],
-    queryFn: async () => { if (!restaurantId) return mockCustomers; const { data } = await supabase.from("customers").select("id, name, total_visits, no_show_count, cancellation_count, tags").eq("restaurant_id", restaurantId).order("total_visits", { ascending: false }); return data?.length ? data : mockCustomers; },
-    enabled: !!restaurantId,
-  });
-
-  const { data: tables = mockTables } = useQuery({
-    queryKey: ["analytics-tables", restaurantId],
-    queryFn: async () => { if (!restaurantId) return mockTables; const { data } = await supabase.from("tables").select("id, name, capacity").eq("restaurant_id", restaurantId); return data?.length ? data : mockTables; },
-    enabled: !!restaurantId,
-  });
-
-  // Enhanced analytics data
-  const { data: analyticsData } = useQuery({
-    queryKey: ["comprehensive-analytics", restaurantId, period],
+  const { data: restaurantId } = useQuery({
+    queryKey: ["restaurant-id"],
     queryFn: async () => {
-      if (!restaurantId) return null;
-      try {
-        const response = await fetch(`/api/analytics?action=comprehensive&restaurant_id=${restaurantId}&period=${period}`);
-        if (!response.ok) throw new Error('Failed to fetch analytics');
-        return await response.json() as AnalyticsResponse;
-      } catch (error) {
-        console.error('Analytics fetch error:', error);
-        return null;
-      }
+      const { data } = await supabase.from("restaurants").select("id").limit(1).single();
+      return data?.id || null;
+    }
+  });
+
+  const { data: reservations = [] } = useQuery({
+    queryKey: ["analytics-reservations", restaurantId, period],
+    queryFn: async () => {
+      if (!restaurantId) return [];
+      const { data, error } = await supabase
+        .from("reservations")
+        .select("id, customer_name, party_size, start_time, status, table_id")
+        .eq("restaurant_id", restaurantId)
+        .order("start_time", { ascending: true });
+      if (error) return [];
+      return data || [];
     },
     enabled: !!restaurantId,
   });
 
+  const { data: customers = [] } = useQuery({
+    queryKey: ["analytics-customers", restaurantId],
+    queryFn: async () => {
+      if (!restaurantId) return [];
+      const { data, error } = await supabase
+        .from("customers")
+        .select("id, name, total_visits, no_show_count, cancellation_count, tags")
+        .eq("restaurant_id", restaurantId)
+        .order("total_visits", { ascending: false });
+      if (error) return [];
+      return data || [];
+    },
+    enabled: !!restaurantId,
+  });
+
+  const { data: tables = [] } = useQuery({
+    queryKey: ["analytics-tables", restaurantId],
+    queryFn: async () => {
+      if (!restaurantId) return [];
+      const { data, error } = await supabase
+        .from("tables")
+        .select("id, name, capacity")
+        .eq("restaurant_id", restaurantId);
+      if (error) return [];
+      return data || [];
+    },
+    enabled: !!restaurantId,
+  });
+
+  const { data: analyticsData, error: analyticsError, isLoading: analyticsLoading } = useQuery({
+    queryKey: ["comprehensive-analytics", restaurantId, period],
+    queryFn: async () => {
+      if (!restaurantId) return null;
+      // Get timezone offset in minutes (negative for ahead of UTC like UTC+2 = -120)
+      const tzOffset = new Date().getTimezoneOffset();
+      const response = await fetch(`/api/analytics?action=comprehensive&restaurant_id=${restaurantId}&period=${period}&tz_offset=${tzOffset}`);
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data?.details || data?.error || `Failed to fetch analytics (${response.status})`);
+      }
+      return data as AnalyticsResponse;
+    },
+    enabled: !!restaurantId,
+  });
+
+  const getDateRange = useMemo(() => {
+    const now = new Date();
+    const start = new Date();
+    switch (period) {
+      case "day": start.setDate(now.getDate() - 1); break;
+      case "week": start.setDate(now.getDate() - 7); break;
+      case "month": start.setMonth(now.getMonth() - 1); break;
+      case "year": start.setFullYear(now.getFullYear() - 1); break;
+      default: start.setDate(now.getDate() - 7);
+    }
+    return { start, end: now };
+  }, [period]);
+
+  const filteredReservations = useMemo(() => {
+    const { start, end } = getDateRange;
+    return reservations.filter((r: any) => {
+      const reservationDate = new Date(r.start_time);
+      return reservationDate >= start && reservationDate <= end;
+    });
+  }, [reservations, getDateRange]);
+
   const weeklyTrend = useMemo(() => {
     const days: Record<string, { total: number; guests: number; completed: number; cancelled: number; noShows: number }> = {};
-    reservations.forEach((r: any) => {
+    filteredReservations.forEach((r: any) => {
       const date = r.start_time.split("T")[0];
       if (!days[date]) days[date] = { total: 0, guests: 0, completed: 0, cancelled: 0, noShows: 0 };
       days[date].total++;
@@ -95,8 +118,12 @@ export default function AnalyticsPage() {
       if (r.status === "cancelled") days[date].cancelled++;
       if (r.status === "no_show") days[date].noShows++;
     });
-    return Object.entries(days).sort(([a], [b]) => a.localeCompare(b)).slice(-7).map(([date, counts]) => ({ date: new Date(date).toLocaleDateString("en-US", { weekday: "short" }), ...counts }));
-  }, [reservations]);
+    const daysToShow = period === "day" ? 1 : period === "month" ? 30 : period === "year" ? 365 : 7;
+    return Object.entries(days).sort(([a], [b]) => a.localeCompare(b)).slice(-daysToShow).map(([date, counts]) => ({
+      date: period === "year" ? new Date(date).toLocaleDateString("en-US", { month: "short", year: "2-digit" }) : new Date(date).toLocaleDateString("en-US", { weekday: "short" }),
+      ...counts
+    }));
+  }, [filteredReservations, period]);
 
   const hourlyDistribution = useMemo(() => {
     const hours: Record<number, number> = {};
@@ -115,19 +142,19 @@ export default function AnalyticsPage() {
   }, [reservations]);
 
   const metrics = useMemo(() => {
-    const total = reservations.length;
-    const finished = reservations.filter((r: any) => r.status === "finished").length;
-    const cancelled = reservations.filter((r: any) => r.status === "cancelled").length;
-    const noShows = reservations.filter((r: any) => r.status === "no_show").length;
-    const totalGuests = reservations.reduce((acc: number, r: any) => acc + r.party_size, 0);
+    const total = filteredReservations.length;
+    const finished = filteredReservations.filter((r: any) => r.status === "finished").length;
+    const cancelled = filteredReservations.filter((r: any) => r.status === "cancelled").length;
+    const noShows = filteredReservations.filter((r: any) => r.status === "no_show").length;
+    const totalGuests = filteredReservations.reduce((acc: number, r: any) => acc + r.party_size, 0);
     const avgPartySize = total > 0 ? Math.round(totalGuests / total) : 0;
     const completionRate = total > 0 ? Math.round((finished / total) * 100) : 0;
     const noShowRate = total > 0 ? Math.round((noShows / total) * 100) : 0;
     const cancellationRate = total > 0 ? Math.round((cancelled / total) * 100) : 0;
-    const uniqueTables = new Set(reservations.map((r: any) => r.table_id)).size;
+    const uniqueTables = new Set(filteredReservations.map((r: any) => r.table_id)).size;
     const utilization = tables.length > 0 ? Math.round((uniqueTables / tables.length) * 100) : 0;
     return { total, finished, cancelled, noShows, totalGuests, avgPartySize, completionRate, noShowRate, cancellationRate, utilization, uniqueTables };
-  }, [reservations, tables]);
+  }, [filteredReservations, tables]);
 
   const customerInsights = useMemo(() => {
     const totalCustomers = customers.length;
@@ -149,50 +176,7 @@ export default function AnalyticsPage() {
     return list;
   }, [metrics, customerInsights]);
 
-  // Enhanced analytics data processing
-  const comprehensiveData = analyticsData?.data?.overview || {
-    customer_segmentation: {
-      new_customers: 8,
-      returning_customers: 12,
-      new_percentage: 40,
-      returning_percentage: 60
-    },
-    lead_time: {
-      same_day: 5,
-      one_day: 3,
-      two_days: 4,
-      one_week: 6,
-      two_weeks: 2,
-      month_plus: 1,
-      average_days: 3.2
-    },
-    day_of_week: {
-      sunday: 8,
-      monday: 4,
-      tuesday: 6,
-      wednesday: 7,
-      thursday: 9,
-      friday: 12,
-      saturday: 10
-    },
-    dining_times: [
-      { hour: 17, reservations: 8, avg_party_size: 2.5 },
-      { hour: 18, reservations: 12, avg_party_size: 3.2 },
-      { hour: 19, reservations: 15, avg_party_size: 4.1 },
-      { hour: 20, reservations: 11, avg_party_size: 3.8 },
-      { hour: 21, reservations: 6, avg_party_size: 2.9 }
-    ],
-    table_popularity: [
-      { table_id: "1", table_name: "Table 1", reservations: 8, utilization_pct: 80 },
-      { table_id: "2", table_name: "Table 2", reservations: 12, utilization_pct: 85 },
-      { table_id: "3", table_name: "Table 3", reservations: 6, utilization_pct: 60 },
-      { table_id: "4", table_name: "Table 4", reservations: 10, utilization_pct: 75 },
-      { table_id: "5", table_name: "Table 5", reservations: 4, utilization_pct: 40 }
-    ]
-  };
-
-  console.log('Analytics data:', analyticsData);
-  console.log('Comprehensive data:', comprehensiveData);
+  const comprehensiveData = analyticsData?.data?.overview;
 
   return (
     <div className="p-6 max-w-7xl mx-auto">
@@ -202,9 +186,9 @@ export default function AnalyticsPage() {
       </div>
 
       <div className="flex gap-2 mb-8">
-        {(["day", "week", "month"] as const).map((p) => (
+        {(["day", "week", "month", "year"] as const).map((p) => (
           <Button key={p} variant={period === p ? "default" : "outline"} onClick={() => setPeriod(p)}>
-            {p === "day" ? "Today" : p === "week" ? "Last 7 Days" : "Last 30 Days"}
+            {p === "day" ? "Today" : p === "week" ? "Last 7 Days" : p === "month" ? "Last 30 Days" : "Last Year"}
           </Button>
         ))}
       </div>
@@ -218,8 +202,7 @@ export default function AnalyticsPage() {
         </TabsList>
 
         <TabsContent value="overview" className="space-y-6">
-          {/* Key Metrics */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
             <Card className="bg-gradient-to-br from-blue-500/10 to-blue-600/10 border-blue-500/20">
               <CardContent className="p-6">
                 <div className="flex items-center justify-between">
@@ -228,6 +211,17 @@ export default function AnalyticsPage() {
                     <p className="text-4xl font-bold">{metrics.total}</p>
                   </div>
                   <Calendar className="h-10 w-10 text-blue-500" />
+                </div>
+              </CardContent>
+            </Card>
+            <Card className="bg-gradient-to-br from-teal-500/10 to-teal-600/10 border-teal-500/20">
+              <CardContent className="p-6">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-medium text-muted-foreground">Total Guests</p>
+                    <p className="text-4xl font-bold">{metrics.totalGuests}</p>
+                  </div>
+                  <Users className="h-10 w-10 text-teal-500" />
                 </div>
               </CardContent>
             </Card>
@@ -266,64 +260,34 @@ export default function AnalyticsPage() {
             </Card>
           </div>
 
-          {/* Enhanced Metrics */}
           {comprehensiveData && (
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <Card>
-                <CardHeader>
-                  <CardTitle className="text-lg">New vs Returning Customers</CardTitle>
-                </CardHeader>
+                <CardHeader><CardTitle className="text-lg">New vs Returning Customers</CardTitle></CardHeader>
                 <CardContent>
                   <div className="space-y-2">
-                    <div className="flex justify-between">
-                      <span>New Customers:</span>
-                      <span className="font-bold">{comprehensiveData.customer_segmentation.new_customers}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span>Returning Customers:</span>
-                      <span className="font-bold">{comprehensiveData.customer_segmentation.returning_customers}</span>
-                    </div>
-                    <div className="flex justify-between text-sm text-muted-foreground">
-                      <span>New Customer Rate:</span>
-                      <span>{comprehensiveData.customer_segmentation.new_percentage}%</span>
-                    </div>
+                    <div className="flex justify-between"><span>New Customers:</span><span className="font-bold">{comprehensiveData.customer_segmentation?.new_customers || 0}</span></div>
+                    <div className="flex justify-between"><span>Returning Customers:</span><span className="font-bold">{comprehensiveData.customer_segmentation?.returning_customers || 0}</span></div>
+                    <div className="flex justify-between text-sm text-muted-foreground"><span>New Customer Rate:</span><span>{comprehensiveData.customer_segmentation?.new_percentage || 0}%</span></div>
                   </div>
                 </CardContent>
               </Card>
-
               <Card>
-                <CardHeader>
-                  <CardTitle className="text-lg">Lead Time Analysis</CardTitle>
-                </CardHeader>
+                <CardHeader><CardTitle className="text-lg">Lead Time Analysis</CardTitle></CardHeader>
                 <CardContent>
                   <div className="space-y-1 text-sm">
-                    <div className="flex justify-between">
-                      <span>Same Day:</span>
-                      <span>{comprehensiveData.lead_time.same_day}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span>1 Day:</span>
-                      <span>{comprehensiveData.lead_time.one_day}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span>Average Days:</span>
-                      <span className="font-bold">{comprehensiveData.lead_time.average_days}</span>
-                    </div>
+                    <div className="flex justify-between"><span>Same Day:</span><span>{comprehensiveData.lead_time?.same_day || 0}</span></div>
+                    <div className="flex justify-between"><span>1 Day:</span><span>{comprehensiveData.lead_time?.one_day || 0}</span></div>
+                    <div className="flex justify-between"><span>Average Days:</span><span className="font-bold">{comprehensiveData.lead_time?.average_days || 0}</span></div>
                   </div>
                 </CardContent>
               </Card>
-
               <Card>
-                <CardHeader>
-                  <CardTitle className="text-lg">Popular Dining Hours</CardTitle>
-                </CardHeader>
+                <CardHeader><CardTitle className="text-lg">Popular Dining Hours</CardTitle></CardHeader>
                 <CardContent>
                   <div className="space-y-1 text-sm">
-                    {comprehensiveData.dining_times.slice(0, 3).map((time) => (
-                      <div key={time.hour} className="flex justify-between">
-                        <span>{time.hour}:00:</span>
-                        <span>{time.reservations} reservations</span>
-                      </div>
+                    {(comprehensiveData.dining_times || []).slice(0, 3).map((time: any) => (
+                      <div key={time.hour} className="flex justify-between"><span>{time.hour}:00:</span><span>{time.reservations} reservations</span></div>
                     ))}
                   </div>
                 </CardContent>
@@ -331,13 +295,9 @@ export default function AnalyticsPage() {
             </div>
           )}
 
-          {/* Charts */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <Card>
-              <CardHeader>
-                <CardTitle>Reservation Trend</CardTitle>
-                <CardDescription>Daily reservations over time</CardDescription>
-              </CardHeader>
+              <CardHeader><CardTitle>Reservation Trend</CardTitle><CardDescription>Daily reservations over time</CardDescription></CardHeader>
               <CardContent>
                 <ResponsiveContainer width="100%" height={250}>
                   <LineChart data={weeklyTrend}>
@@ -352,12 +312,8 @@ export default function AnalyticsPage() {
                 </ResponsiveContainer>
               </CardContent>
             </Card>
-
             <Card>
-              <CardHeader>
-                <CardTitle>Hourly Distribution</CardTitle>
-                <CardDescription>Busiest times of day</CardDescription>
-              </CardHeader>
+              <CardHeader><CardTitle>Hourly Distribution</CardTitle><CardDescription>Busiest times of day</CardDescription></CardHeader>
               <CardContent>
                 <ResponsiveContainer width="100%" height={250}>
                   <BarChart data={hourlyDistribution}>
@@ -370,56 +326,26 @@ export default function AnalyticsPage() {
                 </ResponsiveContainer>
               </CardContent>
             </Card>
-
             <Card>
-              <CardHeader>
-                <CardTitle>Party Size Distribution</CardTitle>
-                <CardDescription>Guest group sizes</CardDescription>
-              </CardHeader>
+              <CardHeader><CardTitle>Party Size Distribution</CardTitle><CardDescription>Guest group sizes</CardDescription></CardHeader>
               <CardContent>
                 <ResponsiveContainer width="100%" height={250}>
                   <PieChart>
-                    <Pie
-                      data={partySizeDistribution}
-                      cx="50%"
-                      cy="50%"
-                      labelLine={false}
-                      label={({ name, percent }: any) => `${name}: ${((percent || 0) * 100).toFixed(0)}%`}
-                      outerRadius={100}
-                      fill="#8884d"
-                      dataKey="value"
-                    >
-                      {partySizeDistribution.map((entry, index) => (
-                        <Cell key={`cell-${index}`} fill={entry.color} />
-                      ))}
+                    <Pie data={partySizeDistribution} cx="50%" cy="50%" labelLine={false} label={({ name, percent }: any) => `${name}: ${((percent || 0) * 100).toFixed(0)}%`} outerRadius={100} fill="#8884d" dataKey="value">
+                      {partySizeDistribution.map((entry, index) => <Cell key={`cell-${index}`} fill={entry.color} />)}
                     </Pie>
                     <Tooltip />
                   </PieChart>
                 </ResponsiveContainer>
               </CardContent>
             </Card>
-
             <Card>
-              <CardHeader>
-                <CardTitle>Status Breakdown</CardTitle>
-                <CardDescription>Reservation status distribution</CardDescription>
-              </CardHeader>
+              <CardHeader><CardTitle>Status Breakdown</CardTitle><CardDescription>Reservation status distribution</CardDescription></CardHeader>
               <CardContent>
                 <ResponsiveContainer width="100%" height={250}>
                   <PieChart>
-                    <Pie
-                      data={statusBreakdown}
-                      cx="50%"
-                      cy="50%"
-                      labelLine={false}
-                      label={({ name, percent }: any) => `${name}: ${((percent || 0) * 100).toFixed(0)}%`}
-                      outerRadius={100}
-                      fill="#8884d"
-                      dataKey="value"
-                    >
-                      {statusBreakdown.map((entry, index) => (
-                        <Cell key={`cell-${index}`} fill={entry.color} />
-                      ))}
+                    <Pie data={statusBreakdown} cx="50%" cy="50%" labelLine={false} label={({ name, percent }: any) => `${name}: ${((percent || 0) * 100).toFixed(0)}%`} outerRadius={100} fill="#8884d" dataKey="value">
+                      {statusBreakdown.map((entry, index) => <Cell key={`cell-${index}`} fill={entry.color} />)}
                     </Pie>
                     <Tooltip />
                   </PieChart>
@@ -430,54 +356,26 @@ export default function AnalyticsPage() {
         </TabsContent>
 
         <TabsContent value="customers" className="space-y-6">
-          {/* Customer Analytics */}
           {comprehensiveData && (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <Card>
-                <CardHeader>
-                  <CardTitle>Customer Segmentation</CardTitle>
-                  <CardDescription>New vs returning customer breakdown</CardDescription>
-                </CardHeader>
+                <CardHeader><CardTitle>Customer Segmentation</CardTitle><CardDescription>New vs returning customer breakdown</CardDescription></CardHeader>
                 <CardContent>
                   <ResponsiveContainer width="100%" height={250}>
                     <PieChart>
-                      <Pie
-                        data={[
-                          { name: 'New Customers', value: comprehensiveData.customer_segmentation.new_customers, color: '#3b82f6' },
-                          { name: 'Returning Customers', value: comprehensiveData.customer_segmentation.returning_customers, color: '#22c55e' }
-                        ]}
-                        cx="50%"
-                        cy="50%"
-                        labelLine={false}
-                        label={({ name, percent }: any) => `${name}: ${((percent || 0) * 100).toFixed(0)}%`}
-                        outerRadius={100}
-                        fill="#8884d"
-                        dataKey="value"
-                      >
-                        <Cell fill="#3b82f6" />
-                        <Cell fill="#22c55e" />
+                      <Pie data={[{ name: 'New Customers', value: comprehensiveData.customer_segmentation?.new_customers || 0, color: '#3b82f6' }, { name: 'Returning Customers', value: comprehensiveData.customer_segmentation?.returning_customers || 0, color: '#22c55e' }]} cx="50%" cy="50%" labelLine={false} label={({ name, percent }: any) => `${name}: ${((percent || 0) * 100).toFixed(0)}%`} outerRadius={100} fill="#8884d" dataKey="value">
+                        <Cell fill="#3b82f6" /><Cell fill="#22c55e" />
                       </Pie>
                       <Tooltip />
                     </PieChart>
                   </ResponsiveContainer>
                 </CardContent>
               </Card>
-
               <Card>
-                <CardHeader>
-                  <CardTitle>Lead Time Distribution</CardTitle>
-                  <CardDescription>How far in advance customers book</CardDescription>
-                </CardHeader>
+                <CardHeader><CardTitle>Lead Time Distribution</CardTitle><CardDescription>How far in advance customers book</CardDescription></CardHeader>
                 <CardContent>
                   <ResponsiveContainer width="100%" height={250}>
-                    <BarChart data={[
-                      { name: 'Same Day', value: comprehensiveData.lead_time.same_day },
-                      { name: '1 Day', value: comprehensiveData.lead_time.one_day },
-                      { name: '2 Days', value: comprehensiveData.lead_time.two_days },
-                      { name: '1 Week', value: comprehensiveData.lead_time.one_week },
-                      { name: '2 Weeks', value: comprehensiveData.lead_time.two_weeks },
-                      { name: 'Month+', value: comprehensiveData.lead_time.month_plus }
-                    ]}>
+                    <BarChart data={[{ name: 'Same Day', value: comprehensiveData.lead_time?.same_day || 0 }, { name: '1 Day', value: comprehensiveData.lead_time?.one_day || 0 }, { name: '2 Days', value: comprehensiveData.lead_time?.two_days || 0 }, { name: '1 Week', value: comprehensiveData.lead_time?.one_week || 0 }, { name: '2 Weeks', value: comprehensiveData.lead_time?.two_weeks || 0 }, { name: 'Month+', value: comprehensiveData.lead_time?.month_plus || 0 }]}>
                       <CartesianGrid strokeDasharray="3 3" />
                       <XAxis dataKey="name" />
                       <YAxis />
@@ -490,20 +388,14 @@ export default function AnalyticsPage() {
             </div>
           )}
 
-          {/* Top Customers */}
           <Card>
-            <CardHeader>
-              <CardTitle>Top Customers</CardTitle>
-              <CardDescription>Your most valuable customers</CardDescription>
-            </CardHeader>
+            <CardHeader><CardTitle>Top Customers</CardTitle><CardDescription>Your most valuable customers</CardDescription></CardHeader>
             <CardContent>
               <div className="space-y-4">
                 {customerInsights.topCustomers.map((customer: any, index: number) => (
                   <div key={customer.id} className="flex items-center justify-between p-4 border rounded-lg">
                     <div className="flex items-center gap-4">
-                      <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center font-bold">
-                        {index + 1}
-                      </div>
+                      <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center font-bold">{index + 1}</div>
                       <div>
                         <p className="font-medium">{customer.name}</p>
                         <p className="text-sm text-muted-foreground">Reliability: {customer.reliability_score}%</p>
@@ -512,11 +404,7 @@ export default function AnalyticsPage() {
                     <div className="text-right">
                       <p className="font-bold">{customer.total_visits} visits</p>
                       <div className="flex gap-1 mt-1">
-                        {customer.tags?.map((tag: string) => (
-                          <span key={tag} className="text-xs px-2 py-1 bg-secondary rounded-full">
-                            {tag}
-                          </span>
-                        ))}
+                        {customer.tags?.map((tag: string) => <span key={tag} className="text-xs px-2 py-1 bg-secondary rounded-full">{tag}</span>)}
                       </div>
                     </div>
                   </div>
@@ -530,21 +418,10 @@ export default function AnalyticsPage() {
           {comprehensiveData && (
             <>
               <Card>
-                <CardHeader>
-                  <CardTitle>Day of Week Patterns</CardTitle>
-                  <CardDescription>Reservation patterns by day of week</CardDescription>
-                </CardHeader>
+                <CardHeader><CardTitle>Day of Week Patterns</CardTitle><CardDescription>Reservation patterns by day of week</CardDescription></CardHeader>
                 <CardContent>
                   <ResponsiveContainer width="100%" height={300}>
-                    <BarChart data={[
-                      { day: 'Sunday', reservations: comprehensiveData.day_of_week.sunday },
-                      { day: 'Monday', reservations: comprehensiveData.day_of_week.monday },
-                      { day: 'Tuesday', reservations: comprehensiveData.day_of_week.tuesday },
-                      { day: 'Wednesday', reservations: comprehensiveData.day_of_week.wednesday },
-                      { day: 'Thursday', reservations: comprehensiveData.day_of_week.thursday },
-                      { day: 'Friday', reservations: comprehensiveData.day_of_week.friday },
-                      { day: 'Saturday', reservations: comprehensiveData.day_of_week.saturday }
-                    ]}>
+                    <BarChart data={[{ day: 'Sunday', reservations: comprehensiveData.day_of_week?.sunday || 0 }, { day: 'Monday', reservations: comprehensiveData.day_of_week?.monday || 0 }, { day: 'Tuesday', reservations: comprehensiveData.day_of_week?.tuesday || 0 }, { day: 'Wednesday', reservations: comprehensiveData.day_of_week?.wednesday || 0 }, { day: 'Thursday', reservations: comprehensiveData.day_of_week?.thursday || 0 }, { day: 'Friday', reservations: comprehensiveData.day_of_week?.friday || 0 }, { day: 'Saturday', reservations: comprehensiveData.day_of_week?.saturday || 0 }]}>
                       <CartesianGrid strokeDasharray="3 3" />
                       <XAxis dataKey="day" />
                       <YAxis />
@@ -554,15 +431,11 @@ export default function AnalyticsPage() {
                   </ResponsiveContainer>
                 </CardContent>
               </Card>
-
               <Card>
-                <CardHeader>
-                  <CardTitle>Dining Times Heatmap</CardTitle>
-                  <CardDescription>Popular reservation times throughout the day</CardDescription>
-                </CardHeader>
+                <CardHeader><CardTitle>Dining Times Heatmap</CardTitle><CardDescription>Popular reservation times throughout the day</CardDescription></CardHeader>
                 <CardContent>
                   <ResponsiveContainer width="100%" height={300}>
-                    <AreaChart data={comprehensiveData.dining_times}>
+                    <AreaChart data={comprehensiveData.dining_times || []}>
                       <CartesianGrid strokeDasharray="3 3" />
                       <XAxis dataKey="hour" />
                       <YAxis />
@@ -572,28 +445,20 @@ export default function AnalyticsPage() {
                   </ResponsiveContainer>
                 </CardContent>
               </Card>
-
               <Card>
-                <CardHeader>
-                  <CardTitle>Table Popularity</CardTitle>
-                  <CardDescription>Most requested tables and sections</CardDescription>
-                </CardHeader>
+                <CardHeader><CardTitle>Table Popularity</CardTitle><CardDescription>Most requested tables and sections</CardDescription></CardHeader>
                 <CardContent>
                   <div className="space-y-4">
-                    {comprehensiveData.table_popularity.map((table, index) => (
+                    {(comprehensiveData.table_popularity || []).map((table: any, index: number) => (
                       <div key={table.table_id} className="flex items-center justify-between p-4 border rounded-lg">
                         <div className="flex items-center gap-4">
-                          <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center font-bold">
-                            {index + 1}
-                          </div>
+                          <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center font-bold">{index + 1}</div>
                           <div>
                             <p className="font-medium">{table.table_name}</p>
                             <p className="text-sm text-muted-foreground">Utilization: {table.utilization_pct}%</p>
                           </div>
                         </div>
-                        <div className="text-right">
-                          <p className="font-bold">{table.reservations} reservations</p>
-                        </div>
+                        <div className="text-right"><p className="font-bold">{table.reservations} reservations</p></div>
                       </div>
                     ))}
                   </div>
@@ -604,58 +469,28 @@ export default function AnalyticsPage() {
         </TabsContent>
 
         <TabsContent value="insights" className="space-y-6">
-          {/* AI Insights */}
           <Card>
-            <CardHeader>
-              <CardTitle>AI Insights</CardTitle>
-              <CardDescription>Smart recommendations for your restaurant</CardDescription>
-            </CardHeader>
+            <CardHeader><CardTitle>AI Insights</CardTitle><CardDescription>Smart recommendations for your restaurant</CardDescription></CardHeader>
             <CardContent>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {insights.map((insight, index) => (
-                  <div
-                    key={index}
-                    className={`p-4 rounded-lg ${
-                      insight.type === "warning"
-                        ? "bg-amber-50 border border-amber-200"
-                        : insight.type === "success"
-                        ? "bg-green-50 border border-green-200"
-                        : "bg-blue-50 border border-blue-200"
-                    }`}
-                  >
+                  <div key={index} className={`p-4 rounded-lg ${insight.type === "warning" ? "bg-amber-50 border border-amber-200" : insight.type === "success" ? "bg-green-50 border border-green-200" : "bg-blue-50 border border-blue-200"}`}>
                     <div className="flex items-start gap-3">
-                      <insight.icon
-                        className={`h-5 w-5 mt-0.5 ${
-                          insight.type === "warning"
-                            ? "text-amber-500"
-                            : insight.type === "success"
-                            ? "text-green-500"
-                            : "text-blue-500"
-                        }`}
-                      />
+                      <insight.icon className={`h-5 w-5 mt-0.5 ${insight.type === "warning" ? "text-amber-500" : insight.type === "success" ? "text-green-500" : "text-blue-500"}`} />
                       <p className="text-sm">{insight.text}</p>
                     </div>
                   </div>
                 ))}
-
-                {/* Enhanced Insights */}
                 {comprehensiveData && (
                   <>
-                    {comprehensiveData.customer_segmentation.new_percentage > 50 && (
+                    {(comprehensiveData.customer_segmentation?.new_percentage || 0) > 50 && (
                       <div className="p-4 rounded-lg bg-blue-50 border border-blue-200">
-                        <div className="flex items-start gap-3">
-                          <Star className="h-5 w-5 mt-0.5 text-blue-500" />
-                          <p className="text-sm">High new customer acquisition rate! Focus on retention strategies.</p>
-                        </div>
+                        <div className="flex items-start gap-3"><Star className="h-5 w-5 mt-0.5 text-blue-500" /><p className="text-sm">High new customer acquisition rate! Focus on retention strategies.</p></div>
                       </div>
                     )}
-
-                    {comprehensiveData.lead_time.average_days < 1 && (
+                    {(comprehensiveData.lead_time?.average_days || 0) < 1 && (
                       <div className="p-4 rounded-lg bg-amber-50 border border-amber-200">
-                        <div className="flex items-start gap-3">
-                          <Clock className="h-5 w-5 mt-0.5 text-amber-500" />
-                          <p className="text-sm">Many last-minute bookings. Consider implementing advance booking incentives.</p>
-                        </div>
+                        <div className="flex items-start gap-3"><Clock className="h-5 w-5 mt-0.5 text-amber-500" /><p className="text-sm">Many last-minute bookings. Consider implementing advance booking incentives.</p></div>
                       </div>
                     )}
                   </>

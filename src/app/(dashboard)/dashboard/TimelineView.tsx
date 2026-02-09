@@ -45,34 +45,6 @@ interface Customer {
   last_visit?: string;
 }
 
-// Mock data for fallback
-const mockTables: Table[] = [
-  { id: "1", name: "Table 1", capacity: 2 },
-  { id: "2", name: "Table 2", capacity: 4 },
-  { id: "3", name: "Table 3", capacity: 4 },
-  { id: "4", name: "Table 4", capacity: 6 },
-  { id: "5", name: "Table 5", capacity: 8 },
-  { id: "6", name: "Table 6", capacity: 2 },
-  { id: "7", name: "Table 7", capacity: 4 },
-  { id: "8", name: "Table 8", capacity: 6 },
-];
-
-const mockReservations: Reservation[] = [
-  { id: "r1", table_id: "1", customer_name: "John Smith", party_size: 2, start_time: "2024-01-15T19:00:00", end_time: "2024-01-15T20:30:00", status: "seated" },
-  { id: "r2", table_id: "2", customer_name: "Sarah Johnson", party_size: 4, start_time: "2024-01-15T19:30:00", end_time: "2024-01-15T21:00:00", status: "booked" },
-  { id: "r3", table_id: "2", customer_name: "Mike Brown", party_size: 3, start_time: "2024-01-15T17:00:00", end_time: "2024-01-15T18:30:00", status: "finished" },
-  { id: "r4", table_id: "4", customer_name: "Emily Davis", party_size: 6, start_time: "2024-01-15T20:00:00", end_time: "2024-01-15T22:00:00", status: "booked" },
-  { id: "r5", table_id: "5", customer_name: "Robert Wilson", party_size: 8, start_time: "2024-01-15T18:00:00", end_time: "2024-01-15T20:00:00", status: "confirmed" },
-  { id: "r6", table_id: "3", customer_name: "Lisa Chen", party_size: 2, start_time: "2024-01-15T19:00:00", end_time: "2024-01-15T20:00:00", status: "seated" },
-  { id: "r7", table_id: "6", customer_name: "David Lee", party_size: 2, start_time: "2024-01-15T21:00:00", end_time: "2024-01-15T22:30:00", status: "booked" },
-];
-
-const mockCustomers: Customer[] = [
-  { id: "c1", name: "John Smith", phone: "555-0101", tags: ["VIP", "Regular"], total_visits: 15, last_visit: "2024-01-10" },
-  { id: "c2", name: "Sarah Johnson", phone: "555-0102", tags: ["Regular"], total_visits: 8, last_visit: "2024-01-08" },
-  { id: "c3", name: "Mike Brown", phone: "555-0103", tags: ["Family"], total_visits: 3, last_visit: "2024-01-05" },
-  { id: "c4", name: "Emily Davis", phone: "555-0104", tags: ["Date Night"], total_visits: 12, last_visit: "2024-01-12" },
-];
 
 // Generate time slots from 12:00 PM to 12:00 AM (15-minute increments)
 const generateTimeSlots = () => {
@@ -204,17 +176,17 @@ export default function TimelineView({ selectedDate: propSelectedDate }: Timelin
   });
 
   // Fetch tables
-  const { data: tables = mockTables } = useQuery({
+  const { data: tables = [] } = useQuery({
     queryKey: ["timeline-tables", restaurantId],
     queryFn: async () => {
-      if (!restaurantId) return mockTables;
+      if (!restaurantId) return [];
       const { data, error } = await supabase
         .from("tables")
         .select("id, name, capacity")
         .eq("restaurant_id", restaurantId)
         .order("sort_order", { ascending: true });
-      if (error) return mockTables;
-      return data || mockTables;
+      if (error) return [];
+      return data || [];
     },
     enabled: true,
   });
@@ -230,12 +202,12 @@ export default function TimelineView({ selectedDate: propSelectedDate }: Timelin
   }, [propSelectedDate]);
   
   // Fetch reservations for selected date
-  const { data: reservations = mockReservations, isLoading: isLoadingReservations } = useQuery({
+  const { data: reservations = [], isLoading: isLoadingReservations } = useQuery({
     queryKey: ["timeline-reservations", restaurantId, selectedDate],
     queryFn: async () => {
       if (!restaurantId) {
-        console.log("Using mock reservations - no restaurant ID");
-        return mockReservations;
+        console.log("No restaurant ID - returning empty reservations");
+        return [];
       }
       console.log("Fetching reservations for date:", selectedDate, "restaurant:", restaurantId);
       const { data, error } = await supabase
@@ -247,10 +219,10 @@ export default function TimelineView({ selectedDate: propSelectedDate }: Timelin
         .order("start_time", { ascending: true });
       if (error) {
         console.error("Error fetching reservations:", error);
-        return mockReservations;
+        return [];
       }
       console.log("Fetched reservations:", data?.length || 0);
-      return data?.length ? data : mockReservations;
+      return data || [];
     },
     enabled: !!restaurantId,
   });
@@ -334,7 +306,7 @@ export default function TimelineView({ selectedDate: propSelectedDate }: Timelin
       .eq("restaurant_id", restaurantId)
       .eq("phone", phone)
       .single();
-    if (error) return mockCustomers.find((c) => c.phone === phone) || null;
+    if (error) return null;
     return data;
   };
 

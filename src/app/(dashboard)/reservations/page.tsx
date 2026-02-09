@@ -83,25 +83,6 @@ interface Customer {
   phone: string;
 }
 
-// Mock data for fallback
-const mockReservations: Reservation[] = [
-  { id: "1", customer_name: "John Smith", customer_phone: "555-0101", party_size: 2, table_id: "1", table_name: "Table 1", start_time: "2024-01-15T19:00:00", end_time: "2024-01-15T20:30:00", status: "finished", notes: "Anniversary dinner" },
-  { id: "2", customer_name: "Sarah Johnson", customer_phone: "555-0102", party_size: 4, table_id: "2", table_name: "Table 2", start_time: "2024-01-15T19:30:00", end_time: "2024-01-15T21:00:00", status: "finished" },
-  { id: "3", customer_name: "Mike Brown", customer_phone: "555-0103", party_size: 3, table_id: "2", table_name: "Table 2", start_time: "2024-01-15T17:00:00", end_time: "2024-01-15T18:30:00", status: "cancelled" },
-  { id: "4", customer_name: "Emily Davis", customer_phone: "555-0104", party_size: 6, table_id: "4", table_name: "Table 4", start_time: "2024-01-15T20:00:00", end_time: "2024-01-15T22:00:00", status: "finished" },
-  { id: "5", customer_name: "Robert Wilson", customer_phone: "555-0105", party_size: 8, table_id: "5", table_name: "Table 5", start_time: "2024-01-15T18:00:00", end_time: "2024-01-15T20:00:00", status: "no_show" },
-];
-
-const mockTables: TableType[] = [
-  { id: "1", name: "Table 1", capacity: 2 },
-  { id: "2", name: "Table 2", capacity: 4 },
-  { id: "3", name: "Table 3", capacity: 4 },
-  { id: "4", name: "Table 4", capacity: 6 },
-  { id: "5", name: "Table 5", capacity: 8 },
-  { id: "6", name: "Table 6", capacity: 2 },
-  { id: "7", name: "Table 7", capacity: 4 },
-  { id: "8", name: "Table 8", capacity: 6 },
-];
 
 export default function ReservationsPage() {
   const queryClient = useQueryClient();
@@ -141,31 +122,31 @@ export default function ReservationsPage() {
   });
 
   // Fetch tables
-  const { data: tables = mockTables } = useQuery({
+  const { data: tables = [] } = useQuery({
     queryKey: ["list-tables", restaurantId],
     queryFn: async () => {
-      if (!restaurantId) return mockTables;
+      if (!restaurantId) return [];
       const { data, error } = await supabase
         .from("tables")
         .select("id, name, capacity")
         .eq("restaurant_id", restaurantId);
-      if (error) return mockTables;
-      return data || mockTables;
+      if (error) return [];
+      return data || [];
     },
     enabled: true,
   });
 
   // Fetch reservations
-  const { data: reservations = mockReservations } = useQuery({
+  const { data: reservations = [] } = useQuery({
     queryKey: ["list-reservations", restaurantId],
     queryFn: async () => {
-      if (!restaurantId) return mockReservations;
+      if (!restaurantId) return [];
       const { data, error } = await supabase
         .from("reservations")
         .select("id, customer_name, customer_phone, party_size, table_id, start_time, end_time, status, notes")
         .eq("restaurant_id", restaurantId)
         .order("start_time", { ascending: false });
-      if (error) return mockReservations;
+      if (error) return [];
       
       return (data || []).map((r: Reservation) => ({
         ...r,
