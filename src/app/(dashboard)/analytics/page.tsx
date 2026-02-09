@@ -216,4 +216,80 @@ export default function AnalyticsPage() {
         <Card>
           <CardHeader><CardTitle>Party Size Distribution</CardTitle><CardDescription>Guest group sizes</CardDescription></CardHeader>
           <CardContent>
-            <ResponsiveContainer width="100
+            <ResponsiveContainer width="100%" height={250}>
+              <PieChart>
+                <Pie data={partySizeDistribution} cx="50%" cy="50%" labelLine={false} label={({ name, percent }) => `${name}: ${((percent || 0) * 100).toFixed(0)}%`} outerRadius={100} fill="#8884d" dataKey="value">
+                  {partySizeDistribution.map((entry, index) => (
+                    <Cell key={`cell-${index}`} fill={entry.color} />
+                  ))}
+                </Pie>
+                <Tooltip />
+              </PieChart>
+            </ResponsiveContainer>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader><CardTitle>Status Breakdown</CardTitle><CardDescription>Reservation status distribution</CardDescription></CardHeader>
+          <CardContent>
+            <ResponsiveContainer width="100%" height={250}>
+              <PieChart>
+                <Pie data={statusBreakdown} cx="50%" cy="50%" labelLine={false} label={({ name, percent }) => `${name}: ${((percent || 0) * 100).toFixed(0)}%`} outerRadius={100} fill="#8884d" dataKey="value">
+                  {statusBreakdown.map((entry, index) => (
+                    <Cell key={`cell-${index}`} fill={entry.color} />
+                  ))}
+                </Pie>
+                <Tooltip />
+              </PieChart>
+            </ResponsiveContainer>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Top Customers */}
+      <Card className="mb-8">
+        <CardHeader><CardTitle>Top Customers</CardTitle><CardDescription>Your most valuable customers</CardDescription></CardHeader>
+        <CardContent>
+          <div className="space-y-4">
+            {customerInsights.topCustomers.map((customer: any, index: number) => (
+              <div key={customer.id} className="flex items-center justify-between p-4 border rounded-lg">
+                <div className="flex items-center gap-4">
+                  <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center font-bold">{index + 1}</div>
+                  <div>
+                    <p className="font-medium">{customer.name}</p>
+                    <p className="text-sm text-muted-foreground">Reliability: {customer.reliability_score}%</p>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <p className="font-bold">{customer.total_visits} visits</p>
+                  <div className="flex gap-1 mt-1">
+                    {customer.tags?.map((tag: string) => (
+                      <span key={tag} className="text-xs px-2 py-1 bg-secondary rounded-full">{tag}</span>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Insights */}
+      <Card>
+        <CardHeader><CardTitle>AI Insights</CardTitle><CardDescription>Smart recommendations for your restaurant</CardDescription></CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {insights.map((insight, index) => (
+              <div key={index} className={`p-4 rounded-lg ${insight.type === "warning" ? "bg-amber-50 border border-amber-200" : insight.type === "success" ? "bg-green-50 border border-green-200" : "bg-blue-50 border border-blue-200"}`}>
+                <div className="flex items-start gap-3">
+                  <insight.icon className={`h-5 w-5 mt-0.5 ${insight.type === "warning" ? "text-amber-500" : insight.type === "success" ? "text-green-500" : "text-blue-500"}`} />
+                  <p className="text-sm">{insight.text}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
