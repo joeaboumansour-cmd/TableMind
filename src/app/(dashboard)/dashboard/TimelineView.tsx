@@ -153,7 +153,7 @@ export default function TimelineView({ selectedDate: propSelectedDate, onDateCha
   });
 
   // Fetch tables
-  const { data: tables = [] } = useQuery({
+  const { data: tables = [] } = useQuery<Table[]>({
     queryKey: ["timeline-tables", restaurantId],
     queryFn: async () => {
       if (!restaurantId) return [];
@@ -169,7 +169,7 @@ export default function TimelineView({ selectedDate: propSelectedDate, onDateCha
   });
 
   // Fetch reservations
-  const { data: reservations = [] } = useQuery({
+  const { data: reservations = [] } = useQuery<Reservation[]>({
     queryKey: ["timeline-reservations", restaurantId, selectedDate],
     queryFn: async () => {
       if (!restaurantId) return [];
@@ -472,7 +472,7 @@ export default function TimelineView({ selectedDate: propSelectedDate, onDateCha
   };
 
   const handleUpdate = () => {
-    if (!validateForm() || !selectedReservation) return;
+    if (!validateForm() || !selectedReservation || !selectedReservation.id) return;
     
     updateMutation.mutate({
       id: selectedReservation.id,
@@ -487,7 +487,7 @@ export default function TimelineView({ selectedDate: propSelectedDate, onDateCha
   };
 
   const handleStatusChange = (status: Reservation["status"]) => {
-    if (!selectedReservation) return;
+    if (!selectedReservation || !selectedReservation.id) return;
     
     updateMutation.mutate({
       id: selectedReservation.id,
@@ -499,7 +499,7 @@ export default function TimelineView({ selectedDate: propSelectedDate, onDateCha
   };
 
   const handleDelete = () => {
-    if (selectedReservation) {
+    if (selectedReservation && selectedReservation.id) {
       deleteMutation.mutate(selectedReservation.id);
     }
   };
@@ -532,7 +532,7 @@ export default function TimelineView({ selectedDate: propSelectedDate, onDateCha
 
   const handleDrop = (e: React.DragEvent, tableId: string, slotIndex: number) => {
     e.preventDefault();
-    if (!draggedReservation) return;
+    if (!draggedReservation || !draggedReservation.id) return;
     
     // Check if dropping to past time on same day
     const today = getTodayString();
@@ -577,13 +577,13 @@ export default function TimelineView({ selectedDate: propSelectedDate, onDateCha
 
   // Get suitable tables for party size
   const getSuitableTables = (partySize: number) => {
-    return tables.filter(t => t.capacity >= partySize).sort((a, b) => a.capacity - b.capacity);
+    return tables.filter((t: Table) => t.capacity >= partySize).sort((a: Table, b: Table) => a.capacity - b.capacity);
   };
 
   // Get best table suggestion
   const getBestTable = (partySize: number, preferredTableId?: string) => {
     const suitable = getSuitableTables(partySize);
-    if (preferredTableId && suitable.find(t => t.id === preferredTableId)) {
+    if (preferredTableId && suitable.find((t: Table) => t.id === preferredTableId)) {
       return preferredTableId;
     }
     return suitable[0]?.id || "";
