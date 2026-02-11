@@ -36,6 +36,8 @@ interface Customer {
   cancellation_count: number;
   last_visit_date?: string;
   notes?: string;
+  reliability_score?: number;
+  risk_level?: string;
 }
 
 
@@ -69,11 +71,24 @@ export default function CustomersPage() {
     },
   });
 
-  // Fetch customers
+  // Fetch customers from customer_analytics view with fallback to customers table
   const { data: customers = [], isLoading } = useQuery({
     queryKey: ["customers", restaurantId],
     queryFn: async () => {
       if (!restaurantId) return [];
+      
+      // Try to fetch from customer_analytics view first
+      const { data: analyticsData, error: analyticsError } = await supabase
+        .from("customer_analytics")
+        .select("*")
+        .eq("restaurant_id", restaurantId)
+        .order("name", { ascending: true });
+      
+      if (!analyticsError && analyticsData) {
+        return analyticsData || [];
+      }
+      
+      // Fallback to customers table if view doesn't have restaurant_id
       const { data, error } = await supabase
         .from("customers")
         .select("*")

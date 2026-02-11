@@ -175,13 +175,18 @@ $$ LANGUAGE plpgsql;
 CREATE OR REPLACE VIEW customer_analytics AS
 SELECT 
     c.id,
+    c.restaurant_id,
     c.name,
     c.phone,
+    c.email,
+    c.notes,
     c.total_visits,
     COALESCE(c.no_show_count, 0) as no_show_count,
     COALESCE(c.cancellation_count, 0) as cancellation_count,
     c.last_visit_date,
     c.tags,
+    c.created_at,
+    c.updated_at,
     -- Reliability score (0-100)
     CASE 
         WHEN c.total_visits + COALESCE(c.no_show_count, 0) + COALESCE(c.cancellation_count, 0) = 0 THEN 100

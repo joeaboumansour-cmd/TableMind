@@ -110,6 +110,7 @@ export default function ReservationsPage() {
     status: "booked" as Reservation["status"],
     notes: "",
   });
+  const [foundCustomerName, setFoundCustomerName] = useState<string | null>(null);
 
   // Fetch restaurant ID
   const { data: restaurantId } = useQuery({
@@ -120,6 +121,48 @@ export default function ReservationsPage() {
       return data?.id || null;
     },
   });
+
+  // Fetch customers for phone lookup
+  const { data: customers = [] } = useQuery({
+    queryKey: ["customers", restaurantId],
+    queryFn: async () => {
+      if (!restaurantId) return [];
+      const { data, error } = await supabase
+        .from("customers")
+        .select("id, name, phone")
+        .eq("restaurant_id", restaurantId);
+      if (error) return [];
+      return data || [];
+    },
+    enabled: !!restaurantId,
+  });
+
+  // Lookup customer by phone number
+  useEffect(() => {
+    if (!formData.customer_phone || formData.customer_phone.length < 3) {
+      setFoundCustomerName(null);
+      return;
+    }
+
+    // Find customer by phone (exact match or contains)
+    const phoneDigits = formData.customer_phone.replace(/\D/g, "");
+    const matchedCustomer = customers.find((c: Customer) => {
+      const customerPhoneDigits = c.phone.replace(/\D/g, "");
+      return customerPhoneDigits === phoneDigits || 
+             c.phone.includes(formData.customer_phone) ||
+             phoneDigits.includes(customerPhoneDigits);
+    });
+
+    if (matchedCustomer) {
+      setFoundCustomerName(matchedCustomer.name);
+      // Only auto-fill name if it's empty or was previously auto-filled
+      if (!formData.customer_name || formData.customer_name === foundCustomerName) {
+        setFormData(prev => ({ ...prev, customer_name: matchedCustomer.name }));
+      }
+    } else {
+      setFoundCustomerName(null);
+    }
+  }, [formData.customer_phone, customers, formData.customer_name, foundCustomerName]);
 
   // Fetch tables
   const { data: tables = [] } = useQuery({
@@ -259,11 +302,22 @@ export default function ReservationsPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action }),
       });
-      if (!response.ok) throw new Error('Failed to record visit');
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to record visit');
+      }
       return response.json();
     },
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["list-reservations"] });
+      queryClient.invalidateQueries({ queryKey: ["timeline-reservations"] });
       queryClient.invalidateQueries({ queryKey: ["customers"] });
+      setIsEditDialogOpen(false);
+      setSelectedReservation(null);
+      toast.success("Reservation updated and customer stats recorded");
+    },
+    onError: (error) => {
+      toast.error("Failed to update reservation: " + error.message);
     },
   });
 
@@ -317,20 +371,25 @@ export default function ReservationsPage() {
     if (isEditDialogOpen && selectedReservation) {
       // Check if status changed and call visit API
       if (formData.status !== selectedReservation.status) {
-        // Update reservation status first
-        updateMutation.mutate({ id: selectedReservation.id, data: formData });
+        // Map status to visit action
+        let action: string | null = null;
+        if (formData.status === "seated") action = "seat";
+        else if (formData.status === "finished") action = "finish";
+        else if (formData.status === "no_show") action = "no_show";
+        else if (formData.status === "cancelled") action = "cancel";
         
-        // Then call visit API for customer stats
-        if (formData.status === "seated") {
-          recordVisitMutation.mutate({ id: selectedReservation.id, action: "seat" });
-        } else if (formData.status === "finished") {
-          recordVisitMutation.mutate({ id: selectedReservation.id, action: "finish" });
-        } else if (formData.status === "no_show") {
-          recordVisitMutation.mutate({ id: selectedReservation.id, action: "no_show" });
-        } else if (formData.status === "cancelled") {
-          recordVisitMutation.mutate({ id: selectedReservation.id, action: "cancel" });
+        if (action) {
+          // Use visit API to handle both status update AND customer stats in one call
+          recordVisitMutation.mutate({ 
+            id: selectedReservation.id, 
+            action,
+          });
+        } else {
+          // For other status changes (booked, confirmed), just update the reservation
+          updateMutation.mutate({ id: selectedReservation.id, data: formData });
         }
       } else {
+        // No status change, just update other fields
         updateMutation.mutate({ id: selectedReservation.id, data: formData });
       }
     } else {
@@ -829,12 +888,27 @@ export default function ReservationsPage() {
 
             <div className="space-y-2">
               <Label htmlFor="phone" className="text-sm sm:text-base">Phone Number</Label>
-              <Input
-                id="phone"
-                value={formData.customer_phone}
-                onChange={(e) => setFormData({ ...formData, customer_phone: e.target.value })}
-                placeholder="555-0101"
-              />
+              <div className="relative">
+                <Input
+                  id="phone"
+                  value={formData.customer_phone}
+                  onChange={(e) => setFormData({ ...formData, customer_phone: e.target.value })}
+                  placeholder="555-0101"
+                  className={foundCustomerName ? "pr-10 border-green-500 focus-visible:ring-green-500" : ""}
+                />
+                {foundCustomerName && (
+                  <div className="absolute right-3 top-1/2 -translate-y-1/2">
+                    <Badge variant="outline" className="bg-green-50 text-green-700 border-green-300 text-xs">
+                      Found
+                    </Badge>
+                  </div>
+                )}
+              </div>
+              {foundCustomerName && (
+                <p className="text-xs text-green-600">
+                  Customer: {foundCustomerName}
+                </p>
+              )}
             </div>
 
             <div className="grid grid-cols-2 gap-3 sm:gap-4">

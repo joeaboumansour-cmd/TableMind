@@ -202,63 +202,61 @@ export default function AnalyticsPage() {
         </TabsList>
 
         <TabsContent value="overview" className="space-y-6">
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-            <Card className="bg-gradient-to-br from-blue-500/10 to-blue-600/10 border-blue-500/20">
-              <CardContent className="p-6">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm font-medium text-muted-foreground">Total Reservations</p>
-                    <p className="text-4xl font-bold">{metrics.total}</p>
-                  </div>
-                  <Calendar className="h-10 w-10 text-blue-500" />
+          <Card>
+            <CardHeader>
+              <CardTitle>Period Overview</CardTitle>
+              <CardDescription>Statistics for the selected period</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+                <div className="text-center p-4 bg-blue-500/10 rounded-xl">
+                  <Calendar className="h-6 w-6 mx-auto mb-2 text-blue-500" />
+                  <p className="text-3xl font-bold">{metrics.total}</p>
+                  <p className="text-sm text-muted-foreground">Reservations</p>
                 </div>
-              </CardContent>
-            </Card>
-            <Card className="bg-gradient-to-br from-teal-500/10 to-teal-600/10 border-teal-500/20">
-              <CardContent className="p-6">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm font-medium text-muted-foreground">Total Guests</p>
-                    <p className="text-4xl font-bold">{metrics.totalGuests}</p>
-                  </div>
-                  <Users className="h-10 w-10 text-teal-500" />
+                <div className="text-center p-4 bg-green-500/10 rounded-xl">
+                  <Users className="h-6 w-6 mx-auto mb-2 text-green-500" />
+                  <p className="text-3xl font-bold">{metrics.totalGuests}</p>
+                  <p className="text-sm text-muted-foreground">Total Guests</p>
                 </div>
-              </CardContent>
-            </Card>
-            <Card className="bg-gradient-to-br from-green-500/10 to-green-600/10 border-green-500/20">
-              <CardContent className="p-6">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm font-medium text-muted-foreground">Completion Rate</p>
-                    <p className="text-4xl font-bold">{metrics.completionRate}%</p>
-                  </div>
-                  <Target className="h-10 w-10 text-green-500" />
+                <div className="text-center p-4 bg-purple-500/10 rounded-xl">
+                  <Users className="h-6 w-6 mx-auto mb-2 text-purple-500" />
+                  <p className="text-3xl font-bold">{metrics.avgPartySize}</p>
+                  <p className="text-sm text-muted-foreground">Avg Party Size</p>
                 </div>
-              </CardContent>
-            </Card>
-            <Card className="bg-gradient-to-br from-purple-500/10 to-purple-600/10 border-purple-500/20">
-              <CardContent className="p-6">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm font-medium text-muted-foreground">Avg Party Size</p>
-                    <p className="text-4xl font-bold">{metrics.avgPartySize}</p>
-                  </div>
-                  <Users className="h-10 w-10 text-purple-500" />
+                <div className="text-center p-4 bg-orange-500/10 rounded-xl">
+                  <Armchair className="h-6 w-6 mx-auto mb-2 text-orange-500" />
+                  <p className="text-3xl font-bold">{metrics.utilization}%</p>
+                  <p className="text-sm text-muted-foreground">Utilization</p>
                 </div>
-              </CardContent>
-            </Card>
-            <Card className="bg-gradient-to-br from-orange-500/10 to-orange-600/10 border-orange-500/20">
-              <CardContent className="p-6">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm font-medium text-muted-foreground">Table Utilization</p>
-                    <p className="text-4xl font-bold">{metrics.utilization}%</p>
-                  </div>
-                  <Armchair className="h-10 w-10 text-orange-500" />
+                <div className="text-center p-4 bg-teal-500/10 rounded-xl">
+                  <Target className="h-6 w-6 mx-auto mb-2 text-teal-500" />
+                  <p className="text-3xl font-bold">{metrics.completionRate}%</p>
+                  <p className="text-sm text-muted-foreground">Completion</p>
                 </div>
-              </CardContent>
-            </Card>
-          </div>
+              </div>
+              
+              {/* Additional Stats Row */}
+              <div className="grid grid-cols-4 gap-4 mt-4 pt-4 border-t">
+                <div className="text-center">
+                  <p className="text-2xl font-bold text-green-600">{metrics.finished}</p>
+                  <p className="text-xs text-muted-foreground">Completed</p>
+                </div>
+                <div className="text-center">
+                  <p className="text-2xl font-bold text-red-600">{metrics.cancelled}</p>
+                  <p className="text-xs text-muted-foreground">Cancelled</p>
+                </div>
+                <div className="text-center">
+                  <p className="text-2xl font-bold text-amber-600">{metrics.noShows}</p>
+                  <p className="text-xs text-muted-foreground">No Shows</p>
+                </div>
+                <div className="text-center">
+                  <p className="text-2xl font-bold text-blue-600">{metrics.uniqueTables}</p>
+                  <p className="text-xs text-muted-foreground">Tables Used</p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
 
           {comprehensiveData && (
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">

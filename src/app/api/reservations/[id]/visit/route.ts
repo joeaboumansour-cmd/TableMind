@@ -59,9 +59,21 @@ export async function POST(
         };
         // Increment customer visit count
         if (reservation.customer_id) {
-          await supabase.rpc('increment_customer_visit', {
-            customer_id: reservation.customer_id
-          });
+          try {
+            await supabase.rpc('increment_customer_visit', {
+              customer_id: reservation.customer_id
+            });
+          } catch {
+            // Fallback: directly update customer if RPC doesn't exist
+            await supabase
+              .from('customers')
+              .update({ 
+                total_visits: supabase.rpc('coalesce', { val: supabase.raw('total_visits'), default_val: 0 }) + 1,
+                last_visit_date: now.toISOString(),
+                updated_at: now.toISOString()
+              })
+              .eq('id', reservation.customer_id);
+          }
         }
         break;
         
@@ -72,6 +84,29 @@ export async function POST(
           status: 'finished',
           visit_completed: true,
         };
+        // Also increment visit count if customer wasn't already seated
+        if (reservation.customer_id) {
+          try {
+            await supabase.rpc('increment_customer_visit', {
+              customer_id: reservation.customer_id
+            });
+          } catch {
+            // Fallback: directly update customer if RPC doesn't exist
+            const { data: customer } = await supabase
+              .from('customers')
+              .select('total_visits')
+              .eq('id', reservation.customer_id)
+              .single();
+            await supabase
+              .from('customers')
+              .update({ 
+                total_visits: (customer?.total_visits || 0) + 1,
+                last_visit_date: now.toISOString(),
+                updated_at: now.toISOString()
+              })
+              .eq('id', reservation.customer_id);
+          }
+        }
         break;
         
       case 'no_show':
@@ -82,9 +117,25 @@ export async function POST(
         };
         // Increment customer no-show count
         if (reservation.customer_id) {
-          await supabase.rpc('increment_customer_no_show', {
-            customer_id: reservation.customer_id
-          });
+          try {
+            await supabase.rpc('increment_customer_no_show', {
+              customer_id: reservation.customer_id
+            });
+          } catch {
+            // Fallback: directly update customer if RPC doesn't exist
+            const { data: customer } = await supabase
+              .from('customers')
+              .select('no_show_count')
+              .eq('id', reservation.customer_id)
+              .single();
+            await supabase
+              .from('customers')
+              .update({ 
+                no_show_count: (customer?.no_show_count || 0) + 1,
+                updated_at: now.toISOString()
+              })
+              .eq('id', reservation.customer_id);
+          }
         }
         break;
         
@@ -95,9 +146,25 @@ export async function POST(
         };
         // Increment customer cancellation count
         if (reservation.customer_id) {
-          await supabase.rpc('increment_customer_cancellation', {
-            customer_id: reservation.customer_id
-          });
+          try {
+            await supabase.rpc('increment_customer_cancellation', {
+              customer_id: reservation.customer_id
+            });
+          } catch {
+            // Fallback: directly update customer if RPC doesn't exist
+            const { data: customer } = await supabase
+              .from('customers')
+              .select('cancellation_count')
+              .eq('id', reservation.customer_id)
+              .single();
+            await supabase
+              .from('customers')
+              .update({ 
+                cancellation_count: (customer?.cancellation_count || 0) + 1,
+                updated_at: now.toISOString()
+              })
+              .eq('id', reservation.customer_id);
+          }
         }
         break;
     }
