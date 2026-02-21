@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useMemo, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { createClient } from "@/lib/supabase/client";
+import { createClientWithAuth } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -23,8 +23,6 @@ import {
 import { Card, CardContent } from "@/components/ui/card";
 import { Plus, Edit, Star, Trash2, AlertCircle } from "lucide-react";
 import { toast } from "sonner";
-
-const supabase = createClient();
 
 export interface Table {
   id: string;
@@ -129,6 +127,7 @@ export default function ReservationModal({
     queryKey: ["customers", restaurantId],
     queryFn: async () => {
       if (!restaurantId) return [];
+      const supabase = createClientWithAuth();
       const { data, error } = await supabase
         .from("customers")
         .select("id, name, phone, tags, total_visits, last_visit_date")
@@ -198,27 +197,17 @@ export default function ReservationModal({
 
   // Lookup customer by phone number
   useEffect(() => {
-    console.log("=== Phone Lookup Debug ===");
-    console.log("Phone entered:", formData.customer_phone);
-    console.log("Phone length:", formData.customer_phone?.length);
-    console.log("Customers loaded:", customers.length);
-    console.log("Restaurant ID:", restaurantId);
-    console.log("Is loading customers:", isLoadingCustomers);
-    
     if (isLoadingCustomers) {
-      console.log("Still loading customers...");
       return;
     }
     
     if (!formData.customer_phone || formData.customer_phone.length < 3) {
-      console.log("Phone too short (< 3 chars), clearing results");
       setFoundCustomerName(null);
       setFoundCustomer(null);
       return;
     }
 
     if (customers.length === 0) {
-      console.log("No customers in database for this restaurant");
       setFoundCustomerName(null);
       setFoundCustomer(null);
       return;
@@ -226,12 +215,9 @@ export default function ReservationModal({
 
     // Find customer by phone (exact match or contains)
     const phoneDigits = formData.customer_phone.replace(/\D/g, "");
-    console.log("Searching for phone digits:", phoneDigits);
-    console.log("Available customers:", customers.map((c: Customer) => ({ name: c.name, phone: c.phone })));
     
     const matchedCustomer = customers.find((c: Customer) => {
       const customerPhoneDigits = c.phone.replace(/\D/g, "");
-      console.log(`Comparing: input "${phoneDigits}" vs customer "${c.name}" "${customerPhoneDigits}"`);
       const match = (
         customerPhoneDigits === phoneDigits ||
         c.phone.includes(formData.customer_phone) ||
@@ -241,14 +227,12 @@ export default function ReservationModal({
     });
 
     if (matchedCustomer) {
-      console.log("✓ MATCH FOUND:", matchedCustomer.name, matchedCustomer.phone);
       setFoundCustomerName(matchedCustomer.name);
       setFoundCustomer(matchedCustomer);
       if (!formData.customer_name || formData.customer_name === foundCustomerName) {
         setFormData((prev) => ({ ...prev, customer_name: matchedCustomer.name }));
       }
     } else {
-      console.log("✗ No match found in", customers.length, "customers");
       setFoundCustomerName(null);
       setFoundCustomer(null);
     }
@@ -272,11 +256,12 @@ export default function ReservationModal({
     return Object.keys(errors).length === 0;
   };
 
-  // Create mutation
+  // Create mutation with customer creation
   const createMutation = useMutation({
     mutationFn: async (data: typeof formData) => {
       if (!restaurantId) throw new Error("No restaurant");
 
+      const supabase = createClientWithAuth();
       const startDateTime = `${data.date}T${data.time}:00`;
       const [hours, minutes] = data.time.split(":").map(Number);
       const endTotalMinutes = hours * 60 + minutes + data.duration;
@@ -287,10 +272,42 @@ export default function ReservationModal({
         .padStart(2, "0")}`;
       const endDateTime = `${data.date}T${endTime}:00`;
 
+      // Check if customer exists with this phone number
+      let customerId = null;
+      if (data.customer_phone) {
+        const phoneDigits = data.customer_phone.replace(/\D/g, "");
+        const { data: existingCustomer } = await supabase
+          .from("customers")
+          .select("id, phone")
+          .eq("restaurant_id", restaurantId)
+          .ilike("phone", `%${phoneDigits}%`)
+          .single();
+        
+        if (existingCustomer) {
+          customerId = existingCustomer.id;
+        } else {
+          // Create new customer
+          const { data: newCustomer, error: customerError } = await supabase
+            .from("customers")
+            .insert({
+              restaurant_id: restaurantId,
+              name: data.customer_name,
+              phone: data.customer_phone,
+            })
+            .select()
+            .single();
+          
+          if (!customerError && newCustomer) {
+            customerId = newCustomer.id;
+          }
+        }
+      }
+
       const { data: result, error } = await supabase
         .from("reservations")
         .insert({
           restaurant_id: restaurantId,
+          customer_id: customerId,
           customer_name: data.customer_name,
           customer_phone: data.customer_phone,
           party_size: data.party_size,
@@ -309,6 +326,7 @@ export default function ReservationModal({
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["list-reservations"] });
       queryClient.invalidateQueries({ queryKey: ["timeline-reservations"] });
+      queryClient.invalidateQueries({ queryKey: ["customers"] });
       toast.success("Reservation created successfully");
       onClose();
       onSuccess?.();
@@ -327,6 +345,7 @@ export default function ReservationModal({
       id: string;
       data: Partial<typeof formData>;
     }) => {
+      const supabase = createClientWithAuth();
       const updateData: Record<string, unknown> = {};
 
       if (data.customer_name) updateData.customer_name = data.customer_name;
@@ -369,6 +388,7 @@ export default function ReservationModal({
       id: string;
       status: Reservation["status"];
     }) => {
+      const supabase = createClientWithAuth();
       const { data: result, error } = await supabase
         .from("reservations")
         .update({ status })
@@ -392,6 +412,7 @@ export default function ReservationModal({
   // Delete mutation
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => {
+      const supabase = createClientWithAuth();
       const { error } = await supabase.from("reservations").delete().eq("id", id);
       if (error) throw error;
     },
@@ -557,7 +578,7 @@ export default function ReservationModal({
             )}
             {!isLoadingCustomers && formData.customer_phone.length >= 3 && !foundCustomer && (
               <p className="text-xs text-muted-foreground">
-                No existing customer found with this phone number
+                No existing customer found with this phone number - a new customer will be created
               </p>
             )}
           </div>

@@ -3,6 +3,7 @@
 import { useState, useMemo, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { createClient } from "@/lib/supabase/client";
+import { useRestaurant } from "@/app/RestaurantContext";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -56,8 +57,6 @@ import {
 import Link from "next/link";
 import { toast } from "sonner";
 
-const supabase = createClient();
-
 interface Reservation {
   id: string;
   customer_name: string;
@@ -85,6 +84,8 @@ interface Customer {
 
 
 export default function ReservationsPage() {
+  const { restaurant } = useRestaurant();
+  const restaurantId = restaurant?.id;
   const queryClient = useQueryClient();
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
@@ -112,21 +113,12 @@ export default function ReservationsPage() {
   });
   const [foundCustomerName, setFoundCustomerName] = useState<string | null>(null);
 
-  // Fetch restaurant ID
-  const { data: restaurantId } = useQuery({
-    queryKey: ["restaurant-id"],
-    queryFn: async () => {
-      const { data, error } = await supabase.from("restaurants").select("id").limit(1).single();
-      if (error) return null;
-      return data?.id || null;
-    },
-  });
-
   // Fetch customers for phone lookup
   const { data: customers = [] } = useQuery({
     queryKey: ["customers", restaurantId],
     queryFn: async () => {
       if (!restaurantId) return [];
+      const supabase = createClient();
       const { data, error } = await supabase
         .from("customers")
         .select("id, name, phone")
@@ -165,43 +157,54 @@ export default function ReservationsPage() {
   }, [formData.customer_phone, customers, formData.customer_name, foundCustomerName]);
 
   // Fetch tables
-  const { data: tables = [] } = useQuery({
+  const { data: tables = [], isLoading: tablesLoading } = useQuery({
     queryKey: ["list-tables", restaurantId],
     queryFn: async () => {
       if (!restaurantId) return [];
+      const supabase = createClient();
       const { data, error } = await supabase
         .from("tables")
         .select("id, name, capacity")
         .eq("restaurant_id", restaurantId);
-      if (error) return [];
+      if (error) {
+        console.error("Error fetching tables:", error);
+        toast.error("Failed to load tables");
+        return [];
+      }
       return data || [];
     },
-    enabled: true,
+    enabled: !!restaurantId,
   });
 
-  // Fetch reservations
-  const { data: reservations = [] } = useQuery({
-    queryKey: ["list-reservations", restaurantId],
+  // Fetch reservations - wait for tables to load first to ensure proper table_name mapping
+  const { data: reservations = [], isLoading: reservationsLoading } = useQuery({
+    queryKey: ["list-reservations", restaurantId, tables],
     queryFn: async () => {
       if (!restaurantId) return [];
+      const supabase = createClient();
       const { data, error } = await supabase
         .from("reservations")
         .select("id, customer_name, customer_phone, party_size, table_id, start_time, end_time, status, notes")
         .eq("restaurant_id", restaurantId)
         .order("start_time", { ascending: false });
-      if (error) return [];
+      if (error) {
+        console.error("Error fetching reservations:", error);
+        toast.error("Failed to load reservations");
+        return [];
+      }
       
       return (data || []).map((r: Reservation) => ({
         ...r,
-        table_name: tables.find((t: TableType) => t.id === r.table_id)?.name || "Unknown",
+        table_name: tables.find((t: TableType) => t.id === r.table_id)?.name || "Not Assigned",
       }));
     },
-    enabled: true,
+    enabled: !!restaurantId && !tablesLoading,
   });
 
   // Delete mutation
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => {
+      const supabase = createClient();
       const { error } = await supabase.from("reservations").delete().eq("id", id);
       if (error) throw error;
     },
@@ -215,10 +218,11 @@ export default function ReservationsPage() {
     },
   });
 
-  // Create mutation
+  // Create mutation - with customer creation/lookup
   const createMutation = useMutation({
     mutationFn: async (data: typeof formData) => {
       if (!restaurantId) throw new Error("No restaurant");
+      const supabase = createClient();
       
       const startDateTime = `${data.date}T${data.time}:00`;
       const [hours, minutes] = data.time.split(":").map(Number);
@@ -228,10 +232,42 @@ export default function ReservationsPage() {
       const endTime = `${endHours.toString().padStart(2, "0")}:${endMins.toString().padStart(2, "0")}`;
       const endDateTime = `${data.date}T${endTime}:00`;
 
+      // Check if customer exists with this phone number
+      let customerId = null;
+      if (data.customer_phone) {
+        const phoneDigits = data.customer_phone.replace(/\D/g, "");
+        const { data: existingCustomer } = await supabase
+          .from("customers")
+          .select("id, phone")
+          .eq("restaurant_id", restaurantId)
+          .ilike("phone", `%${phoneDigits}%`)
+          .single();
+        
+        if (existingCustomer) {
+          customerId = existingCustomer.id;
+        } else {
+          // Create new customer
+          const { data: newCustomer, error: customerError } = await supabase
+            .from("customers")
+            .insert({
+              restaurant_id: restaurantId,
+              name: data.customer_name,
+              phone: data.customer_phone,
+            })
+            .select()
+            .single();
+          
+          if (!customerError && newCustomer) {
+            customerId = newCustomer.id;
+          }
+        }
+      }
+
       const { data: result, error } = await supabase
         .from("reservations")
         .insert({
           restaurant_id: restaurantId,
+          customer_id: customerId,
           customer_name: data.customer_name,
           customer_phone: data.customer_phone,
           party_size: data.party_size,
@@ -250,6 +286,7 @@ export default function ReservationsPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["list-reservations"] });
       queryClient.invalidateQueries({ queryKey: ["timeline-reservations"] });
+      queryClient.invalidateQueries({ queryKey: ["customers"] });
       setIsAddDialogOpen(false);
       resetForm();
       toast.success("Reservation created successfully");
@@ -262,6 +299,7 @@ export default function ReservationsPage() {
   // Update mutation
   const updateMutation = useMutation({
     mutationFn: async ({ id, data, previousStatus }: { id: string; data: Partial<typeof formData>; previousStatus?: string }) => {
+      const supabase = createClient();
       const updateData: Record<string, unknown> = {};
       
       if (data.customer_name) updateData.customer_name = data.customer_name;
@@ -459,7 +497,8 @@ export default function ReservationsPage() {
     if (!match) return "--:--";
     const hours = parseInt(match[1], 10);
     const mins = match[2];
-    const displayHours = hours > 12 ? hours - 12 : hours;
+    // Fix: Handle midnight (0:00) as 12:00 AM
+    const displayHours = hours === 0 ? 12 : hours > 12 ? hours - 12 : hours;
     const ampm = hours >= 12 ? "PM" : "AM";
     return `${displayHours}:${mins} ${ampm}`;
   };

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 
 // PATCH /api/reservations/[id] - Update reservation
+// NOTE: Customer stats are automatically updated by database triggers when status changes
 export async function PATCH(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }

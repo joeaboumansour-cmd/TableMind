@@ -1,41 +1,37 @@
 import { createClient } from "@/lib/supabase/server";
+import { getAuthenticatedUser, extractTokenFromHeader } from "@/lib/auth/jwt";
 import { NextRequest, NextResponse } from "next/server";
 
 export async function GET(request: NextRequest) {
   try {
-    const supabase = await createClient();
+    // Verify JWT and extract restaurant_id
+    const authHeader = request.headers.get("authorization");
+    const user = await getAuthenticatedUser(authHeader);
+    
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
 
     const { searchParams } = new URL(request.url);
     const action = searchParams.get("action") || "overview";
-    const restaurantId = searchParams.get("restaurant_id");
+    const requestedRestaurantId = searchParams.get("restaurant_id");
     const startDate = searchParams.get("start_date");
     const endDate = searchParams.get("end_date");
     const year = searchParams.get("year");
     const period = searchParams.get("period") || "month";
     const timezoneOffset = parseInt(searchParams.get("tz_offset") || "0"); // Minutes offset from UTC (e.g., -120 for UTC+2)
 
-    console.log("Analytics API called:", { action, restaurantId, period, timezoneOffset });
-
-    // Get restaurant - rely on RLS like waitlist API does
-    let restaurant_id = restaurantId;
-    if (!restaurant_id) {
-      // Get from restaurants table via RLS
-      const { data: restaurant, error: restaurantError } = await supabase
-        .from("restaurants")
-        .select("id")
-        .limit(1)
-        .single();
-
-      if (restaurantError) {
-        console.error("Restaurant fetch error:", restaurantError);
-      }
-
-      restaurant_id = restaurant?.id;
+    // SECURITY: Verify the requested restaurant_id matches the user's restaurant
+    if (requestedRestaurantId && requestedRestaurantId !== user.restaurantId) {
+      return NextResponse.json({ error: "Unauthorized - Cannot access other restaurant's data" }, { status: 403 });
     }
 
-    if (!restaurant_id) {
-      return NextResponse.json({ error: "Restaurant not found", details: "No restaurant_id provided or found" }, { status: 404 });
-    }
+    const restaurant_id = user.restaurantId;
+    
+    console.log("Analytics API called:", { action, restaurant_id, period, timezoneOffset, user: user.username });
+
+    // Create Supabase client with restaurant_id for RLS
+    const supabase = await createClient(restaurant_id);
 
     // Calculate date ranges based on client's timezone
     // Get current UTC time and adjust for client's timezone

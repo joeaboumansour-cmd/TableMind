@@ -14,8 +14,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "TableMind - Restaurant Reservation System",
-  description: "Internal intelligence system for restaurants",
+  title: "GoldenSquirrel - Restaurant Reservation System",
+  description: "Smart reservation management for restaurants",
 };
 
 export default function RootLayout({

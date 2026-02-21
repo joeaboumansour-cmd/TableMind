@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { createClient } from "@/lib/supabase/client";
+import { useRestaurant } from "@/app/RestaurantContext";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -21,9 +22,9 @@ import { Plus, Users, Clock, Phone, Calendar, Settings, Trash2, Bell } from "luc
 import { toast } from "sonner";
 import type { WaitlistEntry, WaitlistStatus, PriorityLevel, CreateWaitlistEntryRequest } from "@/lib/types/waitlist";
 
-const supabase = createClient();
-
 export default function WaitlistPage() {
+  const { restaurant } = useRestaurant();
+  const restaurantId = restaurant?.id;
   const queryClient = useQueryClient();
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [formData, setFormData] = useState<CreateWaitlistEntryRequest>({
@@ -35,18 +36,11 @@ export default function WaitlistPage() {
     preferences: [],
   });
 
-  const { data: restaurantId } = useQuery({
-    queryKey: ["restaurant-id"],
-    queryFn: async () => {
-      const { data } = await supabase.from("restaurants").select("id").limit(1).single();
-      return data?.id || null;
-    },
-  });
-
   const { data: waitlist = [], isLoading } = useQuery({
     queryKey: ["waitlist", restaurantId],
     queryFn: async () => {
       if (!restaurantId) return [];
+      const supabase = createClient();
       const { data, error } = await supabase
         .from("waitlist")
         .select("*")

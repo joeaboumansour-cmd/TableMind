@@ -8,8 +8,7 @@ import { Calendar, Users, Clock, TrendingUp, ArrowRight, ChevronLeft, ChevronRig
 import Link from "next/link";
 import TimelineView from "./TimelineView";
 import { createClient } from "@/lib/supabase/client";
-
-const supabase = createClient();
+import { useRestaurant } from "@/app/RestaurantContext";
 
 const getTodayString = () => {
   const now = new Date();
@@ -35,6 +34,9 @@ function ClientDateDisplay({ date }: { date: string }) {
 }
 
 export default function DashboardPage() {
+  const { restaurant } = useRestaurant();
+  const restaurantId = restaurant?.id;
+  
   const [selectedDate, setSelectedDate] = useState(getTodayString());
 
   const navigateDate = (direction: "prev" | "next") => {
@@ -47,21 +49,12 @@ export default function DashboardPage() {
     setSelectedDate(date.toISOString().split("T")[0]);
   };
 
-  // Fetch restaurant ID
-  const { data: restaurantId } = useQuery({
-    queryKey: ["restaurant-id"],
-    queryFn: async () => {
-      const { data, error } = await supabase.from("restaurants").select("id").limit(1).single();
-      if (error) return null;
-      return data?.id || null;
-    },
-  });
-
   // Fetch today's reservations
   const { data: reservations = [] } = useQuery({
     queryKey: ["dashboard-reservations", restaurantId, selectedDate],
     queryFn: async () => {
       if (!restaurantId) return [];
+      const supabase = createClient();
       const { data, error } = await supabase
         .from("reservations")
         .select("id, party_size, start_time, end_time, status, table_id")
@@ -82,6 +75,7 @@ export default function DashboardPage() {
     queryKey: ["dashboard-tables", restaurantId],
     queryFn: async () => {
       if (!restaurantId) return [];
+      const supabase = createClient();
       const { data, error } = await supabase
         .from("tables")
         .select("id, name, capacity")

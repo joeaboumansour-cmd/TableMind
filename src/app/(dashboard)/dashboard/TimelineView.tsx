@@ -3,6 +3,7 @@
 import { useRef, useState, useEffect, useMemo, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { createClient } from "@/lib/supabase/client";
+import { useRestaurant } from "@/app/RestaurantContext";
 import { 
   Users, Star, Calendar, Clock, Edit, Trash2, CheckCircle, XCircle, 
   ChevronLeft, ChevronRight, Plus, MapPin, AlertCircle, GripVertical
@@ -23,8 +24,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-
-const supabase = createClient();
 
 interface Customer {
   id: string;
@@ -86,6 +85,8 @@ interface TimelineViewProps {
 }
 
 export default function TimelineView({ selectedDate: propSelectedDate, onDateChange }: TimelineViewProps) {
+  const { restaurant } = useRestaurant();
+  const restaurantId = restaurant?.id;
   const gridRef = useRef<HTMLDivElement>(null);
   const phoneInputRef = useRef<HTMLInputElement>(null);
   const queryClient = useQueryClient();
@@ -106,6 +107,24 @@ export default function TimelineView({ selectedDate: propSelectedDate, onDateCha
   const [draggedReservation, setDraggedReservation] = useState<Reservation | null>(null);
   const [dragOverSlot, setDragOverSlot] = useState<{tableId: string, slotIndex: number} | null>(null);
   const [isDragging, setIsDragging] = useState(false);
+  
+  // Touch drag state
+  const [touchDragState, setTouchDragState] = useState<{
+    reservation: Reservation | null;
+    startX: number;
+    startY: number;
+    currentX: number;
+    currentY: number;
+    isDragging: boolean;
+  }>({
+    reservation: null,
+    startX: 0,
+    startY: 0,
+    currentX: 0,
+    currentY: 0,
+    isDragging: false,
+  });
+  const touchDragRef = useRef<HTMLDivElement>(null);
   
   // Form state
   const [formData, setFormData] = useState({
@@ -142,21 +161,12 @@ export default function TimelineView({ selectedDate: propSelectedDate, onDateCha
     return () => grid.removeEventListener("scroll", handleScroll);
   }, []);
 
-  // Fetch restaurant
-  const { data: restaurantId } = useQuery({
-    queryKey: ["restaurant-id"],
-    queryFn: async () => {
-      const { data, error } = await supabase.from("restaurants").select("id").limit(1).single();
-      if (error) return null;
-      return data?.id || null;
-    },
-  });
-
   // Fetch tables
   const { data: tables = [] } = useQuery<Table[]>({
     queryKey: ["timeline-tables", restaurantId],
     queryFn: async () => {
       if (!restaurantId) return [];
+      const supabase = createClient();
       const { data, error } = await supabase
         .from("tables")
         .select("id, name, capacity")
@@ -173,6 +183,7 @@ export default function TimelineView({ selectedDate: propSelectedDate, onDateCha
     queryKey: ["timeline-reservations", restaurantId, selectedDate],
     queryFn: async () => {
       if (!restaurantId) return [];
+      const supabase = createClient();
       const { data, error } = await supabase
         .from("reservations")
         .select("id, table_id, customer_name, party_size, start_time, end_time, status, notes, customer_phone")
@@ -218,6 +229,7 @@ export default function TimelineView({ selectedDate: propSelectedDate, onDateCha
   // Mutations
   const createMutation = useMutation({
     mutationFn: async (reservation: any) => {
+      const supabase = createClient();
       const { data, error } = await supabase.from("reservations").insert(reservation).select().single();
       if (error) throw error;
       return data;
@@ -234,6 +246,7 @@ export default function TimelineView({ selectedDate: propSelectedDate, onDateCha
 
   const updateMutation = useMutation({
     mutationFn: async ({ id, data }: { id: string; data: any }) => {
+      const supabase = createClient();
       const { data: result, error } = await supabase.from("reservations").update(data).eq("id", id).select().single();
       if (error) throw error;
       return result;
@@ -246,6 +259,7 @@ export default function TimelineView({ selectedDate: propSelectedDate, onDateCha
 
   const updateTimeMutation = useMutation({
     mutationFn: async ({ id, start_time, end_time, table_id }: { id: string; start_time: string; end_time: string; table_id: string }) => {
+      const supabase = createClient();
       const { data, error } = await supabase.from("reservations").update({ start_time, end_time, table_id }).eq("id", id).select().single();
       if (error) throw error;
       return data;
@@ -260,6 +274,7 @@ export default function TimelineView({ selectedDate: propSelectedDate, onDateCha
 
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => {
+      const supabase = createClient();
       const { error } = await supabase.from("reservations").delete().eq("id", id);
       if (error) throw error;
     },
@@ -274,6 +289,7 @@ export default function TimelineView({ selectedDate: propSelectedDate, onDateCha
   // Customer lookup
   const lookupCustomer = async (phone: string) => {
     if (!restaurantId || phone.length < 7) return null;
+    const supabase = createClient();
     const { data } = await supabase
       .from("customers")
       .select("id, name, phone, tags, total_visits, last_visit")
@@ -575,6 +591,143 @@ export default function TimelineView({ selectedDate: propSelectedDate, onDateCha
     });
   };
 
+  // Touch event handlers for mobile drag and drop
+  const handleTouchStart = (e: React.TouchEvent, reservation: Reservation) => {
+    const touch = e.touches[0];
+    setTouchDragState({
+      reservation,
+      startX: touch.clientX,
+      startY: touch.clientY,
+      currentX: touch.clientX,
+      currentY: touch.clientY,
+      isDragging: false,
+    });
+  };
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+    if (!touchDragState.reservation) return;
+    
+    const touch = e.touches[0];
+    const deltaX = Math.abs(touch.clientX - touchDragState.startX);
+    const deltaY = Math.abs(touch.clientY - touchDragState.startY);
+    
+    // Start dragging after moving more than 10 pixels
+    if (!touchDragState.isDragging && (deltaX > 10 || deltaY > 10)) {
+      setTouchDragState(prev => ({ ...prev, isDragging: true }));
+      setDraggedReservation(touchDragState.reservation);
+      setIsDragging(true);
+    }
+    
+    if (touchDragState.isDragging) {
+      setTouchDragState(prev => ({
+        ...prev,
+        currentX: touch.clientX,
+        currentY: touch.clientY,
+      }));
+      
+    // Find drop target under touch point
+      const element = document.elementFromPoint(touch.clientX, touch.clientY);
+      const slotElement = element?.closest('[data-slot]');
+      if (slotElement) {
+        const tableId = slotElement.getAttribute('data-table-id') || '';
+        const slotIndex = parseInt(slotElement.getAttribute('data-slot-index') || '0', 10);
+        if (tableId && touchDragState.reservation) {
+          const durationSlots = timeToSlotIndex(touchDragState.reservation.end_time) - timeToSlotIndex(touchDragState.reservation.start_time);
+          const { available } = getTableAvailability(tableId, slotIndex, durationSlots, touchDragState.reservation.id);
+          if (available) {
+            setDragOverSlot({ tableId, slotIndex });
+          }
+        }
+      }
+    }
+  };
+
+  const handleTouchEnd = (e: React.TouchEvent) => {
+    if (!touchDragState.reservation || !touchDragState.isDragging) {
+      // If not dragging, treat as a click to open edit dialog
+      if (touchDragState.reservation && !touchDragState.isDragging) {
+        openEditDialog(touchDragState.reservation);
+      }
+      setTouchDragState({
+        reservation: null,
+        startX: 0,
+        startY: 0,
+        currentX: 0,
+        currentY: 0,
+        isDragging: false,
+      });
+      return;
+    }
+    
+    // Find drop target
+    const touch = e.changedTouches[0];
+    const element = document.elementFromPoint(touch.clientX, touch.clientY);
+    const slotElement = element?.closest('[data-slot]');
+    
+    if (slotElement && touchDragState.reservation) {
+      const tableId = slotElement.getAttribute('data-table-id');
+      const slotIndex = parseInt(slotElement.getAttribute('data-slot-index') || '0', 10);
+      
+      if (tableId) {
+        // Check if dropping to past time on same day
+        const today = getTodayString();
+        if (selectedDate === today) {
+          const slotTime = slotIndexToTime(slotIndex);
+          const [slotHour, slotMinute] = slotTime.split(':').map(Number);
+          const now = new Date();
+          const currentHour = now.getHours();
+          const currentMinute = now.getMinutes();
+          
+          if (slotHour < currentHour || (slotHour === currentHour && slotMinute < currentMinute)) {
+            toast.error("Cannot move reservations to past times");
+            setTouchDragState({
+              reservation: null,
+              startX: 0,
+              startY: 0,
+              currentX: 0,
+              currentY: 0,
+              isDragging: false,
+            });
+            setDraggedReservation(null);
+            setDragOverSlot(null);
+            setIsDragging(false);
+            return;
+          }
+        }
+        
+        const durationSlots = timeToSlotIndex(touchDragState.reservation.end_time) - timeToSlotIndex(touchDragState.reservation.start_time);
+        const { available } = getTableAvailability(tableId, slotIndex, durationSlots, touchDragState.reservation.id);
+        
+        if (available && touchDragState.reservation.id) {
+          const newStartTime = slotIndexToTime(slotIndex);
+          const newEndSlot = slotIndex + durationSlots;
+          const newEndTime = slotIndexToTime(newEndSlot);
+          
+          updateTimeMutation.mutate({
+            id: touchDragState.reservation.id,
+            start_time: `${selectedDate}T${newStartTime}:00`,
+            end_time: `${selectedDate}T${newEndTime}:00`,
+            table_id: tableId,
+          });
+        } else {
+          toast.error("Cannot move here - time conflict");
+        }
+      }
+    }
+    
+    setTouchDragState({
+      reservation: null,
+      startX: 0,
+      startY: 0,
+      currentX: 0,
+      currentY: 0,
+      isDragging: false,
+    });
+    setDraggedReservation(null);
+    setDragOverSlot(null);
+    setIsDragging(false);
+  };
+
   // Get suitable tables for party size
   const getSuitableTables = (partySize: number) => {
     return tables.filter((t: Table) => t.capacity >= partySize).sort((a: Table, b: Table) => a.capacity - b.capacity);
@@ -716,6 +869,9 @@ export default function TimelineView({ selectedDate: propSelectedDate, onDateCha
                     
                     return (
                       <div key={`slot-${table.id}-${slotIndex}`}
+                        data-slot
+                        data-table-id={table.id}
+                        data-slot-index={slotIndex}
                         className={`absolute top-0 bottom-0 transition-colors ${
                           isDragging 
                             ? isDropTarget ? 'bg-green-200' : hasConflictHere ? 'bg-red-100' : 'bg-green-50'
@@ -739,7 +895,8 @@ export default function TimelineView({ selectedDate: propSelectedDate, onDateCha
                         className={`absolute top-2 bottom-2 rounded-md shadow-md cursor-move transition-all hover:shadow-lg hover:scale-[1.02] z-10 border-2 border-white/20 ${getStatusColor(reservation.status)} ${isThisDragging ? 'opacity-50 pointer-events-none' : ''}`}
                         style={{ 
                           left: calculatePosition(reservation.start_time), 
-                          width: Math.max(calculateWidth(reservation.start_time, reservation.end_time) - 4, SLOT_WIDTH - 4)
+                          width: Math.max(calculateWidth(reservation.start_time, reservation.end_time) - 4, SLOT_WIDTH - 4),
+                          touchAction: 'none', // Prevent scrolling while dragging
                         }}
                         onClick={(e) => { 
                           e.stopPropagation(); 
@@ -747,6 +904,9 @@ export default function TimelineView({ selectedDate: propSelectedDate, onDateCha
                         }}
                         onDragStart={(e) => handleDragStart(e, reservation)}
                         onDragEnd={handleDragEnd}
+                        onTouchStart={(e) => handleTouchStart(e, reservation)}
+                        onTouchMove={handleTouchMove}
+                        onTouchEnd={handleTouchEnd}
                       >
                         <div className="h-full flex flex-col justify-center px-2 text-white overflow-hidden">
                           <div className="flex items-center gap-1">
@@ -769,12 +929,37 @@ export default function TimelineView({ selectedDate: propSelectedDate, onDateCha
         </div>
       </div>
 
+      {/* Touch Drag Preview - Floating element that follows finger */}
+      {touchDragState.isDragging && touchDragState.reservation && (
+        <div
+          ref={touchDragRef}
+          className={`fixed z-50 pointer-events-none rounded-md shadow-xl border-2 border-white/50 ${getStatusColor(touchDragState.reservation.status)}`}
+          style={{
+            left: touchDragState.currentX - 50,
+            top: touchDragState.currentY - 30,
+            width: Math.max(calculateWidth(touchDragState.reservation.start_time, touchDragState.reservation.end_time), 100),
+            height: 60,
+            opacity: 0.9,
+          }}
+        >
+          <div className="h-full flex flex-col justify-center px-3 text-white overflow-hidden">
+            <div className="flex items-center gap-1">
+              <span className="text-xs">{getStatusIcon(touchDragState.reservation.status)}</span>
+              <span className="font-semibold text-sm truncate">{touchDragState.reservation.customer_name}</span>
+            </div>
+            <div className="text-xs opacity-90">
+              {touchDragState.reservation.party_size} guests
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Create Reservation Dialog - Using Shared Component */}
       <ReservationModal
         isOpen={isCreateOpen}
         onClose={closeCreateDialog}
         mode="create"
-        restaurantId={restaurantId}
+        restaurantId={restaurantId || null}
         tables={tables}
         selectedDate={selectedDate}
         selectedSlot={selectedSlot}
@@ -789,7 +974,7 @@ export default function TimelineView({ selectedDate: propSelectedDate, onDateCha
         onClose={() => setIsEditOpen(false)}
         mode="edit"
         reservation={selectedReservation}
-        restaurantId={restaurantId}
+        restaurantId={restaurantId || null}
         tables={tables}
         selectedDate={selectedDate}
         onSuccess={() => {

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, usePathname } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import { useRestaurant } from "../RestaurantContext";
@@ -11,25 +11,46 @@ import {
   Users,
   Settings,
   LogOut,
-  Utensils,
   Table,
   Loader2,
   BarChart3,
   Menu,
   X,
   List,
+  Grid3X3,
+  ChefHat,
 } from "lucide-react";
+import { LogoIcon } from "@/components/Logo";
 import Link from "next/link";
+import { getNavItemsForRole, canAccessRoute, UserRole } from "@/lib/auth/roles";
+import { NavItem } from "@/lib/auth/roles";
 
-const navItems = [
-  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/analytics", label: "Analytics", icon: BarChart3 },
-  { href: "/reservations", label: "Reservations", icon: Calendar },
-  { href: "/waitlist", label: "Waitlist", icon: List },
-  { href: "/customers", label: "Customers", icon: Users },
-  { href: "/settings/tables", label: "Tables", icon: Table },
-  { href: "/settings", label: "Settings", icon: Settings },
-];
+// Icon mapping for role-based nav items
+const iconMap: Record<string, React.ComponentType<{ className?: string }>> = {
+  LayoutDashboard,
+  BarChart3,
+  Calendar,
+  List,
+  Users,
+  Grid3X3,
+  ChefHat,
+  Table,
+  Settings,
+};
+
+// Convert role-based nav items to component format
+function getNavItemsWithIcons(role: UserRole) {
+  const items = getNavItemsForRole(role);
+  return items.map(item => ({
+    ...item,
+    icon: iconMap[item.icon] || LayoutDashboard,
+  }));
+}
+
+// Bottom nav items for mobile (first 5 items only)
+function getMobileNavItems(role: UserRole) {
+  return getNavItemsWithIcons(role).slice(0, 5);
+}
 
 export default function DashboardLayout({
   children,
@@ -38,13 +59,34 @@ export default function DashboardLayout({
 }) {
   const { user, restaurant, isLoading, signOut } = useRestaurant();
   const router = useRouter();
+  const pathname = usePathname();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
+  // Get role-based nav items
+  const navItems = user ? getNavItemsWithIcons(user.role) : [];
+  const mobileNavItems = user ? getMobileNavItems(user.role) : [];
+
   useEffect(() => {
-    if (!isLoading && !user) {
+    if (isLoading) return;
+
+    // Redirect to login if not authenticated
+    if (!user) {
       router.push("/login");
+      return;
     }
-  }, [isLoading, user, router]);
+
+    // Redirect waiters to waiter view
+    if (user.role === "waiter") {
+      router.push("/waiter");
+      return;
+    }
+
+    // Check if user can access current route
+    if (pathname && !canAccessRoute(user.role, pathname)) {
+      router.push("/dashboard");
+      return;
+    }
+  }, [isLoading, user, pathname, router]);
 
   const handleLogout = async () => {
     await signOut();
@@ -62,7 +104,8 @@ export default function DashboardLayout({
     );
   }
 
-  if (!user || !restaurant) {
+  // Don't render dashboard for waiters (they get redirected)
+  if (!user || !restaurant || user.role === "waiter") {
     return null;
   }
 
@@ -70,14 +113,12 @@ export default function DashboardLayout({
     <>
       <div className="p-4 lg:p-6 border-b border-border">
         <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10 flex-shrink-0">
-            <Utensils className="h-5 w-5 text-primary" />
-          </div>
+          <LogoIcon size="sm" className="flex-shrink-0" />
           <div className="min-w-0 flex-1">
             <h1 className="font-bold text-base lg:text-lg truncate">
               {restaurant.name}
             </h1>
-            <p className="text-xs text-muted-foreground">TableMind</p>
+            <p className="text-xs text-muted-foreground">GoldenSquirrel</p>
           </div>
         </div>
       </div>
@@ -126,14 +167,12 @@ export default function DashboardLayout({
 
       <header className="lg:hidden fixed top-0 left-0 right-0 z-50 h-16 bg-card border-b border-border flex items-center justify-between px-4">
         <div className="flex items-center gap-3">
-          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10">
-            <Utensils className="h-4 w-4 text-primary" />
-          </div>
+          <LogoIcon size="sm" />
           <div className="min-w-0">
             <h1 className="font-bold text-sm truncate max-w-[150px]">
               {restaurant.name}
             </h1>
-            <p className="text-xs text-muted-foreground">TableMind</p>
+            <p className="text-xs text-muted-foreground">GoldenSquirrel</p>
           </div>
         </div>
 
@@ -165,7 +204,7 @@ export default function DashboardLayout({
       </main>
 
       <nav className="lg:hidden fixed bottom-0 left-0 right-0 z-50 h-16 bg-card border-t border-border flex items-center justify-around px-2">
-        {navItems.slice(0, 5).map((item) => {
+        {mobileNavItems.map((item) => {
           const Icon = item.icon;
           return (
             <Link

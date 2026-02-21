@@ -1,6 +1,7 @@
 import { createBrowserClient } from "@supabase/ssr";
 
-let clientInstance: ReturnType<typeof createBrowserClient> | null = null;
+// Track current restaurant ID to detect changes
+let currentRestaurantId: string | null = null;
 
 // Mock data for demo mode
 const mockTables = [
@@ -10,12 +11,28 @@ const mockTables = [
   { id: "4", name: "Table 4", capacity: 6, shape: "rect" as const, sort_order: 4, restaurant_id: "demo" },
 ];
 
-export function createClient() {
-  // Return cached instance if exists
-  if (clientInstance) {
-    return clientInstance;
+/**
+ * Get the restaurant ID from localStorage auth data
+ */
+function getRestaurantIdFromStorage(): string | null {
+  if (typeof window === "undefined") return null;
+  
+  try {
+    const authData = localStorage.getItem("tablemind_auth");
+    if (!authData) return null;
+    
+    const parsed = JSON.parse(authData);
+    return parsed.restaurant?.id || null;
+  } catch {
+    return null;
   }
+}
 
+/**
+ * Create a Supabase client with restaurant_id header for RLS
+ * This function ALWAYS creates a fresh client to ensure correct tenant isolation
+ */
+export function createClient() {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
@@ -75,7 +92,77 @@ export function createClient() {
     } as unknown as ReturnType<typeof createBrowserClient>;
   }
 
-  // Create real client
-  clientInstance = createBrowserClient(supabaseUrl, supabaseKey);
-  return clientInstance;
+  // DEBUG: Log restaurant ID
+  console.log("[Supabase Client] Creating client - will read restaurant ID from localStorage on each request");
+
+  // Create real client with DYNAMIC header injection
+  // Use custom fetch to ensure fresh restaurant_id header on EVERY request
+  const options: any = {
+    global: {
+      fetch: (...args: Parameters<typeof fetch>) => {
+        const [url, config = {}] = args;
+        
+        // Read restaurant ID FRESH from localStorage on every request
+        const restaurantId = getRestaurantIdFromStorage();
+        
+        console.log("[Supabase Client] Fetch with Restaurant ID:", restaurantId, "URL:", url.toString().slice(0, 100));
+        
+        // Create new headers with fresh restaurant_id
+        const headers = new Headers(config.headers || {});
+        if (restaurantId) {
+          headers.set("x-restaurant-id", restaurantId);
+        }
+        
+        return fetch(url, {
+          ...config,
+          headers,
+        });
+      },
+    },
+  };
+
+  // ALWAYS create a fresh client - no caching!
+  return createBrowserClient(supabaseUrl, supabaseKey, options);
+}
+
+/**
+ * Create a fresh Supabase client with the current restaurant ID
+ * Use this for operations that need the latest auth state
+ */
+export function createClientWithAuth() {
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+  if (!supabaseUrl || !supabaseKey) {
+    throw new Error("Supabase credentials not configured");
+  }
+
+  console.log("[Supabase Client] createClientWithAuth - will read restaurant ID from localStorage on each request");
+
+  // Use custom fetch to ensure fresh restaurant_id header on EVERY request
+  const options: any = {
+    global: {
+      fetch: (...args: Parameters<typeof fetch>) => {
+        const [url, config = {}] = args;
+        
+        // Read restaurant ID FRESH from localStorage on every request
+        const restaurantId = getRestaurantIdFromStorage();
+        
+        console.log("[Supabase Client] createClientWithAuth fetch with Restaurant ID:", restaurantId);
+        
+        // Create new headers with fresh restaurant_id
+        const headers = new Headers(config.headers || {});
+        if (restaurantId) {
+          headers.set("x-restaurant-id", restaurantId);
+        }
+        
+        return fetch(url, {
+          ...config,
+          headers,
+        });
+      },
+    },
+  };
+
+  return createBrowserClient(supabaseUrl, supabaseKey, options);
 }

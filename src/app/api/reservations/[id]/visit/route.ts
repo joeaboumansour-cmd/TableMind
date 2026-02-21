@@ -1,7 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 
-// POST /api/reservations/[id]/visit - Record guest arrival/visit
+/**
+ * POST /api/reservations/[id]/visit - Record guest arrival/visit
+ * 
+ * IMPORTANT: Customer stats (total_visits, no_show_count, cancellation_count) 
+ * are automatically managed by database triggers when reservation status changes.
+ * This endpoint only updates reservation status and timing fields.
+ */
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -36,10 +42,12 @@ export async function POST(
     const diffMs = scheduledTime.getTime() - arrivalTime.getTime();
     const minutesEarlyLate = Math.round(diffMs / (1000 * 60));
     
-    let updateData: any = {
+    let updateData: Record<string, unknown> = {
       updated_at: now.toISOString(),
     };
     
+    // Map action to status update
+    // NOTE: Database trigger handles customer stats automatically
     switch (action) {
       case 'arrive':
         updateData = {
@@ -57,24 +65,7 @@ export async function POST(
           status: 'seated',
           visit_completed: true,
         };
-        // Increment customer visit count
-        if (reservation.customer_id) {
-          try {
-            await supabase.rpc('increment_customer_visit', {
-              customer_id: reservation.customer_id
-            });
-          } catch {
-            // Fallback: directly update customer if RPC doesn't exist
-            await supabase
-              .from('customers')
-              .update({ 
-                total_visits: supabase.rpc('coalesce', { val: supabase.raw('total_visits'), default_val: 0 }) + 1,
-                last_visit_date: now.toISOString(),
-                updated_at: now.toISOString()
-              })
-              .eq('id', reservation.customer_id);
-          }
-        }
+        // Customer visit count is automatically incremented by database trigger
         break;
         
       case 'finish':
@@ -84,29 +75,7 @@ export async function POST(
           status: 'finished',
           visit_completed: true,
         };
-        // Also increment visit count if customer wasn't already seated
-        if (reservation.customer_id) {
-          try {
-            await supabase.rpc('increment_customer_visit', {
-              customer_id: reservation.customer_id
-            });
-          } catch {
-            // Fallback: directly update customer if RPC doesn't exist
-            const { data: customer } = await supabase
-              .from('customers')
-              .select('total_visits')
-              .eq('id', reservation.customer_id)
-              .single();
-            await supabase
-              .from('customers')
-              .update({ 
-                total_visits: (customer?.total_visits || 0) + 1,
-                last_visit_date: now.toISOString(),
-                updated_at: now.toISOString()
-              })
-              .eq('id', reservation.customer_id);
-          }
-        }
+        // Customer visit count is automatically incremented by database trigger (if not already seated)
         break;
         
       case 'no_show':
@@ -115,28 +84,7 @@ export async function POST(
           no_show: true,
           status: 'no_show',
         };
-        // Increment customer no-show count
-        if (reservation.customer_id) {
-          try {
-            await supabase.rpc('increment_customer_no_show', {
-              customer_id: reservation.customer_id
-            });
-          } catch {
-            // Fallback: directly update customer if RPC doesn't exist
-            const { data: customer } = await supabase
-              .from('customers')
-              .select('no_show_count')
-              .eq('id', reservation.customer_id)
-              .single();
-            await supabase
-              .from('customers')
-              .update({ 
-                no_show_count: (customer?.no_show_count || 0) + 1,
-                updated_at: now.toISOString()
-              })
-              .eq('id', reservation.customer_id);
-          }
-        }
+        // Customer no_show_count is automatically incremented by database trigger
         break;
         
       case 'cancel':
@@ -144,28 +92,7 @@ export async function POST(
           ...updateData,
           status: 'cancelled',
         };
-        // Increment customer cancellation count
-        if (reservation.customer_id) {
-          try {
-            await supabase.rpc('increment_customer_cancellation', {
-              customer_id: reservation.customer_id
-            });
-          } catch {
-            // Fallback: directly update customer if RPC doesn't exist
-            const { data: customer } = await supabase
-              .from('customers')
-              .select('cancellation_count')
-              .eq('id', reservation.customer_id)
-              .single();
-            await supabase
-              .from('customers')
-              .update({ 
-                cancellation_count: (customer?.cancellation_count || 0) + 1,
-                updated_at: now.toISOString()
-              })
-              .eq('id', reservation.customer_id);
-          }
-        }
+        // Customer cancellation_count is automatically incremented by database trigger
         break;
     }
     

@@ -85,6 +85,11 @@ export function RestaurantProvider({ children }: { children: React.ReactNode }) 
         setToken(parsed.token);
         setUser(parsed.user);
         setRestaurant(parsed.restaurant);
+        
+        // DEBUG: Log restaurant ID loaded from localStorage
+        console.log("[DEBUG RestaurantContext] Restaurant ID loaded:", parsed.restaurant?.id);
+        console.log("[DEBUG RestaurantContext] Restaurant name:", parsed.restaurant?.name);
+        console.log("[DEBUG RestaurantContext] User:", parsed.user?.username);
       } catch (error) {
         console.error("Auth load error:", error);
         localStorage.removeItem("tablemind_auth");

@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Utensils, Loader2, Eye, EyeOff } from "lucide-react";
 import { toast } from "sonner";
+import { getDefaultRouteForRole } from "@/lib/auth/roles";
 
 const supabase = createClient();
 
@@ -39,17 +40,28 @@ export default function LoginPage() {
       }
 
       // Store auth token
-      localStorage.setItem("tablemind_auth", JSON.stringify({
+      const authData = {
         token: data.token,
         user: data.user,
         restaurant: data.restaurant,
         timestamp: Date.now(),
-      }));
+      };
+      localStorage.setItem("tablemind_auth", JSON.stringify(authData));
+      
+      // DEBUG: Log restaurant ID at login
+      console.log("[DEBUG LOGIN] Restaurant ID stored:", data.restaurant?.id);
+      console.log("[DEBUG LOGIN] Restaurant name:", data.restaurant?.name);
+      console.log("[DEBUG LOGIN] User:", data.user?.username);
+      console.log("[DEBUG LOGIN] Full auth data:", authData);
 
       toast.success(`Welcome, ${data.user.display_name}!`);
+      
+      // Redirect based on role
+      const redirectPath = getDefaultRouteForRole(data.user.role);
+      
       // Small delay to ensure localStorage is set before navigation
       setTimeout(() => {
-        window.location.href = "/dashboard";
+        window.location.href = redirectPath;
       }, 100);
     } catch (error) {
       toast.error("An error occurred during login");
@@ -62,11 +74,46 @@ export default function LoginPage() {
     <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-br from-background to-muted p-4">
       {/* Logo */}
       <div className="mb-8 flex items-center gap-3">
-        <div className="h-12 w-12 rounded-xl bg-primary flex items-center justify-center">
-          <Utensils className="h-7 w-7 text-primary-foreground" />
+        <div className="h-12 w-12 rounded-xl bg-amber-500 flex items-center justify-center shadow-lg">
+          <svg viewBox="0 0 32 32" className="h-7 w-7 text-white" fill="currentColor">
+            {/* Side Profile Squirrel */}
+            {/* Body */}
+            <ellipse cx="18" cy="22" rx="6" ry="7" />
+            {/* Head */}
+            <circle cx="24" cy="14" r="5" />
+            {/* Snout */}
+            <ellipse cx="28" cy="15" rx="3" ry="2.5" />
+            {/* Ear */}
+            <path d="M22 10 L24 6 L26 10 Z" />
+            {/* Eye */}
+            <circle cx="25" cy="13" r="1.2" fill="#FEF3C7" />
+            {/* Front paws */}
+            <ellipse cx="22" cy="20" rx="2" ry="3" />
+            {/* Hind leg */}
+            <ellipse cx="14" cy="24" rx="2.5" ry="4" />
+            {/* Big curly tail */}
+            <path d="M12 20 
+                     C 8 18, 6 14, 6 10 
+                     C 6 4, 10 2, 14 4 
+                     C 17 5, 18 8, 16 10 
+                     C 14 12, 11 10, 12 8 
+                     C 12 6, 14 6, 15 7
+                     C 16 8, 16 10, 14 12
+                     C 12 14, 10 16, 12 20 Z" />
+            {/* Tail inner highlight */}
+            <path d="M10 14 
+                     C 9 12, 9 8, 11 6 
+                     C 13 5, 14 6, 13 8 
+                     C 12 9, 11 8, 11 7" 
+                  fill="none" 
+                  stroke="white" 
+                  strokeWidth="1.5"
+                  opacity="0.6"
+                  strokeLinecap="round"/>
+          </svg>
         </div>
         <div>
-          <h1 className="text-3xl font-bold">TableMind</h1>
+          <h1 className="text-3xl font-bold">GoldenSquirrel</h1>
           <p className="text-muted-foreground">Restaurant Reservation System</p>
         </div>
       </div>
@@ -145,7 +192,7 @@ export default function LoginPage() {
       </Card>
 
       <p className="mt-8 text-center text-sm text-muted-foreground">
-        © 2024 TableMind. All rights reserved.
+        © 2026 GoldenSquirrel. All rights reserved.
       </p>
     </div>
   );

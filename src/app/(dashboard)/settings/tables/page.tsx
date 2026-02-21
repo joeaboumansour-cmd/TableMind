@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -15,111 +14,49 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { createClient } from "@/lib/supabase/client";
 import { Plus, Pencil, Trash2, Users } from "lucide-react";
-
-const supabase = createClient();
-
-interface Table {
-  id: string;
-  name: string;
-  capacity: number;
-  shape: "circle" | "rect";
-  sort_order: number;
-}
-
+import { useTables, useTableMutations } from "@/lib/hooks";
+import { useRestaurant } from "@/app/RestaurantContext";
+import type { Table, TableFormData } from "@/lib/types";
 
 export default function TablesPage() {
-  const queryClient = useQueryClient();
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
   const [editingTable, setEditingTable] = useState<Table | null>(null);
-  const [newTable, setNewTable] = useState<{ name: string; capacity: number; shape: "circle" | "rect" }>({ name: "", capacity: 2, shape: "rect" });
-
-  // Fetch restaurant ID
-  const { data: restaurantId } = useQuery({
-    queryKey: ["restaurant-id"],
-    queryFn: async () => {
-      const { data, error } = await supabase.from("restaurants").select("id").limit(1).single();
-      if (error) return null;
-      return data?.id || null;
-    },
+  const [newTable, setNewTable] = useState<TableFormData>({ 
+    name: "", 
+    capacity: 2, 
+    shape: "rect" 
   });
 
-  // Fetch tables
-  const { data: tables = [], isLoading } = useQuery({
-    queryKey: ["tables", restaurantId],
-    queryFn: async () => {
-      if (!restaurantId) return [];
-      const { data, error } = await supabase
-        .from("tables")
-        .select("*")
-        .eq("restaurant_id", restaurantId)
-        .order("sort_order", { ascending: true });
-      if (error) return [];
-      return data || [];
-    },
-    enabled: true,
-  });
-
-  // Create table mutation
-  const createMutation = useMutation({
-    mutationFn: async (table: Omit<Table, "id">) => {
-      if (!restaurantId) throw new Error("No restaurant");
-      const { data, error } = await supabase
-        .from("tables")
-        .insert({ ...table, restaurant_id: restaurantId })
-        .select()
-        .single();
-      if (error) throw error;
-      return data;
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["tables"] });
-      setIsAddDialogOpen(false);
-      setNewTable({ name: "", capacity: 2, shape: "rect" });
-    },
-  });
-
-  // Update table mutation
-  const updateMutation = useMutation({
-    mutationFn: async (table: Table) => {
-      const { data, error } = await supabase
-        .from("tables")
-        .update({ name: table.name, capacity: table.capacity, shape: table.shape })
-        .eq("id", table.id)
-        .select()
-        .single();
-      if (error) throw error;
-      return data;
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["tables"] });
-      setIsEditDialogOpen(false);
-      setEditingTable(null);
-    },
-  });
-
-  // Delete table mutation
-  const deleteMutation = useMutation({
-    mutationFn: async (id: string) => {
-      const { error } = await supabase.from("tables").delete().eq("id", id);
-      if (error) throw error;
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["tables"] });
-    },
-  });
+  // Use RestaurantContext to get the logged-in user's restaurant
+  const { restaurant } = useRestaurant();
+  const restaurantId = restaurant?.id || null;
+  const { data: tables = [], isLoading } = useTables(restaurantId);
+  const { createMutation, updateMutation, deleteMutation } = useTableMutations(restaurantId);
 
   const handleAddTable = () => {
-    const nextSortOrder = tables.length > 0 ? Math.max(...tables.map((t: Table) => t.sort_order)) + 1 : 1;
-    createMutation.mutate({ ...newTable, sort_order: nextSortOrder });
+    createMutation.mutate(newTable, {
+      onSuccess: () => {
+        setIsAddDialogOpen(false);
+        setNewTable({ name: "", capacity: 2, shape: "rect" });
+      },
+    });
   };
 
   const handleEditTable = () => {
-    if (editingTable) {
-      updateMutation.mutate(editingTable);
-    }
+    if (!editingTable) return;
+    updateMutation.mutate({
+      id: editingTable.id,
+      name: editingTable.name,
+      capacity: editingTable.capacity,
+      shape: editingTable.shape,
+    }, {
+      onSuccess: () => {
+        setIsEditDialogOpen(false);
+        setEditingTable(null);
+      },
+    });
   };
 
   const handleDeleteTable = (id: string) => {

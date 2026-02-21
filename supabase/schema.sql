@@ -18,13 +18,7 @@ CREATE TABLE restaurants (
 
 -- Enable RLS
 ALTER TABLE restaurants ENABLE ROW LEVEL SECURITY;
-
--- Allow all operations for authenticated users (temporary policy)
-CREATE POLICY "Allow all operations for authenticated users" ON restaurants
-    FOR ALL
-    TO authenticated
-    USING (true)
-    WITH CHECK (true);
+ALTER TABLE restaurants FORCE ROW LEVEL SECURITY;
 
 -- =============================================
 -- 2. TABLES TABLE
@@ -46,13 +40,7 @@ CREATE TABLE tables (
 
 -- Enable RLS
 ALTER TABLE tables ENABLE ROW LEVEL SECURITY;
-
--- Allow all operations for authenticated users
-CREATE POLICY "Allow all operations for authenticated users" ON tables
-    FOR ALL
-    TO authenticated
-    USING (true)
-    WITH CHECK (true);
+ALTER TABLE tables FORCE ROW LEVEL SECURITY;
 
 -- =============================================
 -- 3. CUSTOMERS TABLE
@@ -78,13 +66,7 @@ CREATE INDEX idx_customers_name ON customers(name);
 
 -- Enable RLS
 ALTER TABLE customers ENABLE ROW LEVEL SECURITY;
-
--- Allow all operations for authenticated users
-CREATE POLICY "Allow all operations for authenticated users" ON customers
-    FOR ALL
-    TO authenticated
-    USING (true)
-    WITH CHECK (true);
+ALTER TABLE customers FORCE ROW LEVEL SECURITY;
 
 -- =============================================
 -- 4. RESERVATIONS TABLE
@@ -118,13 +100,7 @@ CREATE INDEX idx_reservations_status ON reservations(status);
 
 -- Enable RLS
 ALTER TABLE reservations ENABLE ROW LEVEL SECURITY;
-
--- Allow all operations for authenticated users
-CREATE POLICY "Allow all operations for authenticated users" ON reservations
-    FOR ALL
-    TO authenticated
-    USING (true)
-    WITH CHECK (true);
+ALTER TABLE reservations FORCE ROW LEVEL SECURITY;
 
 -- =============================================
 -- FUNCTIONS & TRIGGERS

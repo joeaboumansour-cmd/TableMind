@@ -3,6 +3,7 @@
 import { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { createClient } from "@/lib/supabase/client";
+import { useRestaurant } from "@/app/RestaurantContext";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -10,26 +11,19 @@ import { Calendar, Users, Clock, Armchair, Target, AlertCircle, CheckCircle2, Cr
 import { LineChart, Line, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, AreaChart, Area, RadarChart, Radar, PolarGrid, PolarAngleAxis, PolarRadiusAxis } from "recharts";
 import type { AnalyticsResponse, ComprehensiveAnalytics } from "@/lib/types/analytics";
 
-const supabase = createClient();
-
 const STATUS_COLORS: Record<string, string> = { finished: "#22c55e", booked: "#3b82f6", confirmed: "#8b5cf6", seated: "#06b6d4", cancelled: "#ef4444", no_show: "#f59e0b" };
 const PARTY_COLORS = ["#3b82f6", "#22c55e", "#f59e0b", "#8b5cf6", "#ef4444"];
 
 export default function AnalyticsPage() {
+  const { restaurant } = useRestaurant();
+  const restaurantId = restaurant?.id;
   const [period, setPeriod] = useState<"day" | "week" | "month" | "year">("week");
-
-  const { data: restaurantId } = useQuery({
-    queryKey: ["restaurant-id"],
-    queryFn: async () => {
-      const { data } = await supabase.from("restaurants").select("id").limit(1).single();
-      return data?.id || null;
-    }
-  });
 
   const { data: reservations = [] } = useQuery({
     queryKey: ["analytics-reservations", restaurantId, period],
     queryFn: async () => {
       if (!restaurantId) return [];
+      const supabase = createClient();
       const { data, error } = await supabase
         .from("reservations")
         .select("id, customer_name, party_size, start_time, status, table_id")
@@ -45,6 +39,7 @@ export default function AnalyticsPage() {
     queryKey: ["analytics-customers", restaurantId],
     queryFn: async () => {
       if (!restaurantId) return [];
+      const supabase = createClient();
       const { data, error } = await supabase
         .from("customers")
         .select("id, name, total_visits, no_show_count, cancellation_count, tags")
@@ -60,6 +55,7 @@ export default function AnalyticsPage() {
     queryKey: ["analytics-tables", restaurantId],
     queryFn: async () => {
       if (!restaurantId) return [];
+      const supabase = createClient();
       const { data, error } = await supabase
         .from("tables")
         .select("id, name, capacity")
@@ -74,9 +70,21 @@ export default function AnalyticsPage() {
     queryKey: ["comprehensive-analytics", restaurantId, period],
     queryFn: async () => {
       if (!restaurantId) return null;
+      
+      // Get JWT token from localStorage
+      const authData = localStorage.getItem("tablemind_auth");
+      const token = authData ? JSON.parse(authData).token : null;
+      
       // Get timezone offset in minutes (negative for ahead of UTC like UTC+2 = -120)
       const tzOffset = new Date().getTimezoneOffset();
-      const response = await fetch(`/api/analytics?action=comprehensive&restaurant_id=${restaurantId}&period=${period}&tz_offset=${tzOffset}`);
+      
+      const response = await fetch(
+        `/api/analytics?action=comprehensive&restaurant_id=${restaurantId}&period=${period}&tz_offset=${tzOffset}`,
+        {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        }
+      );
+      
       const data = await response.json();
       if (!response.ok) {
         throw new Error(data?.details || data?.error || `Failed to fetch analytics (${response.status})`);
