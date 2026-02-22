@@ -13,7 +13,7 @@ import {
   DragOverlay,
 } from "@dnd-kit/core";
 import { CSS } from "@dnd-kit/utilities";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { createClient } from "@/lib/supabase/client";
 import { useRestaurant } from "@/app/RestaurantContext";
 import { Card } from "@/components/ui/card";
@@ -30,8 +30,12 @@ import {
   RotateCcw,
   Maximize,
 } from "lucide-react";
-import type { Table, Reservation } from "@/lib/types";
+import { useUnifiedData, getAvailabilityColor, UnifiedTable } from "@/lib/hooks/useUnifiedData";
+import type { Reservation } from "@/lib/types";
 import { toast } from "sonner";
+
+// Type alias for backward compatibility
+type Table = UnifiedTable;
 
 interface FloorPlanProps {
   onTableClick?: (table: Table) => void;
@@ -292,54 +296,27 @@ export function FloorPlan({
     })
   );
 
-  // Fetch tables with positions
-  const { data: tables = [], isLoading: tablesLoading } = useQuery({
-    queryKey: ["floor-plan-tables", restaurantId],
-    queryFn: async () => {
-      if (!restaurantId) return [];
-      const supabase = createClient();
-      const { data, error } = await supabase
-        .from("tables")
-        .select("*")
-        .eq("restaurant_id", restaurantId)
-        .eq("is_active", true)
-        .order("sort_order");
-      if (error) throw error;
-      return data || [];
-    },
-    enabled: !!restaurantId,
+  // Use unified data hook - single source of truth
+  const { 
+    tables, 
+    tablesWithReservations,
+    reservations,
+    isLoading: tablesLoading 
+  } = useUnifiedData({ 
+    date: today,
+    enableRealtime: true 
   });
 
-  // Fetch reservations for today
-  const { data: reservations = [] } = useQuery({
-    queryKey: ["floor-plan-reservations", restaurantId, today],
-    queryFn: async () => {
-      if (!restaurantId) return [];
-      const supabase = createClient();
-      const { data, error } = await supabase
-        .from("reservations")
-        .select("*")
-        .eq("restaurant_id", restaurantId)
-        .gte("start_time", `${today}T00:00:00`)
-        .lte("start_time", `${today}T23:59:59`)
-        .in("status", ["booked", "confirmed", "seated"])
-        .not("table_id", "is", null);
-      if (error) throw error;
-      return data || [];
-    },
-    enabled: !!restaurantId,
-  });
-
-  // Map reservations to tables
+  // Create a lookup map for reservations by table (for backward compatibility)
   const tableReservations = useMemo(() => {
     const map = new Map<string, Reservation>();
-    reservations.forEach((res: Reservation) => {
-      if (res.table_id) {
-        map.set(res.table_id, res);
+    tablesWithReservations.forEach((twr) => {
+      if (twr.reservation) {
+        map.set(twr.id, twr.reservation as Reservation);
       }
     });
     return map;
-  }, [reservations]);
+  }, [tablesWithReservations]);
 
   // Mutation to update table position
   const updatePositionMutation = useMutation({

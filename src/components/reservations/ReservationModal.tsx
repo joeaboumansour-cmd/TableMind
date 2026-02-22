@@ -312,6 +312,7 @@ export default function ReservationModal({
   const validateForm = () => {
     const errors: Record<string, string> = {};
     if (!formData.customer_name.trim()) errors.name = "Name is required";
+    if (!formData.customer_phone.trim()) errors.phone = "Phone number is required";
     if (!formData.table_id) errors.table_id = "Table is required";
     if (formData.party_size < 1) errors.party_size = "Party size must be at least 1";
 
@@ -586,7 +587,7 @@ export default function ReservationModal({
 
           {/* Phone Number */}
           <div className="space-y-2">
-            <Label htmlFor="phone">Phone Number</Label>
+            <Label htmlFor="phone">Phone Number *</Label>
             <div className="relative">
               <Input
                 id="phone"

@@ -4,6 +4,7 @@ import { useState, useMemo, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { createClient } from "@/lib/supabase/client";
 import { useRestaurant } from "@/app/RestaurantContext";
+import { useUnifiedData } from "@/lib/hooks/useUnifiedData";
 import ReservationModal from "@/components/reservations/ReservationModal";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -114,6 +115,42 @@ export default function ReservationsPage() {
   });
   const [foundCustomerName, setFoundCustomerName] = useState<string | null>(null);
 
+  // Use unified data hook - single source of truth
+  const { 
+    tables: unifiedTables, 
+    reservations: unifiedReservations,
+    createReservation: unifiedCreate,
+    updateReservation: unifiedUpdate,
+    deleteReservation: unifiedDelete,
+    isLoadingTables: tablesLoading,
+    isLoadingReservations: reservationsLoading,
+  } = useUnifiedData({ 
+    enableRealtime: true 
+  });
+
+  // Map unified tables to expected format
+  const tables: TableType[] = useMemo(() => 
+    unifiedTables.map(t => ({ id: t.id, name: t.name, capacity: t.capacity })),
+    [unifiedTables]
+  );
+
+  // Map unified reservations to expected format with table_name
+  const reservations: Reservation[] = useMemo(() => 
+    unifiedReservations.map(r => ({
+      id: r.id,
+      customer_name: r.customer_name,
+      customer_phone: r.customer_phone || undefined,
+      party_size: r.party_size,
+      table_id: r.table_id || "",
+      table_name: r.table_name || tables.find(t => t.id === r.table_id)?.name || "Not Assigned",
+      start_time: r.start_time,
+      end_time: r.end_time,
+      status: r.status,
+      notes: r.notes || undefined,
+    })),
+    [unifiedReservations, tables]
+  );
+
   // Fetch customers for phone lookup
   const { data: customers = [] } = useQuery({
     queryKey: ["customers", restaurantId],
@@ -156,51 +193,6 @@ export default function ReservationsPage() {
       setFoundCustomerName(null);
     }
   }, [formData.customer_phone, customers, formData.customer_name, foundCustomerName]);
-
-  // Fetch tables
-  const { data: tables = [], isLoading: tablesLoading } = useQuery({
-    queryKey: ["list-tables", restaurantId],
-    queryFn: async () => {
-      if (!restaurantId) return [];
-      const supabase = createClient();
-      const { data, error } = await supabase
-        .from("tables")
-        .select("id, name, capacity")
-        .eq("restaurant_id", restaurantId);
-      if (error) {
-        console.error("Error fetching tables:", error);
-        toast.error("Failed to load tables");
-        return [];
-      }
-      return data || [];
-    },
-    enabled: !!restaurantId,
-  });
-
-  // Fetch reservations - wait for tables to load first to ensure proper table_name mapping
-  const { data: reservations = [], isLoading: reservationsLoading } = useQuery({
-    queryKey: ["list-reservations", restaurantId, tables],
-    queryFn: async () => {
-      if (!restaurantId) return [];
-      const supabase = createClient();
-      const { data, error } = await supabase
-        .from("reservations")
-        .select("id, customer_name, customer_phone, party_size, table_id, start_time, end_time, status, notes")
-        .eq("restaurant_id", restaurantId)
-        .order("start_time", { ascending: false });
-      if (error) {
-        console.error("Error fetching reservations:", error);
-        toast.error("Failed to load reservations");
-        return [];
-      }
-      
-      return (data || []).map((r: Reservation) => ({
-        ...r,
-        table_name: tables.find((t: TableType) => t.id === r.table_id)?.name || "Not Assigned",
-      }));
-    },
-    enabled: !!restaurantId && !tablesLoading,
-  });
 
   // Delete mutation
   const deleteMutation = useMutation({

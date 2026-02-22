@@ -1,9 +1,10 @@
 "use client";
 
 import { useRef, useState, useEffect, useMemo, useCallback } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { createClient } from "@/lib/supabase/client";
 import { useRestaurant } from "@/app/RestaurantContext";
+import { useUnifiedData } from "@/lib/hooks/useUnifiedData";
 import { 
   Users, Star, Calendar, Clock, Edit, Trash2, CheckCircle, XCircle, 
   ChevronLeft, ChevronRight, Plus, MapPin, AlertCircle, GripVertical
@@ -190,41 +191,36 @@ export default function TimelineView({ selectedDate: propSelectedDate, onDateCha
     return () => grid.removeEventListener("scroll", handleScroll);
   }, []);
 
-  // Fetch tables
-  const { data: tables = [] } = useQuery<Table[]>({
-    queryKey: ["timeline-tables", restaurantId],
-    queryFn: async () => {
-      if (!restaurantId) return [];
-      const supabase = createClient();
-      const { data, error } = await supabase
-        .from("tables")
-        .select("id, name, capacity")
-        .eq("restaurant_id", restaurantId)
-        .order("sort_order", { ascending: true });
-      if (error) return [];
-      return data || [];
-    },
-    enabled: !!restaurantId,
+  // Use unified data hook - single source of truth
+  const { 
+    tables: unifiedTables, 
+    reservations: unifiedReservations,
+    createReservation: unifiedCreate,
+    updateReservation: unifiedUpdate,
+    deleteReservation: unifiedDelete,
+  } = useUnifiedData({ 
+    date: selectedDate,
+    enableRealtime: true 
   });
 
-  // Fetch reservations
-  const { data: reservations = [] } = useQuery<Reservation[]>({
-    queryKey: ["timeline-reservations", restaurantId, selectedDate],
-    queryFn: async () => {
-      if (!restaurantId) return [];
-      const supabase = createClient();
-      const { data, error } = await supabase
-        .from("reservations")
-        .select("id, table_id, customer_name, party_size, start_time, end_time, status, notes, customer_phone")
-        .eq("restaurant_id", restaurantId)
-        .gte("start_time", `${selectedDate}T00:00:00`)
-        .lte("start_time", `${selectedDate}T23:59:59`)
-        .order("start_time", { ascending: true });
-      if (error) return [];
-      return data || [];
-    },
-    enabled: !!restaurantId,
-  });
+  // Map to expected types
+  const tables: Table[] = useMemo(() => unifiedTables.map(t => ({
+    id: t.id,
+    name: t.name,
+    capacity: t.capacity,
+  })), [unifiedTables]);
+
+  const reservations: Reservation[] = useMemo(() => unifiedReservations.map(r => ({
+    id: r.id,
+    table_id: r.table_id || "",
+    customer_name: r.customer_name,
+    party_size: r.party_size,
+    start_time: r.start_time,
+    end_time: r.end_time,
+    status: r.status,
+    notes: r.notes || undefined,
+    customer_phone: r.customer_phone || undefined,
+  })), [unifiedReservations]);
 
   // Group reservations by table
   const reservationsByTable = useMemo(() => {
