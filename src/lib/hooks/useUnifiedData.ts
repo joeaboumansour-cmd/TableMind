@@ -22,9 +22,19 @@ import type {
   Reservation, 
   Table, 
   ReservationStatus,
-  TableStatusWithDetails,
-  ServiceStatus 
+  TableStatusWithDetails
 } from "@/lib/types";
+
+// ServiceStatus type definition
+type ServiceStatus = 
+  | "empty" 
+  | "seated" 
+  | "order_taken" 
+  | "appetizer_served" 
+  | "main_served" 
+  | "dessert_served" 
+  | "check_requested" 
+  | "ready_to_clear";
 import { toast } from "sonner";
 
 // =============================================
@@ -33,25 +43,25 @@ import { toast } from "sonner";
 
 export const QUERY_KEYS = {
   // Core data
-  tables: (restaurantId: string | null) => ["unified", "tables", restaurantId] as const,
-  reservations: (restaurantId: string | null, date?: string) => 
+  tables: (restaurantId: string | null | undefined) => ["unified", "tables", restaurantId] as const,
+  reservations: (restaurantId: string | null | undefined, date?: string) => 
     ["unified", "reservations", restaurantId, date] as const,
-  allReservations: (restaurantId: string | null) => 
+  allReservations: (restaurantId: string | null | undefined) => 
     ["unified", "reservations", restaurantId, "all"] as const,
   
   // Derived/Computed data
-  tableStatuses: (restaurantId: string | null) => 
+  tableStatuses: (restaurantId: string | null | undefined) => 
     ["unified", "table-statuses", restaurantId] as const,
   
   // Legacy compatibility - map to unified keys
-  floorPlanTables: (restaurantId: string | null) => ["unified", "tables", restaurantId] as const,
-  floorPlanReservations: (restaurantId: string | null, date: string) => 
+  floorPlanTables: (restaurantId: string | null | undefined) => ["unified", "tables", restaurantId] as const,
+  floorPlanReservations: (restaurantId: string | null | undefined, date: string) => 
     ["unified", "reservations", restaurantId, date] as const,
-  timelineTables: (restaurantId: string | null) => ["unified", "tables", restaurantId] as const,
-  timelineReservations: (restaurantId: string | null, date: string) => 
+  timelineTables: (restaurantId: string | null | undefined) => ["unified", "tables", restaurantId] as const,
+  timelineReservations: (restaurantId: string | null | undefined, date: string) => 
     ["unified", "reservations", restaurantId, date] as const,
-  listTables: (restaurantId: string | null) => ["unified", "tables", restaurantId] as const,
-  listReservations: (restaurantId: string | null) => ["unified", "reservations", restaurantId, "all"] as const,
+  listTables: (restaurantId: string | null | undefined) => ["unified", "tables", restaurantId] as const,
+  listReservations: (restaurantId: string | null | undefined) => ["unified", "reservations", restaurantId, "all"] as const,
 } as const;
 
 // =============================================
@@ -67,7 +77,7 @@ export interface UnifiedTable extends Table {
   availability_status?: "available" | "occupied" | "finishing";
 }
 
-export interface UnifiedReservation extends Reservation {
+export interface UnifiedReservation extends Omit<Reservation, 'urgency'> {
   table_name?: string;
   room_name?: string;
   // Computed fields
@@ -116,8 +126,8 @@ export interface UnifiedDataResult {
   
   // Refetch functions
   refetch: () => Promise<void>;
-  refetchTables: () => Promise<void>;
-  refetchReservations: () => Promise<void>;
+  refetchTables: () => Promise<unknown>;
+  refetchReservations: () => Promise<unknown>;
   
   // Mutations
   createReservation: ReturnType<typeof useCreateReservation>;
@@ -237,7 +247,7 @@ async function fetchTableStatuses(restaurantId: string): Promise<TableStatusWith
  * This ensures that any change made from ANY view immediately updates ALL views.
  */
 export function useRealtimeSync(options: { 
-  restaurantId: string | null; 
+  restaurantId: string | null | undefined; 
   enabled?: boolean;
   onChange?: (type: 'reservations' | 'tables' | 'statuses') => void;
 } = { restaurantId: null, enabled: true }) {

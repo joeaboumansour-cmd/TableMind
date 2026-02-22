@@ -599,8 +599,8 @@ export function FloorPlan({
       <div className="flex items-center justify-between text-sm text-muted-foreground">
         <div className="flex items-center gap-4">
           <span>Total Tables: {tables.length}</span>
-          <span>Occupied: {reservations.filter((r: Reservation) => r.status === "seated").length}</span>
-          <span>Reserved: {reservations.filter((r: Reservation) => ["booked", "confirmed"].includes(r.status)).length}</span>
+          <span>Occupied: {reservations.filter(r => r.status === "seated").length}</span>
+          <span>Reserved: {reservations.filter(r => ["booked", "confirmed"].includes(r.status)).length}</span>
         </div>
         <div className="flex items-center gap-1">
           <Calendar className="w-4 h-4" />
