@@ -94,12 +94,86 @@ export class WhatsAppService {
     template: WhatsAppTemplate,
     variables: Record<string, string>
   ): Promise<WhatsAppSendResult> {
+    // For Meta API, use proper template format
+    if (this.config.provider === 'meta') {
+      return this.sendMetaTemplateMessage(to, template, variables);
+    }
+    
+    // For other providers, fill template content
     const filledContent = fillTemplate(template.content, variables);
     return this.sendMessage({
       to,
       body: filledContent,
       templateName: template.name
     });
+  }
+
+  // Send template message via Meta API (WhatsApp Business API)
+  private async sendMetaTemplateMessage(
+    phone: string,
+    template: WhatsAppTemplate,
+    variables: Record<string, string>
+  ): Promise<WhatsAppSendResult> {
+    const timestamp = new Date().toISOString();
+    
+    try {
+      // Format phone number
+      const formattedPhone = formatPhoneForWhatsApp(phone);
+      
+      // Build template parameters from variables
+      const templateParams = template.variables.map(varName => ({
+        type: 'text',
+        text: variables[varName] || ''
+      }));
+
+      const response = await fetch(
+        `https://graph.facebook.com/v21.0/${this.config.phoneNumberId}/messages`,
+        {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${this.config.apiKey}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            messaging_product: 'whatsapp',
+            recipient_type: 'individual',
+            to: formattedPhone,
+            type: 'template',
+            template: {
+              name: template.name.toLowerCase().replace(/\s+/g, '_'),
+              language: {
+                code: template.language || 'en'
+              },
+              components: templateParams.length > 0 ? [
+                {
+                  type: 'body',
+                  parameters: templateParams
+                }
+              ] : undefined
+            }
+          })
+        }
+      );
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(`Meta API error: ${JSON.stringify(error)}`);
+      }
+
+      const data = await response.json();
+      
+      return {
+        success: true,
+        messageId: data.messages?.[0]?.id,
+        timestamp
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error',
+        timestamp
+      };
+    }
   }
 
   // Get available templates

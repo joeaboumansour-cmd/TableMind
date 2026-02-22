@@ -1,23 +1,31 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { useRestaurant } from "@/app/RestaurantContext";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Separator } from "@/components/ui/separator";
 import { 
   Dialog, 
   DialogContent, 
   DialogHeader, 
   DialogTitle,
   DialogFooter,
-  DialogClose,
   DialogDescription,
 } from "@/components/ui/dialog";
+import { 
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetDescription,
+  SheetFooter,
+} from "@/components/ui/sheet";
 import { 
   LogOut, 
   Utensils, 
@@ -46,33 +54,38 @@ import {
   MapPin,
   X,
   RotateCcw,
+  DollarSign,
+  TrendingUp,
+  Calendar,
+  ArrowLeft,
+  Timer,
+  MoreVertical,
+  Settings,
 } from "lucide-react";
 import { toast } from "sonner";
-import { cn } from "@/lib/utils";
+import { cn, formatCurrency } from "@/lib/utils";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { createClientWithAuth } from "@/lib/supabase/client";
 import type { Customer, Table } from "@/lib/types";
 
-// Service status type
-type ServiceStatus = 
+// Service status type - Simplified 4-step flow
+export type ServiceStatus = 
   | "empty" 
   | "seated" 
   | "order_taken" 
-  | "appetizer_served" 
-  | "main_served" 
-  | "dessert_served" 
   | "check_requested" 
   | "ready_to_clear";
 
 // Table status with details
 interface TableStatus {
-  id: string;
+  id?: string;
   table_id: string;
   table_name: string;
   table_capacity: number;
   room_name?: string;
   section?: string;
   status: ServiceStatus;
+  current_status: ServiceStatus;
   reservation_id?: string;
   current_customer_name?: string;
   current_customer_id?: string;
@@ -83,92 +96,108 @@ interface TableStatus {
   session_notes?: string;
   availability_status: "available" | "occupied" | "finishing";
   status_color: string;
-  updated_at: string;
+  updated_at?: string;
+  // Guest source indicator
+  guest_source?: "empty" | "reservation" | "walk-in" | "reserved-soon";
+  // Upcoming reservation info
+  upcoming_reservation_id?: string;
+  upcoming_customer_name?: string;
+  upcoming_party_size?: number;
+  upcoming_time?: string;
+  upcoming_status?: string;
+  minutes_until?: number;
+  urgency?: "overdue" | "arriving_soon" | "upcoming" | "later";
+  // Revenue tracking
+  current_order_value?: number;
 }
 
-// Service status configuration
+// Active reservation for seating
+interface ActiveReservation {
+  id: string;
+  customer_name: string;
+  customer_phone?: string;
+  party_size: number;
+  start_time: string;
+  status: string;
+  table_id: string;
+  table_name?: string;
+  notes?: string;
+}
+
+// Service status configuration - Simplified 4-step flow
 const STATUS_FLOW: ServiceStatus[] = [
   "empty",
   "seated",
   "order_taken",
-  "appetizer_served",
-  "main_served",
-  "dessert_served",
   "check_requested",
   "ready_to_clear",
 ];
 
 const STATUS_CONFIG: Record<ServiceStatus, {
   label: string;
+  shortLabel: string;
   icon: React.ReactNode;
   bgColor: string;
   borderColor: string;
   textColor: string;
+  lightBg: string;
   description: string;
+  stepNumber: number;
 }> = {
   empty: {
-    label: "Empty",
-    icon: <div className="h-3 w-3 rounded-full bg-slate-300" />,
-    bgColor: "bg-slate-100",
-    borderColor: "border-slate-300",
-    textColor: "text-slate-600",
-    description: "Table available",
+    label: "Empty & Available",
+    shortLabel: "Empty",
+    icon: <div className="h-3 w-3 rounded-full bg-slate-400" />,
+    bgColor: "bg-slate-500",
+    borderColor: "border-slate-400",
+    textColor: "text-slate-700",
+    lightBg: "bg-slate-50",
+    description: "Table ready for guests",
+    stepNumber: 0,
   },
   seated: {
-    label: "Seated",
+    label: "Guests Seated",
+    shortLabel: "Seated",
     icon: <Users className="h-4 w-4" />,
     bgColor: "bg-blue-500",
     borderColor: "border-blue-500",
     textColor: "text-blue-700",
+    lightBg: "bg-blue-50",
     description: "Guests just arrived",
+    stepNumber: 1,
   },
   order_taken: {
     label: "Order Taken",
+    shortLabel: "Ordered",
     icon: <FileText className="h-4 w-4" />,
     bgColor: "bg-amber-500",
     borderColor: "border-amber-500",
     textColor: "text-amber-700",
-    description: "Waiting for kitchen",
-  },
-  appetizer_served: {
-    label: "Appetizer",
-    icon: <Utensils className="h-4 w-4" />,
-    bgColor: "bg-orange-500",
-    borderColor: "border-orange-500",
-    textColor: "text-orange-700",
-    description: "First course served",
-  },
-  main_served: {
-    label: "Main Course",
-    icon: <UtensilsCrossed className="h-4 w-4" />,
-    bgColor: "bg-emerald-500",
-    borderColor: "border-emerald-500",
-    textColor: "text-emerald-700",
-    description: "Main dish out",
-  },
-  dessert_served: {
-    label: "Dessert",
-    icon: <Coffee className="h-4 w-4" />,
-    bgColor: "bg-pink-500",
-    borderColor: "border-pink-500",
-    textColor: "text-pink-700",
-    description: "Final course",
+    lightBg: "bg-amber-50",
+    description: "Order with kitchen",
+    stepNumber: 2,
   },
   check_requested: {
-    label: "Check",
+    label: "Check Requested",
+    shortLabel: "Check",
     icon: <Receipt className="h-4 w-4" />,
     bgColor: "bg-violet-500",
     borderColor: "border-violet-500",
     textColor: "text-violet-700",
+    lightBg: "bg-violet-50",
     description: "Payment pending",
+    stepNumber: 3,
   },
   ready_to_clear: {
-    label: "Clearing",
+    label: "Ready to Clear",
+    shortLabel: "Clearing",
     icon: <CheckCircle2 className="h-4 w-4" />,
-    bgColor: "bg-slate-500",
-    borderColor: "border-slate-500",
+    bgColor: "bg-slate-600",
+    borderColor: "border-slate-600",
     textColor: "text-slate-700",
-    description: "Ready to reset",
+    lightBg: "bg-slate-100",
+    description: "Ready to reset table",
+    stepNumber: 4,
   },
 };
 
@@ -178,13 +207,51 @@ function useTableStatuses(restaurantId: string | null) {
     queryKey: ["table-statuses", restaurantId],
     queryFn: async () => {
       if (!restaurantId) return [];
-      const res = await fetch(`/api/tables/status?restaurantId=${restaurantId}`);
+      const res = await fetch(`/api/tables/waiter-status?restaurantId=${restaurantId}`);
       if (!res.ok) throw new Error("Failed to fetch table statuses");
       const data = await res.json();
-      return data.tableStatuses;
+      return data.tables;
     },
     enabled: !!restaurantId,
-    refetchInterval: 5000, // Refresh every 5 seconds for "live" feel
+    refetchInterval: 3000, // Refresh every 3 seconds for "live" feel
+  });
+}
+
+function useActiveReservations(restaurantId: string | null) {
+  return useQuery<ActiveReservation[]>({
+    queryKey: ["active-reservations", restaurantId],
+    queryFn: async () => {
+      if (!restaurantId) return [];
+      const supabase = createClientWithAuth();
+      const today = new Date().toISOString().split("T")[0];
+      const { data, error } = await supabase
+        .from("reservations")
+        .select(`
+          id,
+          customer_name,
+          customer_phone,
+          party_size,
+          start_time,
+          status,
+          table_id,
+          notes,
+          tables:table_id (name)
+        `)
+        .eq("restaurant_id", restaurantId)
+        .in("status", ["booked", "confirmed", "seated"])
+        .gte("start_time", `${today}T00:00:00`)
+        .lte("start_time", `${today}T23:59:59`)
+        .order("start_time", { ascending: true });
+      
+      if (error) throw error;
+      
+      return (data || []).map((r: any) => ({
+        ...r,
+        table_name: r.tables?.name || "Unknown",
+      }));
+    },
+    enabled: !!restaurantId,
+    refetchInterval: 5000,
   });
 }
 
@@ -207,6 +274,7 @@ function useUpdateTableStatus() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["table-statuses"] });
+      queryClient.invalidateQueries({ queryKey: ["active-reservations"] });
     },
   });
 }
@@ -232,8 +300,37 @@ function useWalkIn() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["table-statuses"] });
-      queryClient.invalidateQueries({ queryKey: ["reservations"] });
+      queryClient.invalidateQueries({ queryKey: ["active-reservations"] });
       queryClient.invalidateQueries({ queryKey: ["customers"] });
+    },
+  });
+}
+
+function useSeatReservation() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (payload: {
+      reservation_id: string;
+      table_id: string;
+      restaurant_id: string;
+    }) => {
+      const res = await fetch("/api/reservations/visit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          reservation_id: payload.reservation_id,
+          table_id: payload.table_id,
+          restaurant_id: payload.restaurant_id,
+          action: "seat",
+        }),
+      });
+      if (!res.ok) throw new Error("Failed to seat reservation");
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["table-statuses"] });
+      queryClient.invalidateQueries({ queryKey: ["active-reservations"] });
+      queryClient.invalidateQueries({ queryKey: ["timeline-reservations"] });
     },
   });
 }
@@ -251,6 +348,7 @@ function useCreateVisitLog() {
       customer_notes?: string;
       party_size?: number;
       service_status?: string;
+      total_spend?: number;
     }) => {
       const res = await fetch("/api/visit-logs", {
         method: "POST",
@@ -262,6 +360,7 @@ function useCreateVisitLog() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["customer-visits"] });
+      queryClient.invalidateQueries({ queryKey: ["customers"] });
     },
   });
 }
@@ -283,6 +382,7 @@ function useCustomers(restaurantId: string | null) {
   });
 }
 
+// Main component
 export default function WaiterMobilePage() {
   const { user, restaurant, isLoading: authLoading, signOut } = useRestaurant();
   const router = useRouter();
@@ -290,14 +390,15 @@ export default function WaiterMobilePage() {
   
   // State
   const [selectedTable, setSelectedTable] = useState<TableStatus | null>(null);
-  const [viewMode, setViewMode] = useState<"all" | "occupied" | "available">("all");
+  const [viewMode, setViewMode] = useState<"all" | "occupied" | "available" | "reservations">("all");
   const [searchQuery, setSearchQuery] = useState("");
   
   // Modals
   const [showWalkInModal, setShowWalkInModal] = useState(false);
-  const [showTableDetailModal, setShowTableDetailModal] = useState(false);
+  const [showTableDetailSheet, setShowTableDetailSheet] = useState(false);
   const [showFeedbackModal, setShowFeedbackModal] = useState(false);
   const [showCustomerSearch, setShowCustomerSearch] = useState(false);
+  const [showReservationsSheet, setShowReservationsSheet] = useState(false);
   
   // Walk-in form state
   const [walkInData, setWalkInData] = useState({
@@ -307,10 +408,11 @@ export default function WaiterMobilePage() {
     notes: "",
   });
   
-  // Feedback state
+  // Feedback & revenue state
   const [feedbackRating, setFeedbackRating] = useState(0);
   const [feedbackText, setFeedbackText] = useState("");
   const [sessionNote, setSessionNote] = useState("");
+  const [orderValue, setOrderValue] = useState<string>("");
   
   // Customer search
   const [customerSearchQuery, setCustomerSearchQuery] = useState("");
@@ -320,12 +422,45 @@ export default function WaiterMobilePage() {
   const { data: tableStatuses = [], isLoading: tablesLoading } = useTableStatuses(
     restaurant?.id || null
   );
+  const { data: activeReservations = [], isLoading: reservationsLoading } = useActiveReservations(
+    restaurant?.id || null
+  );
   const { data: customers = [] } = useCustomers(restaurant?.id || null);
   
   // Mutations
   const updateStatus = useUpdateTableStatus();
   const walkIn = useWalkIn();
+  const seatReservation = useSeatReservation();
   const createVisitLog = useCreateVisitLog();
+  
+  // Real-time subscription for table status updates
+  useEffect(() => {
+    if (!restaurant?.id) return;
+    
+    const supabase = createClientWithAuth();
+    
+    // Subscribe to table_service_status changes
+    const subscription = supabase
+      .channel(`table-status-${restaurant.id}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "table_service_status",
+          filter: `restaurant_id=eq.${restaurant.id}`,
+        },
+        () => {
+          // Invalidate and refetch table statuses
+          queryClient.invalidateQueries({ queryKey: ["table-statuses"] });
+        }
+      )
+      .subscribe();
+    
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, [restaurant?.id, queryClient]);
   
   // Auth check
   useEffect(() => {
@@ -342,9 +477,11 @@ export default function WaiterMobilePage() {
   
   // Filter tables
   const filteredTables = tableStatuses.filter((table) => {
+    const status = table.current_status || table.status || "empty";
+    
     // View mode filter
-    if (viewMode === "occupied" && table.status === "empty") return false;
-    if (viewMode === "available" && table.status !== "empty") return false;
+    if (viewMode === "occupied" && status === "empty") return false;
+    if (viewMode === "available" && status !== "empty") return false;
     
     // Search filter
     if (searchQuery) {
@@ -361,20 +498,35 @@ export default function WaiterMobilePage() {
   // Stats
   const stats = {
     total: tableStatuses.length,
-    occupied: tableStatuses.filter((t) => t.status !== "empty").length,
-    available: tableStatuses.filter((t) => t.status === "empty").length,
-    needClearing: tableStatuses.filter((t) => t.status === "ready_to_clear").length,
+    occupied: tableStatuses.filter((t) => (t.current_status || t.status || "empty") !== "empty").length,
+    available: tableStatuses.filter((t) => (t.current_status || t.status || "empty") === "empty").length,
+    needClearing: tableStatuses.filter((t) => (t.current_status || t.status) === "ready_to_clear").length,
     guests: tableStatuses.reduce((sum, t) => sum + (t.current_party_size || 0), 0),
+    activeReservations: activeReservations.length,
+    totalRevenue: tableStatuses.reduce((sum, t) => sum + (t.current_order_value || 0), 0),
   };
+  
+  // Get tables with upcoming reservations
+  const tablesWithUpcomingReservations = tableStatuses.filter(
+    (t) => t.upcoming_reservation_id && t.upcoming_status !== "seated"
+  );
   
   // Handlers
   const handleTableClick = (table: TableStatus) => {
     setSelectedTable(table);
     setSessionNote(table.session_notes || "");
+    setOrderValue(table.current_order_value?.toString() || "");
+    
     if (table.status === "empty") {
-      setShowWalkInModal(true);
+      // Check if there's an upcoming reservation for this table
+      if (table.upcoming_reservation_id && table.upcoming_status !== "seated") {
+        // Show option to seat reservation or walk-in
+        setShowReservationsSheet(true);
+      } else {
+        setShowWalkInModal(true);
+      }
     } else {
-      setShowTableDetailModal(true);
+      setShowTableDetailSheet(true);
     }
   };
   
@@ -390,15 +542,33 @@ export default function WaiterMobilePage() {
         status: nextStatus,
       });
       toast.success(`Status updated to ${STATUS_CONFIG[nextStatus].label}`);
-      setSelectedTable({ ...selectedTable, status: nextStatus });
+      setSelectedTable({ ...selectedTable, status: nextStatus, current_status: nextStatus });
+    }
+  };
+  
+  const handleStatusRevert = async () => {
+    if (!selectedTable || !restaurant) return;
+    
+    const currentIndex = STATUS_FLOW.indexOf(selectedTable.status);
+    if (currentIndex > 1) { // Don't go below "seated"
+      const prevStatus = STATUS_FLOW[currentIndex - 1];
+      await updateStatus.mutateAsync({
+        table_id: selectedTable.table_id,
+        restaurant_id: restaurant.id,
+        status: prevStatus,
+      });
+      toast.success(`Status reverted to ${STATUS_CONFIG[prevStatus].label}`);
+      setSelectedTable({ ...selectedTable, status: prevStatus, current_status: prevStatus });
     }
   };
   
   const handleClearTable = async () => {
     if (!selectedTable || !restaurant) return;
     
-    // Create visit log with feedback if provided
-    if (selectedTable.current_customer_id && (feedbackRating > 0 || feedbackText || sessionNote)) {
+    const totalSpend = parseFloat(orderValue) || 0;
+    
+    // Create visit log with feedback and revenue
+    if (selectedTable.current_customer_id) {
       await createVisitLog.mutateAsync({
         restaurant_id: restaurant.id,
         customer_id: selectedTable.current_customer_id,
@@ -409,6 +579,7 @@ export default function WaiterMobilePage() {
         customer_notes: sessionNote || undefined,
         party_size: selectedTable.current_party_size,
         service_status: selectedTable.status,
+        total_spend: totalSpend > 0 ? totalSpend : undefined,
       });
     }
     
@@ -420,11 +591,12 @@ export default function WaiterMobilePage() {
     });
     
     toast.success("Table cleared");
-    setShowTableDetailModal(false);
+    setShowTableDetailSheet(false);
     setShowFeedbackModal(false);
     setFeedbackRating(0);
     setFeedbackText("");
     setSessionNote("");
+    setOrderValue("");
   };
   
   const handleWalkInSubmit = async () => {
@@ -444,6 +616,20 @@ export default function WaiterMobilePage() {
     setWalkInData({ customer_name: "", customer_phone: "", party_size: 2, notes: "" });
   };
   
+  const handleSeatReservation = async (reservation: ActiveReservation) => {
+    if (!restaurant) return;
+    
+    await seatReservation.mutateAsync({
+      reservation_id: reservation.id,
+      table_id: reservation.table_id,
+      restaurant_id: restaurant.id,
+    });
+    
+    toast.success(`Seated ${reservation.customer_name}`);
+    setShowReservationsSheet(false);
+    setShowWalkInModal(false);
+  };
+  
   const handleSaveNote = async () => {
     if (!selectedTable || !restaurant) return;
     
@@ -458,6 +644,22 @@ export default function WaiterMobilePage() {
     setSelectedTable({ ...selectedTable, session_notes: sessionNote });
   };
   
+  const handleSaveOrderValue = async () => {
+    if (!selectedTable || !restaurant) return;
+    
+    const value = parseFloat(orderValue) || 0;
+    
+    await updateStatus.mutateAsync({
+      table_id: selectedTable.table_id,
+      restaurant_id: restaurant.id,
+      status: selectedTable.status,
+      current_order_value: value,
+    });
+    
+    toast.success("Order value saved");
+    setSelectedTable({ ...selectedTable, current_order_value: value });
+  };
+  
   // Customer search filter
   const filteredCustomers = customers.filter((c) => {
     if (!customerSearchQuery) return false;
@@ -468,6 +670,15 @@ export default function WaiterMobilePage() {
       c.email?.toLowerCase().includes(query)
     );
   }).slice(0, 5);
+  
+  // Format minutes seated
+  const formatTimeSeated = (minutes?: number) => {
+    if (!minutes) return "0m";
+    if (minutes < 60) return `${minutes}m`;
+    const hours = Math.floor(minutes / 60);
+    const mins = minutes % 60;
+    return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`;
+  };
   
   if (authLoading || tablesLoading) {
     return (
@@ -481,6 +692,10 @@ export default function WaiterMobilePage() {
   }
   
   if (!user || !restaurant) return null;
+  
+  const currentStatus = selectedTable?.current_status || selectedTable?.status || "empty";
+  const currentConfig = STATUS_CONFIG[currentStatus];
+  const currentStep = STATUS_FLOW.indexOf(currentStatus);
   
   return (
     <div className="min-h-screen bg-slate-50 pb-20">
@@ -505,27 +720,36 @@ export default function WaiterMobilePage() {
       </header>
       
       {/* Stats Bar */}
-      <div className="grid grid-cols-5 gap-2 p-3 bg-white border-b border-slate-200">
-        <div className="text-center p-2 rounded-lg bg-slate-100">
-          <p className="text-xl font-bold text-slate-900">{stats.total}</p>
-          <p className="text-[10px] text-slate-600 font-medium uppercase">Tables</p>
-        </div>
-        <div className="text-center p-2 rounded-lg bg-emerald-50">
+      <div className="grid grid-cols-3 gap-2 p-3 bg-white border-b border-slate-200">
+        <div className="text-center p-2 rounded-lg bg-emerald-50 border border-emerald-100">
           <p className="text-xl font-bold text-emerald-600">{stats.available}</p>
-          <p className="text-[10px] text-emerald-600 font-medium uppercase">Free</p>
+          <p className="text-[10px] text-emerald-600 font-medium uppercase">Available</p>
         </div>
-        <div className="text-center p-2 rounded-lg bg-blue-50">
+        <div className="text-center p-2 rounded-lg bg-blue-50 border border-blue-100">
           <p className="text-xl font-bold text-blue-600">{stats.occupied}</p>
-          <p className="text-[10px] text-blue-600 font-medium uppercase">Busy</p>
+          <p className="text-[10px] text-blue-600 font-medium uppercase">Occupied</p>
         </div>
-        <div className="text-center p-2 rounded-lg bg-slate-100">
-          <p className="text-xl font-bold text-slate-700">{stats.guests}</p>
-          <p className="text-[10px] text-slate-600 font-medium uppercase">Guests</p>
+        <div className="text-center p-2 rounded-lg bg-amber-50 border border-amber-100">
+          <p className="text-xl font-bold text-amber-600">{stats.activeReservations}</p>
+          <p className="text-[10px] text-amber-600 font-medium uppercase">Reservations</p>
         </div>
-        <div className="text-center p-2 rounded-lg bg-amber-50">
-          <p className="text-xl font-bold text-amber-600">{stats.needClearing}</p>
-          <p className="text-[10px] text-amber-600 font-medium uppercase">Clear</p>
+      </div>
+      
+      {/* Secondary Stats */}
+      <div className="flex items-center justify-between px-4 py-2 bg-slate-100 text-xs">
+        <div className="flex items-center gap-4">
+          <span className="text-slate-600">
+            <Users className="h-3 w-3 inline mr-1" />
+            {stats.guests} guests
+          </span>
+          <span className="text-slate-600">
+            <CheckCircle2 className="h-3 w-3 inline mr-1" />
+            {stats.needClearing} to clear
+          </span>
         </div>
+        <span className="font-medium text-slate-700">
+          {stats.total} tables total
+        </span>
       </div>
       
       {/* Filters */}
@@ -540,84 +764,183 @@ export default function WaiterMobilePage() {
           />
         </div>
         <Tabs value={viewMode} onValueChange={(v) => setViewMode(v as typeof viewMode)}>
-          <TabsList className="grid w-full grid-cols-3">
+          <TabsList className="grid w-full grid-cols-4">
             <TabsTrigger value="all">All</TabsTrigger>
             <TabsTrigger value="occupied">Busy</TabsTrigger>
             <TabsTrigger value="available">Free</TabsTrigger>
+            <TabsTrigger value="reservations">📅</TabsTrigger>
           </TabsList>
         </Tabs>
       </div>
       
       {/* Tables Grid */}
       <main className="p-4">
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-          {filteredTables.map((table) => {
-            const config = STATUS_CONFIG[table.status];
-            const isOccupied = table.status !== "empty";
-            
-            return (
-              <button
-                key={table.table_id}
-                onClick={() => handleTableClick(table)}
-                className={cn(
-                  "relative p-4 rounded-xl border-2 text-left transition-all",
-                  "hover:shadow-md active:scale-95",
-                  isOccupied
-                    ? `${config.bgColor} ${config.borderColor} text-white`
-                    : "bg-white border-slate-200 hover:border-slate-300"
-                )}
-              >
-                {/* Table Header */}
-                <div className="flex items-start justify-between mb-2">
-                  <span className={cn(
-                    "font-bold text-lg",
-                    isOccupied ? "text-white" : "text-slate-900"
-                  )}>
-                    {table.table_name}
-                  </span>
-                  {isOccupied && (
-                    <Badge variant="secondary" className="bg-white/20 text-white border-0 text-xs">
-                      {table.current_party_size} <Users className="h-3 w-3 ml-1" />
-                    </Badge>
+        {viewMode === "reservations" ? (
+          // Reservations View
+          <div className="space-y-3">
+            <h2 className="text-sm font-semibold text-slate-700 uppercase tracking-wide">
+              Today's Reservations
+            </h2>
+            {reservationsLoading ? (
+              <div className="flex justify-center py-8">
+                <Loader2 className="h-6 w-6 animate-spin text-slate-400" />
+              </div>
+            ) : activeReservations.length === 0 ? (
+              <div className="text-center py-8 text-slate-500">
+                <Calendar className="h-12 w-12 mx-auto mb-3 text-slate-300" />
+                <p>No reservations for today</p>
+              </div>
+            ) : (
+              activeReservations.map((res) => (
+                <Card key={res.id} className="overflow-hidden">
+                  <CardContent className="p-4">
+                    <div className="flex items-start justify-between">
+                      <div>
+                        <h3 className="font-bold text-slate-900">{res.customer_name}</h3>
+                        <p className="text-sm text-slate-500">
+                          {res.party_size} guests • Table {res.table_name}
+                        </p>
+                        <p className="text-sm text-slate-600 mt-1">
+                          <Clock className="h-3 w-3 inline mr-1" />
+                          {new Date(res.start_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        </p>
+                      </div>
+                      <div className="flex flex-col items-end gap-2">
+                        <Badge 
+                          variant={res.status === "seated" ? "default" : "secondary"}
+                          className={res.status === "seated" ? "bg-green-500" : ""}
+                        >
+                          {res.status}
+                        </Badge>
+                        {res.status !== "seated" && (
+                          <Button 
+                            size="sm" 
+                            className="h-8"
+                            onClick={() => handleSeatReservation(res)}
+                            disabled={seatReservation.isPending}
+                          >
+                            {seatReservation.isPending ? (
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                            ) : (
+                              <>
+                                <Users className="h-3 w-3 mr-1" />
+                                Seat
+                              </>
+                            )}
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                  </CardContent>
+                </Card>
+              ))
+            )}
+          </div>
+        ) : (
+          // Tables Grid View
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+            {filteredTables.map((table) => {
+              const status = table.current_status || table.status || "empty";
+              const config = STATUS_CONFIG[status] || STATUS_CONFIG.empty;
+              const isOccupied = status !== "empty";
+              const hasUpcoming = table.upcoming_reservation_id && table.upcoming_status !== "seated";
+              
+              return (
+                <button
+                  key={table.table_id}
+                  onClick={() => handleTableClick(table)}
+                  className={cn(
+                    "relative p-4 rounded-xl border-2 text-left transition-all",
+                    "hover:shadow-md active:scale-95",
+                    isOccupied
+                      ? `${config.bgColor} ${config.borderColor} text-white shadow-lg`
+                      : hasUpcoming
+                      ? "bg-amber-50 border-amber-300 hover:border-amber-400 text-slate-900"
+                      : "bg-white border-slate-200 hover:border-slate-300 text-slate-900"
                   )}
-                </div>
-                
-                {/* Status */}
-                <div className={cn(
-                  "text-sm font-medium",
-                  isOccupied ? "text-white/90" : "text-slate-500"
-                )}>
-                  {config.label}
-                </div>
-                
-                {/* Guest Name (if occupied) */}
-                {isOccupied && table.current_customer_name && (
-                  <div className="mt-2 text-sm font-semibold text-white truncate">
-                    {table.current_customer_name}
+                >
+                  {/* Guest Source Indicator */}
+                  {table.guest_source && table.guest_source !== "empty" && (
+                    <div className="absolute top-2 right-2">
+                      {table.guest_source === "reservation" && (
+                        <span className="text-lg" title="Reservation">📅</span>
+                      )}
+                      {table.guest_source === "walk-in" && (
+                        <span className="text-lg" title="Walk-in">👤</span>
+                      )}
+                      {table.guest_source === "reserved-soon" && (
+                        <span className="text-lg" title="Reserved soon">⏰</span>
+                      )}
+                    </div>
+                  )}
+                  
+                  {/* Table Header */}
+                  <div className="flex items-start justify-between mb-2">
+                    <span className={cn(
+                      "font-bold text-lg",
+                      isOccupied ? "text-white" : "text-slate-900"
+                    )}>
+                      {table.table_name}
+                    </span>
+                    {isOccupied && (
+                      <Badge variant="secondary" className="bg-white/20 text-white border-0 text-xs">
+                        {table.current_party_size} <Users className="h-3 w-3 ml-1" />
+                      </Badge>
+                    )}
                   </div>
-                )}
-                
-                {/* Time seated */}
-                {isOccupied && table.minutes_seated !== undefined && (
-                  <div className="mt-1 text-xs text-white/70 flex items-center gap-1">
-                    <Clock className="h-3 w-3" />
-                    {table.minutes_seated}m
+                  
+                  {/* Status Badge */}
+                  <div className={cn(
+                    "text-xs font-medium px-2 py-1 rounded-full inline-flex items-center gap-1",
+                    isOccupied 
+                      ? "bg-white/20 text-white" 
+                      : "bg-slate-100 text-slate-600"
+                  )}>
+                    {config.icon}
+                    {config.shortLabel}
                   </div>
-                )}
-                
-                {/* Empty indicator */}
-                {!isOccupied && (
-                  <div className="mt-2 flex items-center gap-1 text-sm text-slate-400">
-                    <Plus className="h-4 w-4" />
-                    <span>Walk-in</span>
-                  </div>
-                )}
-              </button>
-            );
-          })}
-        </div>
+                  
+                  {/* Guest Name (if occupied) */}
+                  {isOccupied && table.current_customer_name && (
+                    <div className="mt-2 text-sm font-semibold text-white truncate">
+                      {table.current_customer_name}
+                    </div>
+                  )}
+                  
+                  {/* Time seated */}
+                  {isOccupied && table.minutes_seated !== undefined && (
+                    <div className="mt-1 text-xs text-white/70 flex items-center gap-1">
+                      <Timer className="h-3 w-3" />
+                      {formatTimeSeated(table.minutes_seated)}
+                    </div>
+                  )}
+                  
+                  {/* Upcoming Reservation Info */}
+                  {!isOccupied && hasUpcoming && (
+                    <div className="mt-2 text-xs text-amber-700">
+                      <div className="flex items-center gap-1 font-medium">
+                        <Clock className="h-3 w-3" />
+                        <span>{table.minutes_until}m</span>
+                      </div>
+                      <div className="truncate">{table.upcoming_customer_name}</div>
+                      <div className="text-amber-600">{table.upcoming_party_size} guests</div>
+                    </div>
+                  )}
+                  
+                  {/* Empty indicator */}
+                  {!isOccupied && !hasUpcoming && (
+                    <div className="mt-2 flex items-center gap-1 text-sm text-slate-500">
+                      <Plus className="h-4 w-4" />
+                      <span>Walk-in</span>
+                    </div>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        )}
         
-        {filteredTables.length === 0 && (
+        {filteredTables.length === 0 && viewMode !== "reservations" && (
           <div className="text-center py-12">
             <ChefHat className="h-12 w-12 mx-auto mb-4 text-slate-300" />
             <p className="text-slate-500">No tables found</p>
@@ -625,9 +948,82 @@ export default function WaiterMobilePage() {
         )}
       </main>
       
+      {/* Reservations Sheet (when clicking empty table with reservation) */}
+      <Sheet open={showReservationsSheet} onOpenChange={setShowReservationsSheet}>
+        <SheetContent side="bottom" className="h-auto max-h-[70vh]">
+          <SheetHeader>
+            <SheetTitle>Seat Guest at {selectedTable?.table_name}</SheetTitle>
+            <SheetDescription>
+              Choose to seat a reservation or add a walk-in guest
+            </SheetDescription>
+          </SheetHeader>
+          
+          <div className="py-4 space-y-4">
+            {/* Upcoming reservation for this table */}
+            {selectedTable?.upcoming_reservation_id && (
+              <Card className="border-amber-200 bg-amber-50">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm flex items-center gap-2">
+                    <Calendar className="h-4 w-4" />
+                    Reserved Guest
+                  </CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="font-semibold">{selectedTable.upcoming_customer_name}</p>
+                      <p className="text-sm text-slate-600">
+                        {selectedTable.upcoming_party_size} guests • 
+                        {selectedTable.minutes_until && selectedTable.minutes_until < 0 
+                          ? ` ${Math.abs(selectedTable.minutes_until)}m late`
+                          : ` in ${selectedTable.minutes_until}m`
+                        }
+                      </p>
+                    </div>
+                    <Button
+                      onClick={() => {
+                        const reservation = activeReservations.find(
+                          r => r.id === selectedTable.upcoming_reservation_id
+                        );
+                        if (reservation) handleSeatReservation(reservation);
+                      }}
+                      disabled={seatReservation.isPending}
+                    >
+                      {seatReservation.isPending ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        "Seat Guest"
+                      )}
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+            
+            <Separator />
+            
+            {/* Walk-in option */}
+            <Button
+              variant="outline"
+              className="w-full h-auto py-4"
+              onClick={() => {
+                setShowReservationsSheet(false);
+                setShowWalkInModal(true);
+              }}
+            >
+              <UserPlus className="h-5 w-5 mr-2" />
+              <div className="text-left">
+                <p className="font-medium">Walk-in Guest</p>
+                <p className="text-xs text-slate-500">Add a guest without reservation</p>
+              </div>
+            </Button>
+          </div>
+        </SheetContent>
+      </Sheet>
+      
       {/* Walk-In Modal */}
       <Dialog open={showWalkInModal} onOpenChange={setShowWalkInModal}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent className="sm:max-w-md max-h-[95vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <UserPlus className="h-5 w-5 text-amber-600" />
@@ -658,7 +1054,7 @@ export default function WaiterMobilePage() {
                   onChange={(e) => setCustomerSearchQuery(e.target.value)}
                 />
                 {filteredCustomers.length > 0 && (
-                  <div className="border rounded-lg divide-y">
+                  <div className="border rounded-lg divide-y max-h-48 overflow-y-auto">
                     {filteredCustomers.map((customer) => (
                       <button
                         key={customer.id}
@@ -693,7 +1089,7 @@ export default function WaiterMobilePage() {
             {/* Walk-in Form */}
             <div className="space-y-3">
               <div>
-                <label className="text-sm font-medium text-slate-700">Guest Name</label>
+                <label className="text-sm font-medium text-slate-700">Guest Name *</label>
                 <Input
                   value={walkInData.customer_name}
                   onChange={(e) =>
@@ -767,75 +1163,141 @@ export default function WaiterMobilePage() {
         </DialogContent>
       </Dialog>
       
-      {/* Table Detail Modal */}
-      <Dialog open={showTableDetailModal} onOpenChange={setShowTableDetailModal}>
-        <DialogContent className="sm:max-w-md">
+      {/* Table Detail Sheet */}
+      <Sheet open={showTableDetailSheet} onOpenChange={setShowTableDetailSheet}>
+        <SheetContent side="bottom" className="h-auto max-h-[90vh] overflow-y-auto">
           {selectedTable && (
             <>
-              <DialogHeader>
-                <DialogTitle className="flex items-center justify-between">
-                  <span>{selectedTable.table_name}</span>
-                  <Badge className={cn(STATUS_CONFIG[selectedTable.status].bgColor, "text-white")}>
-                    {STATUS_CONFIG[selectedTable.status].label}
+              <SheetHeader className="pb-4">
+                <div className="flex items-center justify-between">
+                  <SheetTitle className="text-2xl">{selectedTable.table_name}</SheetTitle>
+                  <Badge className={cn(currentConfig.bgColor, "text-white text-sm px-3 py-1")}>
+                    {currentConfig.label}
                   </Badge>
-                </DialogTitle>
+                </div>
                 {selectedTable.current_customer_name && (
-                  <DialogDescription>
-                    Guest: <span className="font-semibold text-slate-900">{selectedTable.current_customer_name}</span>
+                  <SheetDescription className="text-base">
+                    <span className="font-semibold text-slate-900">{selectedTable.current_customer_name}</span>
                     {selectedTable.current_party_size && (
-                      <span className="ml-2">({selectedTable.current_party_size} guests)</span>
+                      <span className="ml-2 text-slate-600">
+                        ({selectedTable.current_party_size} guests)
+                      </span>
                     )}
-                  </DialogDescription>
+                  </SheetDescription>
                 )}
-              </DialogHeader>
+              </SheetHeader>
               
-              <div className="space-y-4 py-4">
-                {/* Status Progress */}
-                <div className="space-y-2">
+              <div className="space-y-6 py-4">
+                {/* Service Progress Steps */}
+                <div className="space-y-3">
                   <label className="text-sm font-medium text-slate-700">Service Progress</label>
-                  <div className="flex items-center gap-2 flex-wrap">
+                  <div className="flex items-center gap-1 overflow-x-auto pb-2">
                     {STATUS_FLOW.filter((s) => s !== "empty").map((status, index) => {
-                      const isActive = STATUS_FLOW.indexOf(selectedTable.status) >= index + 1;
-                      const isCurrent = selectedTable.status === status;
+                      const isActive = currentStep >= index + 1;
+                      const isCurrent = currentStatus === status;
+                      const statusConfig = STATUS_CONFIG[status];
+                      
                       return (
-                        <div
-                          key={status}
-                          className={cn(
-                            "w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold transition-colors",
-                            isCurrent
-                              ? STATUS_CONFIG[status].bgColor + " text-white ring-2 ring-offset-2 ring-amber-500"
-                              : isActive
-                              ? STATUS_CONFIG[status].bgColor + " text-white"
-                              : "bg-slate-100 text-slate-400"
+                        <div key={status} className="flex items-center">
+                          <button
+                            onClick={async () => {
+                              if (!restaurant) return;
+                              await updateStatus.mutateAsync({
+                                table_id: selectedTable.table_id,
+                                restaurant_id: restaurant.id,
+                                status: status,
+                              });
+                              setSelectedTable({ ...selectedTable, status, current_status: status });
+                              toast.success(`Status: ${statusConfig.label}`);
+                            }}
+                            disabled={updateStatus.isPending}
+                            className={cn(
+                              "flex-shrink-0 w-10 h-10 rounded-full flex items-center justify-center text-xs font-bold transition-all",
+                              isCurrent
+                                ? `${statusConfig.bgColor} text-white ring-2 ring-offset-2 ring-amber-500 scale-110`
+                                : isActive
+                                ? `${statusConfig.bgColor} text-white`
+                                : "bg-slate-100 text-slate-400 hover:bg-slate-200"
+                            )}
+                            title={statusConfig.label}
+                          >
+                            {index + 1}
+                          </button>
+                          {index < STATUS_FLOW.length - 2 && (
+                            <div className={cn(
+                              "w-2 h-0.5 flex-shrink-0",
+                              currentStep > index + 1 ? "bg-emerald-400" : "bg-slate-200"
+                            )} />
                           )}
-                        >
-                          {index + 1}
                         </div>
                       );
                     })}
                   </div>
+                  <p className="text-sm text-slate-500">{currentConfig.description}</p>
                 </div>
                 
-                {/* Advance Status Button */}
-                {selectedTable.status !== "ready_to_clear" && (
-                  <Button
-                    onClick={handleStatusAdvance}
-                    disabled={updateStatus.isPending}
-                    className={cn(
-                      "w-full",
-                      STATUS_CONFIG[selectedTable.status].bgColor,
-                      "text-white hover:opacity-90"
-                    )}
-                  >
-                    {updateStatus.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
-                    <ArrowRight className="h-4 w-4 mr-2" />
-                    Mark {STATUS_CONFIG[STATUS_FLOW[STATUS_FLOW.indexOf(selectedTable.status) + 1]]?.label}
-                  </Button>
-                )}
+                {/* Quick Actions */}
+                <div className="flex gap-2">
+                  {currentStatus !== "ready_to_clear" && (
+                    <Button
+                      onClick={handleStatusAdvance}
+                      disabled={updateStatus.isPending}
+                      className={cn("flex-1", currentConfig.bgColor, "text-white hover:opacity-90")}
+                    >
+                      {updateStatus.isPending ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <>
+                          <ArrowRight className="h-4 w-4 mr-2" />
+                          {STATUS_FLOW[STATUS_FLOW.indexOf(currentStatus) + 1] 
+                            ? STATUS_CONFIG[STATUS_FLOW[STATUS_FLOW.indexOf(currentStatus) + 1]].shortLabel 
+                            : "Next"}
+                        </>
+                      )}
+                    </Button>
+                  )}
+                  
+                  {currentStatus !== "seated" && currentStatus !== "empty" && (
+                    <Button
+                      variant="outline"
+                      onClick={handleStatusRevert}
+                      disabled={updateStatus.isPending}
+                    >
+                      <ArrowLeft className="h-4 w-4" />
+                    </Button>
+                  )}
+                </div>
+                
+                {/* Order Value */}
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-slate-700 flex items-center gap-2">
+                    <DollarSign className="h-4 w-4" />
+                    Order Value
+                  </label>
+                  <div className="flex gap-2">
+                    <Input
+                      type="number"
+                      placeholder="0.00"
+                      value={orderValue}
+                      onChange={(e) => setOrderValue(e.target.value)}
+                      className="flex-1"
+                    />
+                    <Button 
+                      variant="outline" 
+                      onClick={handleSaveOrderValue}
+                      disabled={updateStatus.isPending}
+                    >
+                      Save
+                    </Button>
+                  </div>
+                </div>
                 
                 {/* Session Notes */}
                 <div className="space-y-2">
-                  <label className="text-sm font-medium text-slate-700">Session Notes</label>
+                  <label className="text-sm font-medium text-slate-700 flex items-center gap-2">
+                    <MessageSquare className="h-4 w-4" />
+                    Session Notes
+                  </label>
                   <Textarea
                     value={sessionNote}
                     onChange={(e) => setSessionNote(e.target.value)}
@@ -847,13 +1309,13 @@ export default function WaiterMobilePage() {
                     size="sm"
                     onClick={handleSaveNote}
                     disabled={updateStatus.isPending}
+                    className="w-full"
                   >
-                    <MessageSquare className="h-4 w-4 mr-2" />
                     Save Note
                   </Button>
                 </div>
                 
-                {/* Actions */}
+                {/* Actions Grid */}
                 <div className="grid grid-cols-2 gap-2">
                   <Button
                     variant="outline"
@@ -865,7 +1327,6 @@ export default function WaiterMobilePage() {
                   <Button
                     variant="outline"
                     onClick={() => {
-                      // View customer history
                       if (selectedTable.current_customer_id) {
                         router.push(`/customer/${selectedTable.current_customer_id}`);
                       }
@@ -878,76 +1339,99 @@ export default function WaiterMobilePage() {
                 </div>
                 
                 {/* Clear Table */}
-                {selectedTable.status === "ready_to_clear" && (
+                {currentStatus === "ready_to_clear" && (
                   <Button
                     onClick={handleClearTable}
                     disabled={updateStatus.isPending}
                     variant="destructive"
                     className="w-full"
                   >
-                    <RotateCcw className="h-4 w-4 mr-2" />
+                    {updateStatus.isPending ? (
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    ) : (
+                      <RotateCcw className="h-4 w-4 mr-2" />
+                    )}
                     Clear Table
                   </Button>
                 )}
               </div>
             </>
           )}
-        </DialogContent>
-      </Dialog>
+        </SheetContent>
+      </Sheet>
       
       {/* Feedback Modal */}
       <Dialog open={showFeedbackModal} onOpenChange={setShowFeedbackModal}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Guest Feedback</DialogTitle>
+            <DialogTitle>Guest Feedback & Finalize</DialogTitle>
             <DialogDescription>
-              Rate the guest experience before clearing the table
+              Rate the guest experience and enter final order value
             </DialogDescription>
           </DialogHeader>
           
           <div className="space-y-4 py-4">
             {/* Star Rating */}
-            <div className="flex justify-center gap-2">
-              {[1, 2, 3, 4, 5].map((star) => (
-                <button
-                  key={star}
-                  onClick={() => setFeedbackRating(star)}
-                  className={cn(
-                    "p-2 rounded-lg transition-all",
-                    feedbackRating >= star
-                      ? "text-amber-500 bg-amber-50"
-                      : "text-slate-300 hover:bg-slate-50"
-                  )}
-                >
-                  <Star
-                    className="h-8 w-8"
-                    fill={feedbackRating >= star ? "currentColor" : "none"}
-                  />
-                </button>
-              ))}
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-slate-700">Rating</label>
+              <div className="flex justify-center gap-2">
+                {[1, 2, 3, 4, 5].map((star) => (
+                  <button
+                    key={star}
+                    onClick={() => setFeedbackRating(star)}
+                    className={cn(
+                      "p-2 rounded-lg transition-all",
+                      feedbackRating >= star
+                        ? "text-amber-500 bg-amber-50"
+                        : "text-slate-300 hover:bg-slate-50"
+                    )}
+                  >
+                    <Star
+                      className="h-8 w-8"
+                      fill={feedbackRating >= star ? "currentColor" : "none"}
+                    />
+                  </button>
+                ))}
+              </div>
+            </div>
+            
+            {/* Final Order Value */}
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-slate-700 flex items-center gap-2">
+                <DollarSign className="h-4 w-4" />
+                Final Order Total
+              </label>
+              <Input
+                type="number"
+                placeholder="0.00"
+                value={orderValue}
+                onChange={(e) => setOrderValue(e.target.value)}
+              />
             </div>
             
             {/* Feedback Text */}
-            <Textarea
-              value={feedbackText}
-              onChange={(e) => setFeedbackText(e.target.value)}
-              placeholder="Enter feedback about the visit, service notes, or guest behavior..."
-              rows={4}
-            />
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-slate-700">Feedback Notes</label>
+              <Textarea
+                value={feedbackText}
+                onChange={(e) => setFeedbackText(e.target.value)}
+                placeholder="Enter feedback about the visit, service notes, or guest behavior..."
+                rows={4}
+              />
+            </div>
           </div>
           
-          <DialogFooter>
+          <DialogFooter className="gap-2">
             <Button variant="outline" onClick={() => setShowFeedbackModal(false)}>
-              Skip
+              Cancel
             </Button>
             <Button
               onClick={() => {
-                toast.success("Feedback saved");
-                setShowFeedbackModal(false);
+                handleClearTable();
               }}
-              className="bg-amber-600 hover:bg-amber-700"
+              variant="destructive"
             >
-              Save Feedback
+              Clear Table & Save
             </Button>
           </DialogFooter>
         </DialogContent>

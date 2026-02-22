@@ -152,6 +152,35 @@ export default function TimelineView({ selectedDate: propSelectedDate, onDateCha
     return () => clearInterval(interval);
   }, []);
 
+  // Real-time subscription for reservation updates
+  useEffect(() => {
+    if (!restaurantId) return;
+    
+    const supabase = createClient();
+    
+    // Subscribe to reservation changes
+    const subscription = supabase
+      .channel(`timeline-reservations-${restaurantId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "reservations",
+          filter: `restaurant_id=eq.${restaurantId}`,
+        },
+        () => {
+          // Invalidate and refetch reservations
+          queryClient.invalidateQueries({ queryKey: ["timeline-reservations"] });
+        }
+      )
+      .subscribe();
+    
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, [restaurantId, queryClient]);
+
   // Scroll handler
   useEffect(() => {
     const grid = gridRef.current;

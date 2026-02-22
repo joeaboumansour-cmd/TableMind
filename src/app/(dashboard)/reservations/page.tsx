@@ -4,6 +4,7 @@ import { useState, useMemo, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { createClient } from "@/lib/supabase/client";
 import { useRestaurant } from "@/app/RestaurantContext";
+import ReservationModal from "@/components/reservations/ReservationModal";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -99,7 +100,7 @@ export default function ReservationsPage() {
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
   const [selectedReservation, setSelectedReservation] = useState<Reservation | null>(null);
 
-  // Form states for add/edit
+  // Form states for add/edit (kept for edit dialog pre-population)
   const [formData, setFormData] = useState({
     customer_name: "",
     customer_phone: "",
@@ -384,6 +385,7 @@ export default function ReservationsPage() {
     const end = new Date(reservation.end_time).getTime();
     const durationMinutes = Math.round((end - start) / (1000 * 60));
 
+    // Keep formData in sync for potential future use
     setFormData({
       customer_name: reservation.customer_name,
       customer_phone: reservation.customer_phone || "",
@@ -899,180 +901,39 @@ export default function ReservationsPage() {
         </div>
       )}
 
-      {/* Add/Edit Dialog - Responsive */}
-      <Dialog open={isAddDialogOpen || isEditDialogOpen} onOpenChange={(open) => {
-        if (!open) {
+      {/* Add/Edit Dialog - Using Shared ReservationModal */}
+      <ReservationModal
+        isOpen={isAddDialogOpen}
+        onClose={() => {
           setIsAddDialogOpen(false);
+          resetForm();
+        }}
+        mode="create"
+        restaurantId={restaurantId || null}
+        tables={tables}
+        selectedDate={formData.date || today}
+        onSuccess={() => {
+          queryClient.invalidateQueries({ queryKey: ["list-reservations"] });
+          queryClient.invalidateQueries({ queryKey: ["timeline-reservations"] });
+        }}
+      />
+
+      <ReservationModal
+        isOpen={isEditDialogOpen}
+        onClose={() => {
           setIsEditDialogOpen(false);
           setSelectedReservation(null);
-        }
-      }}>
-        <DialogContent className="sm:max-w-md max-h-[95vh] sm:max-h-[90vh] overflow-y-auto w-[95vw] sm:w-auto p-4 sm:p-6">
-          <DialogHeader>
-            <DialogTitle className="text-xl sm:text-2xl">
-              {isEditDialogOpen ? "Edit Reservation" : "New Reservation"}
-            </DialogTitle>
-          </DialogHeader>
-          <form onSubmit={handleSubmit} className="space-y-4 py-4">
-            <div className="space-y-2">
-              <Label htmlFor="name" className="text-sm sm:text-base">Customer Name *</Label>
-              <Input
-                id="name"
-                value={formData.customer_name}
-                onChange={(e) => setFormData({ ...formData, customer_name: e.target.value })}
-                placeholder="John Smith"
-                required
-              />
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="phone" className="text-sm sm:text-base">Phone Number</Label>
-              <div className="relative">
-                <Input
-                  id="phone"
-                  value={formData.customer_phone}
-                  onChange={(e) => setFormData({ ...formData, customer_phone: e.target.value })}
-                  placeholder="555-0101"
-                  className={foundCustomerName ? "pr-10 border-green-500 focus-visible:ring-green-500" : ""}
-                />
-                {foundCustomerName && (
-                  <div className="absolute right-3 top-1/2 -translate-y-1/2">
-                    <Badge variant="outline" className="bg-green-50 text-green-700 border-green-300 text-xs">
-                      Found
-                    </Badge>
-                  </div>
-                )}
-              </div>
-              {foundCustomerName && (
-                <p className="text-xs text-green-600">
-                  Customer: {foundCustomerName}
-                </p>
-              )}
-            </div>
-
-            <div className="grid grid-cols-2 gap-3 sm:gap-4">
-              <div className="space-y-2">
-                <Label className="text-sm sm:text-base">Party Size</Label>
-                <div className="flex gap-1 sm:gap-2">
-                  {[2, 4, 6, 8].map((size) => (
-                    <Button
-                      key={size}
-                      type="button"
-                      variant={formData.party_size === size ? "default" : "outline"}
-                      className="flex-1 text-sm sm:text-base px-2 sm:px-4"
-                      onClick={() => setFormData({ ...formData, party_size: size })}
-                    >
-                      {size}
-                    </Button>
-                  ))}
-                </div>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="table" className="text-sm sm:text-base">Table *</Label>
-                <Select
-                  value={formData.table_id}
-                  onValueChange={(value) => setFormData({ ...formData, table_id: value })}
-                  required
-                >
-                  <SelectTrigger className="text-sm sm:text-base">
-                    <SelectValue placeholder="Select table" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {tables.map((table: TableType) => (
-                      <SelectItem key={table.id} value={table.id}>
-                        {table.name} (seats {table.capacity})
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3 sm:gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="date" className="text-sm sm:text-base">Date *</Label>
-                <Input
-                  id="date"
-                  type="date"
-                  min={today}
-                  value={formData.date}
-                  onChange={(e) => setFormData({ ...formData, date: e.target.value })}
-                  required
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="time" className="text-sm sm:text-base">Time *</Label>
-                <Input
-                  id="time"
-                  type="time"
-                  value={formData.time}
-                  onChange={(e) => setFormData({ ...formData, time: e.target.value })}
-                  required
-                />
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <Label className="text-sm sm:text-base">Duration</Label>
-              <div className="flex gap-1 sm:gap-2">
-                {[60, 90, 120, 150].map((mins) => (
-                  <Button
-                    key={mins}
-                    type="button"
-                    variant={formData.duration === mins ? "default" : "outline"}
-                    className="flex-1 text-xs sm:text-sm px-2 sm:px-4"
-                    onClick={() => setFormData({ ...formData, duration: mins })}
-                  >
-                    {mins}m
-                  </Button>
-                ))}
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="status" className="text-sm sm:text-base">Status</Label>
-              <Select
-                value={formData.status}
-                onValueChange={(value) => setFormData({ ...formData, status: value as Reservation["status"] })}
-              >
-                <SelectTrigger className="text-sm sm:text-base">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="booked">Booked</SelectItem>
-                  <SelectItem value="confirmed">Confirmed</SelectItem>
-                  <SelectItem value="seated">Seated</SelectItem>
-                  <SelectItem value="finished">Finished</SelectItem>
-                  <SelectItem value="cancelled">Cancelled</SelectItem>
-                  <SelectItem value="no_show">No-Show</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="notes" className="text-sm sm:text-base">Notes</Label>
-              <textarea
-                id="notes"
-                value={formData.notes}
-                onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
-                placeholder="Special requests, allergies, occasion..."
-                className="w-full min-h-[80px] p-3 rounded-md border border-input bg-background text-sm sm:text-base resize-none"
-              />
-            </div>
-
-            <Button 
-              type="submit" 
-              className="w-full text-sm sm:text-base"
-              disabled={createMutation.isPending || updateMutation.isPending}
-            >
-              {createMutation.isPending || updateMutation.isPending 
-                ? "Saving..." 
-                : isEditDialogOpen ? "Update Reservation" : "Create Reservation"
-              }
-            </Button>
-          </form>
-        </DialogContent>
-      </Dialog>
+        }}
+        mode="edit"
+        reservation={selectedReservation}
+        restaurantId={restaurantId || null}
+        tables={tables}
+        selectedDate={formData.date || today}
+        onSuccess={() => {
+          queryClient.invalidateQueries({ queryKey: ["list-reservations"] });
+          queryClient.invalidateQueries({ queryKey: ["timeline-reservations"] });
+        }}
+      />
     </div>
   );
 }

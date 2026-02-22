@@ -34,6 +34,19 @@ import { Card, CardContent } from "@/components/ui/card";
 import { WhatsAppButton, WhatsAppModal, BulkWhatsAppModal } from "@/components/whatsapp";
 import { toast } from "sonner";
 import { isValidPhoneNumber, getPhoneValidationError, getNameValidationError, isValidCustomerName, isValidEmail } from "@/lib/utils/validation";
+import {
+  calculateRFMSegment,
+  getRFMSegmentColor,
+  calculateHealthScore,
+  getHealthScoreColor,
+  calculateLifecycleStage,
+  getLifecycleColor,
+  generateWinBackRecommendation,
+  type RFMSegment,
+  type LifecycleStage,
+  type WinBackRecommendation,
+} from "@/lib/utils/customerAnalytics";
+import { Heart, AlertCircle, TrendingUp, Sparkles } from "lucide-react";
 
 interface Customer {
   id: string;
@@ -99,6 +112,10 @@ export default function CustomersPage() {
   const [reliabilityFilter, setReliabilityFilter] = useState<string>("");
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [hasBirthdayThisMonth, setHasBirthdayThisMonth] = useState(false);
+  const [monthsSinceVisit, setMonthsSinceVisit] = useState<string>("");
+  const [rfmFilter, setRfmFilter] = useState<RFMSegment | "">("");
+  const [lifecycleFilter, setLifecycleFilter] = useState<LifecycleStage | "">("");
+  const [healthStatusFilter, setHealthStatusFilter] = useState<"Healthy" | "At Risk" | "Critical" | "">("");
 
   // Bulk selection states
   const [selectedCustomers, setSelectedCustomers] = useState<Set<string>>(new Set());
@@ -227,6 +244,44 @@ export default function CustomersPage() {
       });
     }
 
+    // Months since last visit filter
+    if (monthsSinceVisit) {
+      const months = parseInt(monthsSinceVisit);
+      const cutoffDate = new Date();
+      cutoffDate.setMonth(cutoffDate.getMonth() - months);
+      
+      filtered = filtered.filter((c) => {
+        // Include customers who never visited OR whose last visit is before the cutoff
+        if (!c.last_visit_date) return true;
+        const lastVisit = new Date(c.last_visit_date);
+        return lastVisit < cutoffDate;
+      });
+    }
+
+    // RFM Segment filter
+    if (rfmFilter) {
+      filtered = filtered.filter((c) => {
+        const rfm = calculateRFMSegment(c);
+        return rfm.segment === rfmFilter;
+      });
+    }
+
+    // Lifecycle Stage filter
+    if (lifecycleFilter) {
+      filtered = filtered.filter((c) => {
+        const lifecycle = calculateLifecycleStage(c);
+        return lifecycle.stage === lifecycleFilter;
+      });
+    }
+
+    // Health Status filter
+    if (healthStatusFilter) {
+      filtered = filtered.filter((c) => {
+        const health = calculateHealthScore(c);
+        return health.status === healthStatusFilter;
+      });
+    }
+
     return filtered;
   }, [
     customers,
@@ -237,6 +292,10 @@ export default function CustomersPage() {
     reliabilityFilter,
     selectedTags,
     hasBirthdayThisMonth,
+    monthsSinceVisit,
+    rfmFilter,
+    lifecycleFilter,
+    healthStatusFilter,
     segments,
   ]);
 
@@ -404,6 +463,10 @@ export default function CustomersPage() {
     setReliabilityFilter("");
     setSelectedTags([]);
     setHasBirthdayThisMonth(false);
+    setMonthsSinceVisit("");
+    setRfmFilter("");
+    setLifecycleFilter("");
+    setHealthStatusFilter("");
     setSearchQuery("");
   };
 
@@ -414,7 +477,11 @@ export default function CustomersPage() {
     maxVisits ||
     reliabilityFilter ||
     selectedTags.length > 0 ||
-    hasBirthdayThisMonth;
+    hasBirthdayThisMonth ||
+    monthsSinceVisit ||
+    rfmFilter ||
+    lifecycleFilter ||
+    healthStatusFilter;
 
   return (
     <div className="p-6 max-w-7xl mx-auto">
@@ -532,7 +599,7 @@ export default function CustomersPage() {
                 </Button>
               )}
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-4">
               {/* Segment Filter */}
               <div className="space-y-2">
                 <Label>Segment</Label>
@@ -608,6 +675,24 @@ export default function CustomersPage() {
                 </Select>
               </div>
 
+              {/* Months Since Last Visit Filter */}
+              <div className="space-y-2">
+                <Label>Not visited in</Label>
+                <Select value={monthsSinceVisit || "any"} onValueChange={(value) => setMonthsSinceVisit(value === "any" ? "" : value)}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Any time" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="any">Any time</SelectItem>
+                    <SelectItem value="1">1 month+</SelectItem>
+                    <SelectItem value="2">2 months+</SelectItem>
+                    <SelectItem value="3">3 months+</SelectItem>
+                    <SelectItem value="6">6 months+</SelectItem>
+                    <SelectItem value="12">12 months+</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
               {/* Birthday Filter */}
               <div className="space-y-2">
                 <Label className="flex items-center gap-2">
@@ -619,6 +704,64 @@ export default function CustomersPage() {
                   />
                   Birthday this month
                 </Label>
+              </div>
+            </div>
+
+            {/* Second Row - Analytics Filters */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
+              {/* RFM Segment Filter */}
+              <div className="space-y-2">
+                <Label>RFM Segment</Label>
+                <Select value={rfmFilter || "all"} onValueChange={(value) => setRfmFilter(value === "all" ? "" : value as RFMSegment)}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="All segments" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All RFM segments</SelectItem>
+                    <SelectItem value="Champions">🏆 Champions</SelectItem>
+                    <SelectItem value="Loyal Customers">💙 Loyal Customers</SelectItem>
+                    <SelectItem value="Potential Loyalists">🌱 Potential Loyalists</SelectItem>
+                    <SelectItem value="At Risk">⚠️ At Risk</SelectItem>
+                    <SelectItem value="Cannot Lose Them">🚨 Cannot Lose Them</SelectItem>
+                    <SelectItem value="Lost">😞 Lost</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Lifecycle Stage Filter */}
+              <div className="space-y-2">
+                <Label>Lifecycle Stage</Label>
+                <Select value={lifecycleFilter || "all"} onValueChange={(value) => setLifecycleFilter(value === "all" ? "" : value as LifecycleStage)}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="All stages" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All lifecycle stages</SelectItem>
+                    <SelectItem value="New">✨ New</SelectItem>
+                    <SelectItem value="Onboarding">📈 Onboarding</SelectItem>
+                    <SelectItem value="Establishing">🔄 Establishing</SelectItem>
+                    <SelectItem value="Regular">⭐ Regular</SelectItem>
+                    <SelectItem value="VIP">👑 VIP</SelectItem>
+                    <SelectItem value="Dormant">😴 Dormant</SelectItem>
+                    <SelectItem value="Reactivated">🎉 Reactivated</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Health Status Filter */}
+              <div className="space-y-2">
+                <Label>Health Status</Label>
+                <Select value={healthStatusFilter || "all"} onValueChange={(value) => setHealthStatusFilter(value === "all" ? "" : value as "Healthy" | "At Risk" | "Critical")}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="All statuses" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All health statuses</SelectItem>
+                    <SelectItem value="Healthy">🟢 Healthy</SelectItem>
+                    <SelectItem value="At Risk">🟡 At Risk</SelectItem>
+                    <SelectItem value="Critical">🔴 Critical</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
             </div>
           </Card>
@@ -711,6 +854,32 @@ export default function CustomersPage() {
                           <Calendar className="h-5 w-5" />
                           {customer.total_visits} visits
                         </span>
+                        {customer.last_visit_date && (
+                          <span className="flex items-center gap-2">
+                            <span className="text-muted-foreground">Last:</span>
+                            {(() => {
+                              const lastVisit = new Date(customer.last_visit_date!);
+                              const now = new Date();
+                              const diffTime = Math.abs(now.getTime() - lastVisit.getTime());
+                              const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+                              const diffMonths = Math.floor(diffDays / 30);
+                              
+                              if (diffMonths >= 12) {
+                                return <span className="text-red-500 font-medium">{Math.floor(diffMonths / 12)}y ago</span>;
+                              } else if (diffMonths >= 6) {
+                                return <span className="text-orange-500 font-medium">{diffMonths}mo ago</span>;
+                              } else if (diffMonths >= 3) {
+                                return <span className="text-yellow-600 font-medium">{diffMonths}mo ago</span>;
+                              } else if (diffMonths >= 1) {
+                                return <span className="text-green-600">{diffMonths}mo ago</span>;
+                              } else if (diffDays >= 7) {
+                                return <span className="text-green-600">{Math.floor(diffDays / 7)}w ago</span>;
+                              } else {
+                                return <span className="text-green-600">{diffDays}d ago</span>;
+                              }
+                            })()}
+                          </span>
+                        )}
                         {customer.reliability_score !== undefined && (
                           <Badge
                             variant={
@@ -727,34 +896,79 @@ export default function CustomersPage() {
                       </div>
                     </div>
                   </div>
-                  <div className="flex gap-2 flex-wrap justify-end max-w-xs items-center">
-                    {!isSelectionMode && (
-                      <WhatsAppButton
-                        phoneNumber={customer.phone}
-                        customerName={customer.name}
-                        onClick={(e) => {
-                          e?.stopPropagation();
-                          setSelectedCustomer(customer);
-                          setIsWhatsAppModalOpen(true);
-                        }}
-                        size="sm"
-                        showLabel={false}
-                      />
-                    )}
-                    {customer.tags?.slice(0, 3).map((tag) => (
-                      <Badge
-                        key={tag}
-                        variant={tag === "VIP" ? "default" : "secondary"}
-                        className="text-base px-4 py-2"
-                      >
-                        {tag}
-                      </Badge>
-                    ))}
-                    {customer.tags && customer.tags.length > 3 && (
-                      <Badge variant="outline" className="text-base px-4 py-2">
-                        +{customer.tags.length - 3}
-                      </Badge>
-                    )}
+                  <div className="flex flex-col gap-2 items-end">
+                    <div className="flex gap-2 flex-wrap justify-end max-w-xs items-center">
+                      {!isSelectionMode && (
+                        <WhatsAppButton
+                          phoneNumber={customer.phone}
+                          customerName={customer.name}
+                          onClick={(e) => {
+                            e?.stopPropagation();
+                            setSelectedCustomer(customer);
+                            setIsWhatsAppModalOpen(true);
+                          }}
+                          size="sm"
+                          showLabel={false}
+                        />
+                      )}
+                      {(() => {
+                        const rfm = calculateRFMSegment(customer);
+                        const health = calculateHealthScore(customer);
+                        const lifecycle = calculateLifecycleStage(customer);
+                        const winBack = generateWinBackRecommendation(customer);
+                        
+                        return (
+                          <>
+                            {/* RFM Segment Badge */}
+                            <Badge
+                              className={`text-sm px-3 py-1 ${getRFMSegmentColor(rfm.segment)}`}
+                            >
+                              {rfm.segment}
+                            </Badge>
+                            
+                            {/* Health Score Badge */}
+                            <Badge
+                              className={`text-sm px-3 py-1 ${getHealthScoreColor(health.score)}`}
+                            >
+                              <Heart className="h-3 w-3 mr-1 inline" />
+                              {health.score}
+                            </Badge>
+                            
+                            {/* Lifecycle Badge */}
+                            <Badge
+                              className={`text-sm px-3 py-1 ${getLifecycleColor(lifecycle.stage)}`}
+                            >
+                              {lifecycle.stage}
+                            </Badge>
+                            
+                            {/* Win-Back Alert */}
+                            {winBack && (
+                              <Badge
+                                variant="destructive"
+                                className="text-sm px-3 py-1 animate-pulse"
+                              >
+                                <AlertCircle className="h-3 w-3 mr-1 inline" />
+                                {winBack.discountLevel}% off
+                              </Badge>
+                            )}
+                          </>
+                        );
+                      })()}
+                      {customer.tags?.slice(0, 2).map((tag) => (
+                        <Badge
+                          key={tag}
+                          variant={tag === "VIP" ? "default" : "secondary"}
+                          className="text-base px-4 py-2"
+                        >
+                          {tag}
+                        </Badge>
+                      ))}
+                      {customer.tags && customer.tags.length > 2 && (
+                        <Badge variant="outline" className="text-base px-4 py-2">
+                          +{customer.tags.length - 2}
+                        </Badge>
+                      )}
+                    </div>
                   </div>
                 </div>
               </CardContent>
@@ -782,6 +996,67 @@ export default function CustomersPage() {
               </SheetHeader>
 
               <div className="mt-8 space-y-8">
+                {/* Customer Analytics Overview */}
+                {(() => {
+                  const rfm = calculateRFMSegment(selectedCustomer);
+                  const health = calculateHealthScore(selectedCustomer);
+                  const lifecycle = calculateLifecycleStage(selectedCustomer);
+                  const winBack = generateWinBackRecommendation(selectedCustomer);
+                  
+                  return (
+                    <div className="space-y-4">
+                      {/* RFM & Lifecycle Badges */}
+                      <div className="flex flex-wrap gap-2">
+                        <Badge className={`text-base px-4 py-2 ${getRFMSegmentColor(rfm.segment)}`}>
+                          <TrendingUp className="h-4 w-4 mr-1 inline" />
+                          {rfm.segment}
+                        </Badge>
+                        <Badge className={`text-base px-4 py-2 ${getLifecycleColor(lifecycle.stage)}`}>
+                          <Sparkles className="h-4 w-4 mr-1 inline" />
+                          {lifecycle.stage}
+                        </Badge>
+                        <Badge className={`text-base px-4 py-2 ${getHealthScoreColor(health.score)}`}>
+                          <Heart className="h-4 w-4 mr-1 inline" />
+                          Health: {health.score}/100
+                        </Badge>
+                      </div>
+                      
+                      {/* Win-Back Recommendation */}
+                      {winBack && (
+                        <div className="bg-gradient-to-r from-orange-50 to-red-50 border-2 border-orange-200 rounded-xl p-4">
+                          <div className="flex items-center gap-2 mb-2">
+                            <AlertCircle className="h-5 w-5 text-orange-600" />
+                            <span className="font-semibold text-orange-800">Win-Back Opportunity</span>
+                            <Badge variant="destructive" className="ml-auto">
+                              {winBack.urgency} Priority
+                            </Badge>
+                          </div>
+                          <p className="text-sm text-orange-700 mb-3">
+                            Suggested: <strong>{winBack.discountLevel}% discount</strong>
+                          </p>
+                          <p className="text-sm text-muted-foreground italic mb-3">
+                            "{winBack.message}"
+                          </p>
+                          <Button 
+                            size="sm" 
+                            variant="outline"
+                            className="w-full border-orange-300 hover:bg-orange-100"
+                            onClick={() => {
+                              if (!editedTags.includes(winBack.tag)) {
+                                setEditedTags([...editedTags, winBack.tag]);
+                                toast.success(`Tag "${winBack.tag}" added!`);
+                              }
+                            }}
+                          >
+                            <Plus className="h-4 w-4 mr-1" />
+                            Add "{winBack.tag}" Tag
+                          </Button>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+
                 {/* Vital Stats */}
                 <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
                   <div className="bg-primary/10 rounded-xl p-6 text-center">
@@ -817,6 +1092,69 @@ export default function CustomersPage() {
                     </div>
                   </div>
                 </div>
+
+                {/* Health Score Breakdown */}
+                {(() => {
+                  const health = calculateHealthScore(selectedCustomer);
+                  return (
+                    <div className="bg-muted/50 rounded-xl p-4">
+                      <h4 className="font-semibold mb-3 flex items-center gap-2">
+                        <Heart className="h-5 w-5 text-primary" />
+                        Health Score Breakdown
+                      </h4>
+                      <div className="space-y-2">
+                        <div className="flex justify-between items-center">
+                          <span className="text-sm text-muted-foreground">Recency (Last Visit)</span>
+                          <div className="flex items-center gap-2">
+                            <div className="w-24 h-2 bg-gray-200 rounded-full overflow-hidden">
+                              <div 
+                                className="h-full bg-green-500" 
+                                style={{ width: `${(health.breakdown.recency / 40) * 100}%` }}
+                              />
+                            </div>
+                            <span className="text-sm font-medium w-8">{health.breakdown.recency}</span>
+                          </div>
+                        </div>
+                        <div className="flex justify-between items-center">
+                          <span className="text-sm text-muted-foreground">Frequency (Visit Count)</span>
+                          <div className="flex items-center gap-2">
+                            <div className="w-24 h-2 bg-gray-200 rounded-full overflow-hidden">
+                              <div 
+                                className="h-full bg-blue-500" 
+                                style={{ width: `${(health.breakdown.frequency / 30) * 100}%` }}
+                              />
+                            </div>
+                            <span className="text-sm font-medium w-8">{health.breakdown.frequency}</span>
+                          </div>
+                        </div>
+                        <div className="flex justify-between items-center">
+                          <span className="text-sm text-muted-foreground">Reliability Score</span>
+                          <div className="flex items-center gap-2">
+                            <div className="w-24 h-2 bg-gray-200 rounded-full overflow-hidden">
+                              <div 
+                                className="h-full bg-yellow-500" 
+                                style={{ width: `${(health.breakdown.reliability / 20) * 100}%` }}
+                              />
+                            </div>
+                            <span className="text-sm font-medium w-8">{health.breakdown.reliability}</span>
+                          </div>
+                        </div>
+                        <div className="flex justify-between items-center">
+                          <span className="text-sm text-muted-foreground">Engagement</span>
+                          <div className="flex items-center gap-2">
+                            <div className="w-24 h-2 bg-gray-200 rounded-full overflow-hidden">
+                              <div 
+                                className="h-full bg-purple-500" 
+                                style={{ width: `${(health.breakdown.engagement / 10) * 100}%` }}
+                              />
+                            </div>
+                            <span className="text-sm font-medium w-8">{health.breakdown.engagement}</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
 
                 {/* Last Visit */}
                 {selectedCustomer.last_visit_date && (

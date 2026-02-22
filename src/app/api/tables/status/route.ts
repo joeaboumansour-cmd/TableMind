@@ -54,11 +54,20 @@ export async function POST(request: NextRequest) {
       server_id,
       server_name,
       session_notes,
+      current_order_value,
     } = body;
     
     if (!table_id || !restaurant_id || !status) {
       return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
     }
+    
+    // First, get the current status to preserve customer/reservation info
+    const { data: existingStatus } = await supabase
+      .from("table_service_status")
+      .select("*")
+      .eq("table_id", table_id)
+      .eq("restaurant_id", restaurant_id)
+      .single();
     
     // Build update object dynamically
     const updateData: Record<string, unknown> = {
@@ -78,14 +87,8 @@ export async function POST(request: NextRequest) {
       updateData.check_requested_at = new Date().toISOString();
     } else if (status === "ready_to_clear") {
       // Calculate actual duration
-      const { data: currentStatus } = await supabase
-        .from("table_service_status")
-        .select("seated_at")
-        .eq("table_id", table_id)
-        .single();
-        
-      if (currentStatus?.seated_at) {
-        const seatedAt = new Date(currentStatus.seated_at);
+      if (existingStatus?.seated_at) {
+        const seatedAt = new Date(existingStatus.seated_at);
         const now = new Date();
         const durationMinutes = Math.floor((now.getTime() - seatedAt.getTime()) / 60000);
         updateData.actual_duration_minutes = durationMinutes;
@@ -98,29 +101,70 @@ export async function POST(request: NextRequest) {
       updateData.current_party_size = null;
       updateData.reservation_id = null;
       updateData.session_notes = null;
+      updateData.current_order_value = null;
+    }
+    
+    // Preserve existing customer/reservation info if not clearing table and not explicitly provided
+    if (status !== "empty") {
+      if (reservation_id !== undefined) {
+        updateData.reservation_id = reservation_id;
+      } else if (existingStatus?.reservation_id) {
+        updateData.reservation_id = existingStatus.reservation_id;
+      }
+      
+      if (customer_name !== undefined) {
+        updateData.current_customer_name = customer_name;
+      } else if (existingStatus?.current_customer_name) {
+        updateData.current_customer_name = existingStatus.current_customer_name;
+      }
+      
+      if (customer_id !== undefined) {
+        updateData.current_customer_id = customer_id;
+      } else if (existingStatus?.current_customer_id) {
+        updateData.current_customer_id = existingStatus.current_customer_id;
+      }
+      
+      if (party_size !== undefined) {
+        updateData.current_party_size = party_size;
+      } else if (existingStatus?.current_party_size) {
+        updateData.current_party_size = existingStatus.current_party_size;
+      }
     }
     
     // Add optional fields if provided
-    if (reservation_id !== undefined) updateData.reservation_id = reservation_id;
-    if (customer_name !== undefined) updateData.current_customer_name = customer_name;
-    if (customer_id !== undefined) updateData.current_customer_id = customer_id;
-    if (party_size !== undefined) updateData.current_party_size = party_size;
     if (server_id !== undefined) updateData.server_id = server_id;
     if (server_name !== undefined) updateData.server_name = server_name;
     if (session_notes !== undefined) updateData.session_notes = session_notes;
+    if (current_order_value !== undefined) updateData.current_order_value = current_order_value;
     
-    // Update or insert the status record
-    const { data: result, error } = await supabase
-      .from("table_service_status")
-      .upsert({
-        restaurant_id,
-        table_id,
-        ...updateData,
-      }, {
-        onConflict: "restaurant_id,table_id",
-      })
-      .select()
-      .single();
+    let result;
+    let error;
+    
+    if (existingStatus) {
+      // Update existing record
+      const { data, error: updateError } = await supabase
+        .from("table_service_status")
+        .update(updateData)
+        .eq("table_id", table_id)
+        .eq("restaurant_id", restaurant_id)
+        .select()
+        .single();
+      result = data;
+      error = updateError;
+    } else {
+      // Insert new record
+      const { data, error: insertError } = await supabase
+        .from("table_service_status")
+        .insert({
+          restaurant_id,
+          table_id,
+          ...updateData,
+        })
+        .select()
+        .single();
+      result = data;
+      error = insertError;
+    }
       
     if (error) {
       console.error("Error updating table status:", error);

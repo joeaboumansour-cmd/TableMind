@@ -21,8 +21,16 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Card, CardContent } from "@/components/ui/card";
-import { Plus, Edit, Star, Trash2, AlertCircle } from "lucide-react";
+import { Plus, Edit, Star, Trash2, AlertCircle, Sparkles, Check } from "lucide-react";
 import { toast } from "sonner";
+
+// Auto-assign suggestion interface
+interface AutoAssignSuggestion {
+  recommended_table: Table | null;
+  alternatives: Table[];
+  score: number;
+  explanation: string;
+}
 
 export interface Table {
   id: string;
@@ -120,6 +128,8 @@ export default function ReservationModal({
   const [foundCustomerName, setFoundCustomerName] = useState<string | null>(null);
   const [foundCustomer, setFoundCustomer] = useState<Customer | null>(null);
   const [formErrors, setFormErrors] = useState<Record<string, string>>({});
+  const [autoAssignSuggestion, setAutoAssignSuggestion] = useState<AutoAssignSuggestion | null>(null);
+  const [isAutoAssigning, setIsAutoAssigning] = useState(false);
   const prevIsOpenRef = useRef(isOpen);
 
   // Fetch customers for phone lookup - same as reservations page
@@ -243,6 +253,59 @@ export default function ReservationModal({
     return tables
       .filter((t) => t.capacity >= partySize)
       .sort((a, b) => a.capacity - b.capacity);
+  };
+
+  // Auto-assign table mutation
+  const autoAssignMutation = useMutation({
+    mutationFn: async () => {
+      if (!restaurantId) throw new Error("No restaurant");
+      
+      const response = await fetch("/api/tables/auto-assign", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          restaurant_id: restaurantId,
+          party_size: formData.party_size,
+          customer_id: foundCustomer?.id,
+          reservation_time: `${formData.date}T${formData.time}:00`,
+          mode: "single"
+        })
+      });
+      
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || "Failed to get table suggestion");
+      }
+      
+      return response.json();
+    },
+    onSuccess: (data) => {
+      const suggestion = data.data;
+      setAutoAssignSuggestion({
+        recommended_table: suggestion.recommended_table,
+        alternatives: suggestion.alternatives || [],
+        score: suggestion.score,
+        explanation: suggestion.explanation
+      });
+      
+      // Auto-select the recommended table
+      if (suggestion.recommended_table) {
+        setFormData(prev => ({ ...prev, table_id: suggestion.recommended_table.id }));
+        toast.success(`Table assigned: ${suggestion.recommended_table.name}`, {
+          description: suggestion.explanation
+        });
+      }
+    },
+    onError: (error: Error) => {
+      toast.error("Auto-assign failed: " + error.message);
+    }
+  });
+
+  const handleAutoAssign = () => {
+    setIsAutoAssigning(true);
+    autoAssignMutation.mutate(undefined, {
+      onSettled: () => setIsAutoAssigning(false)
+    });
   };
 
   // Validate form
@@ -708,15 +771,57 @@ export default function ReservationModal({
           )}
 
           {/* Table Selection */}
-          <div className="space-y-2">
-            <Label>Table *</Label>
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <Label>Table *</Label>
+              {/* Smart Auto-Assign Button */}
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={handleAutoAssign}
+                disabled={isAutoAssigning || suitableTables.length === 0}
+                className="gap-1.5 border-primary/30 hover:bg-primary/10"
+              >
+                <Sparkles className="h-4 w-4 text-primary" />
+                {isAutoAssigning ? "Assigning..." : "Smart Assign"}
+              </Button>
+            </div>
+            
+            {/* Auto-assign explanation */}
+            {autoAssignSuggestion?.explanation && (
+              <div className="bg-primary/5 border border-primary/20 rounded-md p-2.5 text-sm">
+                <div className="flex items-start gap-2">
+                  <Check className="h-4 w-4 text-primary mt-0.5 shrink-0" />
+                  <div>
+                    <p className="font-medium text-primary">{autoAssignSuggestion.explanation}</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      Match score: {Math.round(autoAssignSuggestion.score)}%
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+            
+            {/* Alternative suggestions */}
+            {autoAssignSuggestion?.alternatives && autoAssignSuggestion.alternatives.length > 0 && (
+              <div className="text-xs text-muted-foreground">
+                <span className="font-medium">Also suitable:</span>{" "}
+                {autoAssignSuggestion.alternatives.map(t => t.name).join(", ")}
+              </div>
+            )}
+            
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
               {suitableTables.map((table) => (
                 <Button
                   key={table.id}
                   type="button"
                   variant={formData.table_id === table.id ? "default" : "outline"}
-                  className="justify-start h-auto py-2"
+                  className={`justify-start h-auto py-2 ${
+                    autoAssignSuggestion?.recommended_table?.id === table.id 
+                      ? "ring-2 ring-primary ring-offset-1" 
+                      : ""
+                  }`}
                   onClick={() =>
                     setFormData({ ...formData, table_id: table.id })
                   }

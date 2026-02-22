@@ -288,6 +288,74 @@ export interface HostDashboardItem {
   notes?: string;
 }
 
+// Waiter Table Status View
+export interface TableStatusWithDetails {
+  id: string;
+  restaurant_id: string;
+  table_id: string;
+  table_name: string;
+  table_capacity: number;
+  room_name?: string;
+  section?: string;
+  reservation_id?: string;
+  status: ServiceStatus;
+  current_customer_name?: string;
+  current_customer_id?: string;
+  current_party_size?: number;
+  seated_at?: string;
+  order_taken_at?: string;
+  food_served_at?: string;
+  check_requested_at?: string;
+  cleared_at?: string;
+  estimated_turnover_minutes?: number;
+  actual_duration_minutes?: number;
+  server_id?: string;
+  server_name?: string;
+  session_notes?: string;
+  created_at: string;
+  updated_at: string;
+  guest_source: "empty" | "reservation" | "walk-in" | "unknown";
+  availability_status: "available" | "occupied" | "finishing";
+  minutes_seated?: number;
+  status_color: string;
+}
+
+type ServiceStatus = 
+  | "empty" 
+  | "seated" 
+  | "order_taken" 
+  | "appetizer_served" 
+  | "main_served" 
+  | "dessert_served" 
+  | "check_requested" 
+  | "ready_to_clear";
+
+// Waiter view combined status - includes upcoming reservations
+export interface WaiterTableView {
+  table_id: string;
+  table_name: string;
+  table_capacity: number;
+  room_name?: string;
+  section?: string;
+  current_status: ServiceStatus | "empty";
+  current_customer_name?: string;
+  current_party_size?: number;
+  minutes_seated?: number;
+  guest_source?: "empty" | "reservation" | "walk-in" | "unknown";
+  // Upcoming reservation info (even if table is currently empty)
+  upcoming_reservation_id?: string;
+  upcoming_customer_name?: string;
+  upcoming_party_size?: number;
+  upcoming_time?: string;
+  upcoming_status?: "booked" | "confirmed" | "seated";
+  minutes_until?: number;
+  urgency?: "overdue" | "arriving_soon" | "upcoming" | "later";
+  // For seated reservations
+  reservation_id?: string;
+  session_notes?: string;
+  status_color?: string;
+}
+
 // =============================================
 // Form/Input Types
 // =============================================

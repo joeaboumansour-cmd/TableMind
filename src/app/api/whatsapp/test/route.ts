@@ -2,18 +2,16 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getWhatsAppService } from '@/lib/whatsapp/service';
 import { createClient } from '@/lib/supabase/server';
 
-/**
- * POST /api/whatsapp/test - Send a test WhatsApp message
- * Requires: { to: string, message?: string }
- */
+// POST /api/whatsapp/test - Send a test WhatsApp message
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { to, message = 'This is a test message from TableMind!' } = body;
+    const { phone } = body;
 
-    if (!to) {
+    // Validate required fields
+    if (!phone) {
       return NextResponse.json(
-        { error: 'Missing required field: to (phone number)' },
+        { error: 'Missing required field: phone' },
         { status: 400 }
       );
     }
@@ -29,7 +27,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Get restaurant info
+    // Get restaurant data
     const { data: restaurantData, error: restaurantError } = await supabase
       .from('restaurants')
       .select('id, name')
@@ -43,20 +41,22 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Send test message
+    // Initialize WhatsApp service
     const whatsappService = getWhatsAppService();
+
+    // Send test message
     const result = await whatsappService.sendMessage({
-      to,
-      body: `🧪 Test from ${restaurantData.name}: ${message}`,
+      to: phone,
+      body: `🧪 Test message from ${restaurantData.name} via TableMind!\n\nIf you received this, your WhatsApp Business API is configured correctly.`,
     });
 
     // Log the test message
     await supabase.from('whatsapp_logs').insert({
       restaurant_id: restaurantData.id,
       customer_id: null,
-      phone_number: to,
-      message: message,
-      template_name: 'test',
+      phone_number: phone,
+      message: 'Test message from TableMind',
+      template_name: null,
       status: result.success ? 'sent' : 'failed',
       provider_message_id: result.messageId || null,
       error_message: result.error || null,
@@ -74,7 +74,6 @@ export async function POST(request: NextRequest) {
       success: true,
       messageId: result.messageId,
       timestamp: result.timestamp,
-      provider: process.env.WHATSAPP_PROVIDER || 'mock',
     });
 
   } catch (error) {

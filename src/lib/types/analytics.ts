@@ -124,3 +124,74 @@ export interface AnalyticsResponse {
     action: string;
   };
 }
+
+// =============================================
+// New Analytics Types for Enhanced Dashboard
+// =============================================
+
+export interface RevenueMetrics {
+  totalRevenue: number;
+  avgSpendPerVisit: number;
+  avgSpendPerGuest: number;
+  revenueByDay: Record<string, number>;
+  revenueByHour: Record<number, number>;
+}
+
+export interface WaitlistMetrics {
+  total: number;
+  seated: number;
+  cancelled: number;
+  noShows: number;
+  conversionRate: number;
+  avgWaitTime: number;
+  estimatedVsActual: number;
+}
+
+export interface CustomerHealthMetrics {
+  healthy: number;
+  atRisk: number;
+  critical: number;
+  totalLifetimeValue: number;
+  avgLifetimeValue: number;
+}
+
+export interface OperationalMetrics {
+  tableUtilization: number;
+  walkInRate: number;
+  avgTurnTime: number;
+  seatingEfficiency: number;
+}
+
+export interface PainPoint {
+  type: "warning" | "danger" | "info" | "success";
+  category: string;
+  title: string;
+  description: string;
+  recommendation: string;
+  severity: number; // 1-10
+}
+
+export interface TablePerformance {
+  tableId: string;
+  tableName: string;
+  capacity: number;
+  reservations: number;
+  revenue: number;
+  completionRate: number;
+  avgPartySize: number;
+  utilizationPct: number;
+}
+
+export interface SatisfactionMetrics {
+  avgRating: number;
+  totalReviews: number;
+  ratingDistribution: Record<number, number>;
+  npsScore: number; // Net Promoter Score
+}
+
+export interface TrendAnalysis {
+  direction: "up" | "down" | "stable";
+  percentage: number;
+  period: string;
+  insight: string;
+}
