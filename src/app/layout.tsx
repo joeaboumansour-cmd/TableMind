@@ -55,15 +55,39 @@ export default function RootLayout({
         <script
           dangerouslySetInnerHTML={{
             __html: `
+              // Register service worker for PWA functionality
               if ('serviceWorker' in navigator) {
                 window.addEventListener('load', function() {
-                  navigator.serviceWorker.register('/sw.js')
+                  navigator.serviceWorker.register('/sw.js', { scope: '/' })
                     .then(function(registration) {
                       console.log('ServiceWorker registration successful with scope: ', registration.scope);
-                    }, function(err) {
+                      
+                      // Check for updates on page load
+                      registration.update();
+                      
+                      // Handle updates
+                      registration.addEventListener('updatefound', function() {
+                        const newWorker = registration.installing;
+                        if (newWorker) {
+                          newWorker.addEventListener('statechange', function() {
+                            if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                              // New content is available, notify user
+                              console.log('New content is available; please refresh.');
+                            }
+                          });
+                        }
+                      });
+                    })
+                    .catch(function(err) {
                       console.log('ServiceWorker registration failed: ', err);
                     });
                 });
+              }
+              
+              // Prevent Chrome from showing the URL bar
+              if (window.matchMedia('(display-mode: standalone)').matches) {
+                // App is running in standalone mode
+                console.log('App is running in standalone mode');
               }
             `,
           }}

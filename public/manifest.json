@@ -9,6 +9,7 @@
   "orientation": "portrait",
   "scope": "/",
   "lang": "en",
+  "dir": "ltr",
   "categories": ["business", "food"],
   "icons": [
     {

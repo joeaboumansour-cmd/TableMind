@@ -64,7 +64,10 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
             video: { 
               facingMode: { exact: 'environment' }, // Force back camera on mobile
               width: { ideal: 1280 },
-              height: { ideal: 720 }
+              height: { ideal: 720 },
+              focusMode: 'continuous',
+              exposureMode: 'continuous',
+              whiteBalanceMode: 'continuous'
             } 
           });
           
