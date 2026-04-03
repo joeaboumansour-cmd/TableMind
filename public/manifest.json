@@ -3,7 +3,7 @@
   "short_name": "Golden Squirrel",
   "description": "Mobile Point of Sale for Golden Squirrel",
   "start_url": "/pos",
-  "display": "standalone",
+  "display": "fullscreen",
   "background_color": "#0a0a0a",
   "theme_color": "#f59e0b",
   "orientation": "portrait",

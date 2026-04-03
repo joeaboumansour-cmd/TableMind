@@ -22,6 +22,22 @@ export const metadata: Metadata = {
     capable: true,
     statusBarStyle: "black-translucent",
     title: "Golden Squirrel",
+    startupImage: [
+      {
+        url: '/icons/icon-512x512.png',
+        media: '(device-width: 320px) and (device-height: 568px) and (-webkit-device-pixel-ratio: 2)',
+      },
+    ],
+  },
+  other: {
+    'mobile-web-app-capable': 'yes',
+    'apple-mobile-web-app-capable': 'yes',
+    'apple-mobile-web-app-status-bar-style': 'black-translucent',
+    'apple-mobile-web-app-title': 'Golden Squirrel',
+    'application-name': 'Golden Squirrel',
+    'msapplication-TileColor': '#f59e0b',
+    'msapplication-tap-highlight': 'no',
+    'format-detection': 'telephone=no',
   },
 };
 

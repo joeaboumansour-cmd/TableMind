@@ -99,8 +99,28 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
           return;
         }
 
-        // Use the first available camera (prefer back camera on mobile)
-        const selectedDeviceId = videoInputDevices[0].deviceId;
+        // Find the back camera (environment facing)
+        let selectedDeviceId = videoInputDevices[0].deviceId;
+        
+        // Look for a camera with "back" or "rear" in the label, or one that's not the front camera
+        for (const device of videoInputDevices) {
+          const label = device.label.toLowerCase();
+          if (label.includes('back') || label.includes('rear') || label.includes('environment')) {
+            selectedDeviceId = device.deviceId;
+            break;
+          }
+        }
+        
+        // If we still have the first device and there are multiple cameras, try to find one that's not front-facing
+        if (selectedDeviceId === videoInputDevices[0].deviceId && videoInputDevices.length > 1) {
+          for (const device of videoInputDevices) {
+            const label = device.label.toLowerCase();
+            if (!label.includes('front') && !label.includes('user') && !label.includes('selfie')) {
+              selectedDeviceId = device.deviceId;
+              break;
+            }
+          }
+        }
 
         // Wait for video element to be ready with valid dimensions
         await new Promise<void>((resolve) => {
