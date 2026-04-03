@@ -7,12 +7,12 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Utensils, Loader2, Eye, EyeOff, AlertTriangle } from "lucide-react";
+import { Loader2, Eye, EyeOff, Shield } from "lucide-react";
 import { toast } from "sonner";
 
 const supabase = createClient();
 
-export default function LoginPage() {
+export default function AdminLoginPage() {
   const router = useRouter();
   const [isLoading, setIsLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
@@ -24,49 +24,35 @@ export default function LoginPage() {
     setIsLoading(true);
 
     try {
-      // Fetch store by username
-      const { data: store, error: fetchError } = await supabase
-        .from("stores")
-        .select("*")
-        .eq("username", username)
-        .single();
+      // Call the admin login API
+      const response = await fetch("/api/admin/login", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ username, password }),
+      });
 
-      if (fetchError || !store) {
-        toast.error("Invalid username or password");
+      const data = await response.json();
+
+      if (!response.ok) {
+        toast.error(data.error || "Invalid username or password");
         return;
       }
 
-      // Check license expiration
-      const licenseExpires = new Date(store.license_expires_at);
-      const now = new Date();
-      
-      if (licenseExpires < now) {
-        toast.error("Your license has expired. Please contact support to renew.");
-        return;
-      }
-
-      // Verify password (in production, use proper bcrypt comparison)
-      const isValidPassword = store.password_hash === password;
-      
-      if (!isValidPassword) {
-        toast.error("Invalid username or password");
-        return;
-      }
-
-      // Store auth data in localStorage
-      const authData = {
-        store_id: store.id,
-        username: store.username,
-        license_expires_at: store.license_expires_at,
+      // Store admin auth in localStorage
+      const adminAuth = {
+        admin_id: data.admin.id,
+        username: data.admin.username,
         timestamp: Date.now(),
       };
-      localStorage.setItem("goldensquirrel_auth", JSON.stringify(authData));
+      localStorage.setItem("goldensquirrel_admin", JSON.stringify(adminAuth));
 
-      toast.success(`Welcome!`);
+      toast.success("Welcome back, Admin!");
       
-      // Redirect to POS
+      // Redirect to admin panel
       setTimeout(() => {
-        window.location.href = "/pos";
+        window.location.href = "/admin";
       }, 100);
     } catch (error) {
       console.error("Login error:", error);
@@ -81,54 +67,19 @@ export default function LoginPage() {
       {/* Logo */}
       <div className="mb-8 flex items-center gap-3">
         <div className="h-12 w-12 rounded-xl bg-amber-500 flex items-center justify-center shadow-lg">
-          <svg viewBox="0 0 32 32" className="h-7 w-7 text-white" fill="currentColor">
-            {/* Side Profile Squirrel */}
-            {/* Body */}
-            <ellipse cx="18" cy="22" rx="6" ry="7" />
-            {/* Head */}
-            <circle cx="24" cy="14" r="5" />
-            {/* Snout */}
-            <ellipse cx="28" cy="15" rx="3" ry="2.5" />
-            {/* Ear */}
-            <path d="M22 10 L24 6 L26 10 Z" />
-            {/* Eye */}
-            <circle cx="25" cy="13" r="1.2" fill="#FEF3C7" />
-            {/* Front paws */}
-            <ellipse cx="22" cy="20" rx="2" ry="3" />
-            {/* Hind leg */}
-            <ellipse cx="14" cy="24" rx="2.5" ry="4" />
-            {/* Big curly tail */}
-            <path d="M12 20 
-                     C 8 18, 6 14, 6 10 
-                     C 6 4, 10 2, 14 4 
-                     C 17 5, 18 8, 16 10 
-                     C 14 12, 11 10, 12 8 
-                     C 12 6, 14 6, 15 7
-                     C 16 8, 16 10, 14 12
-                     C 12 14, 10 16, 12 20 Z" />
-            {/* Tail inner highlight */}
-            <path d="M10 14 
-                     C 9 12, 9 8, 11 6 
-                     C 13 5, 14 6, 13 8 
-                     C 12 9, 11 8, 11 7" 
-                  fill="none" 
-                  stroke="white" 
-                  strokeWidth="1.5"
-                  opacity="0.6"
-                  strokeLinecap="round"/>
-          </svg>
+          <Shield className="h-7 w-7 text-white" />
         </div>
         <div>
           <h1 className="text-3xl font-bold">GoldenSquirrel</h1>
-          <p className="text-muted-foreground">Point of Sale System</p>
+          <p className="text-muted-foreground">Admin Portal</p>
         </div>
       </div>
 
       <Card className="w-full max-w-md border-2">
         <CardHeader className="text-center">
-          <CardTitle className="text-2xl">Store Login</CardTitle>
+          <CardTitle className="text-2xl">Admin Login</CardTitle>
           <CardDescription>
-            Enter your store credentials to access the POS
+            Enter your admin credentials to access the management panel
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -138,7 +89,7 @@ export default function LoginPage() {
               <Input
                 id="username"
                 type="text"
-                placeholder="Enter your store username"
+                placeholder="Enter admin username"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
                 required
@@ -185,18 +136,6 @@ export default function LoginPage() {
               )}
             </Button>
           </form>
-
-          <div className="mt-6 p-4 bg-muted rounded-lg">
-            <div className="flex items-start gap-2">
-              <AlertTriangle className="h-4 w-4 text-amber-500 mt-0.5" />
-              <div className="text-sm text-muted-foreground">
-                <p className="font-medium">Store Account Required</p>
-                <p className="text-xs mt-1">
-                  Contact your system administrator if you need a store account or your license has expired.
-                </p>
-              </div>
-            </div>
-          </div>
         </CardContent>
       </Card>
 
