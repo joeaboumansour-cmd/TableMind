@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Camera, X, Scan } from "lucide-react";
+import { Camera, X, Scan, ZoomIn, ZoomOut } from "lucide-react";
 
 interface BarcodeScannerProps {
   onScan: (barcode: string) => void;
@@ -18,7 +18,12 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
   const [error, setError] = useState<string | null>(null);
   const [manualBarcode, setManualBarcode] = useState<string>("");
   const [lastScannedCode, setLastScannedCode] = useState<string | null>(null);
+  const [currentZoom, setCurrentZoom] = useState<number>(1);
+  const [maxZoom, setMaxZoom] = useState<number>(1);
+  const [minZoom, setMinZoom] = useState<number>(1);
+  const [zoomSupported, setZoomSupported] = useState<boolean>(false);
   const audioContextRef = useRef<AudioContext | null>(null);
+  const videoTrackRef = useRef<MediaStreamTrack | null>(null);
 
   // Create beep sound
   const playBeepSound = useCallback(() => {
@@ -46,6 +51,36 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
       console.log("Could not play beep sound:", err);
     }
   }, []);
+
+  // Apply zoom to camera
+  const applyZoom = useCallback(async (zoomLevel: number) => {
+    if (!videoTrackRef.current || !zoomSupported) return;
+    
+    try {
+      const capabilities = videoTrackRef.current.getCapabilities() as any;
+      if (capabilities.zoom) {
+        const clampedZoom = Math.max(capabilities.zoom.min, Math.min(zoomLevel, capabilities.zoom.max));
+        await videoTrackRef.current.applyConstraints({
+          advanced: [{ zoom: clampedZoom } as any]
+        });
+        setCurrentZoom(clampedZoom);
+        console.log(`Zoom applied: ${clampedZoom}x`);
+      }
+    } catch (err) {
+      console.error("Error applying zoom:", err);
+    }
+  }, [zoomSupported]);
+
+  // Zoom controls
+  const zoomIn = useCallback(() => {
+    const newZoom = Math.min(currentZoom + 0.5, maxZoom);
+    applyZoom(newZoom);
+  }, [currentZoom, maxZoom, applyZoom]);
+
+  const zoomOut = useCallback(() => {
+    const newZoom = Math.max(currentZoom - 0.5, minZoom);
+    applyZoom(newZoom);
+  }, [currentZoom, minZoom, applyZoom]);
 
   // Handle barcode detection
   const handleBarcodeDetected = useCallback((barcode: string) => {
@@ -115,6 +150,34 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
         if (isMounted) {
           setIsScanning(true);
           console.log("Barcode scanner started successfully");
+          
+          // Get video track for zoom control
+          try {
+            const videoElement = document.querySelector("#barcode-scanner video") as HTMLVideoElement;
+            if (videoElement && videoElement.srcObject) {
+              const stream = videoElement.srcObject as MediaStream;
+              const videoTrack = stream.getVideoTracks()[0];
+              if (videoTrack) {
+                videoTrackRef.current = videoTrack;
+                const capabilities = videoTrack.getCapabilities() as any;
+                console.log("Camera capabilities:", capabilities);
+                
+                if (capabilities.zoom) {
+                  setZoomSupported(true);
+                  setMinZoom(capabilities.zoom.min);
+                  setMaxZoom(capabilities.zoom.max);
+                  setCurrentZoom(capabilities.zoom.min);
+                  console.log(`Zoom supported: ${capabilities.zoom.min}x to ${capabilities.zoom.max}x`);
+                } else {
+                  console.log("Zoom not supported on this camera");
+                  setZoomSupported(false);
+                }
+              }
+            }
+          } catch (zoomErr) {
+            console.log("Could not initialize zoom controls:", zoomErr);
+            setZoomSupported(false);
+          }
         }
       } catch (err: any) {
         if (!isMounted) return;
@@ -179,6 +242,29 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
                 <div className="absolute top-4 right-4 w-8 h-8 border-t-4 border-r-4 border-amber-500 rounded-tr-lg" />
                 <div className="absolute bottom-4 left-4 w-8 h-8 border-b-4 border-l-4 border-amber-500 rounded-bl-lg" />
                 <div className="absolute bottom-4 right-4 w-8 h-8 border-b-4 border-r-4 border-amber-500 rounded-br-lg" />
+                
+                {/* Zoom controls */}
+                {zoomSupported && (
+                  <div className="absolute top-4 left-1/2 transform -translate-x-1/2 pointer-events-auto flex items-center gap-2 bg-black/60 rounded-full px-3 py-2">
+                    <button
+                      onClick={zoomOut}
+                      disabled={currentZoom <= minZoom}
+                      className="p-1 rounded-full text-white hover:bg-white/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <ZoomOut className="h-4 w-4" />
+                    </button>
+                    <span className="text-white text-sm font-medium min-w-[3rem] text-center">
+                      {currentZoom.toFixed(1)}x
+                    </span>
+                    <button
+                      onClick={zoomIn}
+                      disabled={currentZoom >= maxZoom}
+                      className="p-1 rounded-full text-white hover:bg-white/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <ZoomIn className="h-4 w-4" />
+                    </button>
+                  </div>
+                )}
                 
                 {/* Status text */}
                 <div className="absolute bottom-4 inset-x-0 flex justify-center pointer-events-auto">
