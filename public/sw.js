@@ -26,24 +26,36 @@ self.addEventListener('activate', (event) => {
 
 // 3. Fetch Event
 self.addEventListener('fetch', (event) => {
+  console.log('SW: Fetch event triggered for:', event.request.url);
   event.respondWith(
     caches.match(event.request).then((response) => {
-      if (response) return response;
+      if (response) {
+        console.log('SW: Found response in cache for:', event.request.url);
+        return response;
+      }
 
+      console.log('SW: Fetching from network for:', event.request.url);
       return fetch(event.request)
         .then((networkResponse) => {
           if (!networkResponse || networkResponse.status !== 200 || networkResponse.type !== 'basic') {
+            console.log('SW: Network response not cacheable for:', event.request.url);
             return networkResponse;
           }
+
+          console.log('SW: Caching network response for:', event.request.url);
           const responseToCache = networkResponse.clone();
           caches.open(CACHE_NAME).then((cache) => {
             cache.put(event.request, responseToCache);
           });
           return networkResponse;
         })
-        .catch(() => {
+        .catch((error) => {
+          console.error('SW: Network fetch failed for:', event.request.url, 'Error:', error);
           // Return a basic response instead of crashing
-          return new Response("Offline content not available");
+          return new Response("Offline content not available", {
+            status: 503,
+            statusText: 'Service Unavailable'
+          });
         });
     })
   );
