@@ -1,29 +1,35 @@
 const CACHE_NAME = 'golden-squirrel-v1';
-// Only cache the bare essentials. Don't cache '/' if you're using Next.js 
-// dynamic routes as it can cause hydration errors.
 const urlsToCache = [
   '/manifest.json',
   '/icons/icon-192x192.png',
   '/icons/icon-512x512.png'
 ];
 
+// 1. Merged Install Event
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
-      // Use addAll but catch errors so one missing icon doesn't kill the SW
-      return cache.addAll(urlsToCache).catch(err => console.warn("Caching failed during install:", err));
+      console.log('SW: Pre-caching essentials');
+      return cache.addAll(urlsToCache).catch(err => console.warn("Caching failed:", err));
     })
   );
+  // Force the waiting service worker to become the active one immediately
   self.skipWaiting();
 });
 
+// 2. Activate Event
+self.addEventListener('activate', (event) => {
+  // Take control of all open tabs immediately
+  event.waitUntil(clients.claim());
+  console.log('SW: Activated and claiming clients');
+});
+
+// 3. Fetch Event
 self.addEventListener('fetch', (event) => {
   event.respondWith(
     caches.match(event.request).then((response) => {
-      // 1. Return cached version if it exists
       if (response) return response;
 
-      // 2. Otherwise, try the network
       return fetch(event.request)
         .then((networkResponse) => {
           if (!networkResponse || networkResponse.status !== 200 || networkResponse.type !== 'basic') {
@@ -36,7 +42,7 @@ self.addEventListener('fetch', (event) => {
           return networkResponse;
         })
         .catch(() => {
-          // 3. Fallback: This prevents the 'NetworkError' crash
+          // Return a basic response instead of crashing
           return new Response("Offline content not available");
         });
     })
