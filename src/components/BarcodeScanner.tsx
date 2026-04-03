@@ -1,11 +1,10 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
-import { Html5Qrcode } from "html5-qrcode";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Camera, X, Scan, Zap } from "lucide-react";
+import { Camera, X, Scan } from "lucide-react";
 
 interface BarcodeScannerProps {
   onScan: (barcode: string) => void;
@@ -14,21 +13,15 @@ interface BarcodeScannerProps {
 }
 
 export default function BarcodeScanner({ onScan, onClose, isActive = true }: BarcodeScannerProps) {
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const scannerRef = useRef<Html5Qrcode | null>(null);
+  const scannerRef = useRef<any>(null);
   const [isScanning, setIsScanning] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [lastScannedCode, setLastScannedCode] = useState<string | null>(null);
   const [manualBarcode, setManualBarcode] = useState<string>("");
-  const [torchEnabled, setTorchEnabled] = useState(false);
+  const [lastScannedCode, setLastScannedCode] = useState<string | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
-  const scannerContainerId = "barcode-scanner-container";
-  const animationFrameRef = useRef<number | null>(null);
-  const barcodeDetectorRef = useRef<any>(null);
-  const streamRef = useRef<MediaStream | null>(null);
 
   // Create beep sound
-  const playBeepSound = () => {
+  const playBeepSound = useCallback(() => {
     try {
       if (!audioContextRef.current) {
         audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
@@ -52,7 +45,7 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
     } catch (err) {
       console.log("Could not play beep sound:", err);
     }
-  };
+  }, []);
 
   // Handle barcode detection
   const handleBarcodeDetected = useCallback((barcode: string) => {
@@ -65,196 +58,105 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
         setLastScannedCode(null);
       }, 2000);
     }
-  }, [lastScannedCode, onScan]);
-
-  // Toggle torch/flash
-  const toggleTorch = useCallback(async () => {
-    if (!streamRef.current) return;
-    
-    try {
-      const track = streamRef.current.getVideoTracks()[0];
-      const capabilities = track.getCapabilities() as any;
-      
-      if (capabilities.torch) {
-        await track.applyConstraints({
-          advanced: [{ torch: !torchEnabled } as any]
-        });
-        setTorchEnabled(!torchEnabled);
-      }
-    } catch (err) {
-      console.log("Torch not supported:", err);
-    }
-  }, [torchEnabled]);
-
-  // Handle tap to focus
-  const handleTapToFocus = useCallback(async (e: React.TouchEvent | React.MouseEvent) => {
-    if (!streamRef.current || !videoRef.current) return;
-    
-    try {
-      const track = streamRef.current.getVideoTracks()[0];
-      const capabilities = track.getCapabilities() as any;
-      
-      if (capabilities.focusMode) {
-        // Get tap position relative to video
-        const rect = videoRef.current.getBoundingClientRect();
-        const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
-        const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
-        
-        // Trigger focus
-        await track.applyConstraints({
-          advanced: [{ focusMode: 'single-shot' } as any]
-        });
-        
-        // Return to continuous focus after a delay
-        setTimeout(async () => {
-          try {
-            await track.applyConstraints({
-              advanced: [{ focusMode: 'continuous' } as any]
-            });
-          } catch (err) {
-            console.log("Error returning to continuous focus:", err);
-          }
-        }, 1000);
-      }
-    } catch (err) {
-      console.log("Tap to focus not supported:", err);
-    }
-  }, []);
-
-  // Native BarcodeDetector scanning loop
-  const scanWithNativeDetector = useCallback(async () => {
-    if (!barcodeDetectorRef.current || !videoRef.current) return;
-    
-    try {
-      const barcodes = await barcodeDetectorRef.current.detect(videoRef.current);
-      if (barcodes.length > 0) {
-        handleBarcodeDetected(barcodes[0].rawValue);
-      }
-    } catch (err) {
-      // Ignore detection errors
-    }
-    
-    if (isScanning) {
-      animationFrameRef.current = requestAnimationFrame(scanWithNativeDetector);
-    }
-  }, [isScanning, handleBarcodeDetected]);
+  }, [lastScannedCode, onScan, playBeepSound]);
 
   useEffect(() => {
     if (!isActive) return;
 
-    const startScanning = async () => {
+    let isMounted = true;
+
+    const startScanner = async () => {
       try {
+        if (!isMounted) return;
         setError(null);
-        setIsScanning(true);
+        setIsScanning(false);
 
-        // Check for native BarcodeDetector support
-        const hasNativeSupport = 'BarcodeDetector' in window;
+        // Dynamically import html5-qrcode
+        const { Html5Qrcode } = await import("html5-qrcode");
         
-        // Request camera with advanced constraints for mobile
-        const constraints: MediaStreamConstraints = {
-          video: {
-            facingMode: 'environment',
-            width: { ideal: 1920, min: 640 },
-            height: { ideal: 1080, min: 480 },
-            frameRate: { ideal: 30, min: 15 },
-            // Advanced constraints for better mobile performance
-            ...(hasNativeSupport && {
-              advanced: [
-                { focusMode: 'continuous' },
-                { focusDistance: { min: 0, ideal: 0.15, max: 0.5 } },
-                { exposureMode: 'continuous' },
-                { whiteBalanceMode: 'continuous' },
-              ] as any
-            })
-          }
+        if (!isMounted) return;
+
+        // Create scanner instance
+        const scanner = new Html5Qrcode("barcode-scanner");
+        scannerRef.current = scanner;
+
+        const config = {
+          fps: 10,
+          qrbox: { width: 250, height: 150 },
+          aspectRatio: 1.0,
+          disableFlip: false,
+          formatsToSupport: [
+            0,  // QR_CODE
+            1,  // DATA_MATRIX
+            2,  // UPC_A
+            3,  // UPC_E
+            4,  // EAN_8
+            5,  // EAN_13
+            6,  // CODE_39
+            7,  // CODE_93
+            8,  // CODE_128
+            10, // ITF
+            14, // PDF_417
+          ] as any,
         };
-        
-        const stream = await navigator.mediaDevices.getUserMedia(constraints);
-        streamRef.current = stream;
-        
-        if (hasNativeSupport) {
-          console.log("Using native BarcodeDetector API");
-          
-          // Create BarcodeDetector instance
-          const formats = ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'code_39', 'code_93', 'qr_code', 'data_matrix', 'itf'];
-          barcodeDetectorRef.current = new (window as any).BarcodeDetector({ formats });
-          
-          if (videoRef.current) {
-            videoRef.current.srcObject = stream;
-            await videoRef.current.play();
-            
-            // Start native scanning loop
-            animationFrameRef.current = requestAnimationFrame(scanWithNativeDetector);
-          }
-        } else {
-          console.log("Native BarcodeDetector not supported, using html5-qrcode");
-          
-          // Fallback to html5-qrcode
-          const html5QrcodeScanner = new Html5Qrcode(scannerContainerId);
-          scannerRef.current = html5QrcodeScanner;
 
-          await html5QrcodeScanner.start(
-            { facingMode: "environment" },
-            {
-              fps: 30,
-              qrbox: { width: 350, height: 200 },
-              aspectRatio: 1.777778,
-              disableFlip: false,
-            },
-            (decodedText) => {
-              handleBarcodeDetected(decodedText);
-            },
-            (errorMessage) => {
-              if (!errorMessage.includes("NotFoundException")) {
-                console.log("Scan error:", errorMessage);
-              }
-            }
-          );
+        // Start scanning with camera
+        await scanner.start(
+          { facingMode: "environment" },
+          config,
+          (decodedText: string) => {
+            handleBarcodeDetected(decodedText);
+          },
+          (errorMessage: string) => {
+            // Ignore scanning errors - they happen frequently during normal operation
+          }
+        );
+
+        if (isMounted) {
+          setIsScanning(true);
+          console.log("Barcode scanner started successfully");
         }
       } catch (err: any) {
+        if (!isMounted) return;
         console.error("Error starting barcode scanner:", err);
-        if (err.name === "NotAllowedError") {
-          setError("Camera permission denied. Please allow camera access in your browser settings and refresh the page.");
-        } else if (err.name === "NotFoundError") {
-          setError("No camera found. Please connect a camera and refresh the page.");
-        } else if (err.name === "NotReadableError") {
-          setError("Camera is in use by another application. Please close other apps using the camera and try again.");
+        
+        if (err.message?.includes("Permission denied") || err.name === "NotAllowedError") {
+          setError("Camera permission denied. Please allow camera access and refresh.");
+        } else if (err.message?.includes("No camera") || err.name === "NotFoundError") {
+          setError("No camera found. Please connect a camera and refresh.");
+        } else if (err.message?.includes("in use") || err.name === "NotReadableError") {
+          setError("Camera is in use by another application. Please close other apps using the camera.");
         } else {
-          setError("Unable to access camera. Please check your browser permissions.");
+          setError(`Unable to start scanner: ${err.message || "Unknown error"}. Please try manual entry.`);
         }
         setIsScanning(false);
       }
     };
 
-    const timer = setTimeout(() => {
-      startScanning();
-    }, 100);
+    const timer = setTimeout(startScanner, 100);
 
     // Cleanup
     return () => {
+      isMounted = false;
       clearTimeout(timer);
       
-      if (animationFrameRef.current) {
-        cancelAnimationFrame(animationFrameRef.current);
-      }
-      
-      if (scannerRef.current && scannerRef.current.isScanning) {
-        scannerRef.current.stop().catch((err) => {
-          console.log("Error stopping scanner:", err);
-        });
-      }
-      
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach(track => track.stop());
-        streamRef.current = null;
+      if (scannerRef.current) {
+        try {
+          scannerRef.current.stop().catch(() => {
+            // Ignore errors during cleanup
+          });
+        } catch (err) {
+          // Ignore errors during cleanup
+        }
+        scannerRef.current = null;
       }
       
       if (audioContextRef.current) {
-        audioContextRef.current.close();
+        audioContextRef.current.close().catch(() => {});
         audioContextRef.current = null;
       }
     };
-  }, [isActive, onScan, handleBarcodeDetected, scanWithNativeDetector]);
+  }, [isActive, handleBarcodeDetected]);
 
   if (!isActive) {
     return null;
@@ -266,24 +168,8 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
         <div className="relative">
           {/* Scanner Container */}
           <div className="relative bg-black rounded-lg overflow-hidden">
-            {/* Native BarcodeDetector uses video element */}
-            <video
-              ref={videoRef}
-              className="w-full h-auto"
-              autoPlay
-              playsInline
-              muted
-              onClick={handleTapToFocus}
-              onTouchStart={handleTapToFocus}
-              style={{ display: barcodeDetectorRef.current ? 'block' : 'none' }}
-            />
-            
-            {/* html5-qrcode container (hidden when using native) */}
-            <div 
-              id={scannerContainerId} 
-              className="w-full"
-              style={{ display: barcodeDetectorRef.current ? 'none' : 'block' }}
-            />
+            {/* Scanner element */}
+            <div id="barcode-scanner" className="w-full" style={{ minHeight: "300px" }} />
             
             {/* Scanning Overlay */}
             {isScanning && !error && (
@@ -298,22 +184,10 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
                 <div className="absolute bottom-4 inset-x-0 flex justify-center pointer-events-auto">
                   <div className="bg-black/60 px-4 py-2 rounded-full text-white text-sm flex items-center gap-2">
                     <Scan className="h-4 w-4" />
-                    Tap to focus • Point barcode here
+                    Point barcode here
                   </div>
                 </div>
               </div>
-            )}
-
-            {/* Torch button */}
-            {isScanning && !error && streamRef.current && (
-              <button
-                onClick={toggleTorch}
-                className={`absolute top-4 right-4 p-2 rounded-full pointer-events-auto ${
-                  torchEnabled ? 'bg-amber-500 text-black' : 'bg-black/60 text-white'
-                }`}
-              >
-                <Zap className="h-5 w-5" />
-              </button>
             )}
 
             {/* Error state */}
@@ -321,11 +195,10 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
               <div className="absolute inset-0 flex items-center justify-center bg-black/80">
                 <div className="text-center text-white p-4">
                   <Camera className="h-12 w-12 mx-auto mb-4 opacity-50" />
-                  <p className="text-sm">{error}</p>
+                  <p className="text-sm mb-4">{error}</p>
                   <Button 
                     variant="outline" 
                     size="sm" 
-                    className="mt-4"
                     onClick={() => window.location.reload()}
                   >
                     Retry
@@ -348,7 +221,7 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
           {/* Manual barcode entry */}
           <div className="mt-2 flex gap-2">
             <Input
-              placeholder="Enter barcode..."
+              placeholder="Enter barcode manually..."
               value={manualBarcode}
               onChange={(e) => setManualBarcode(e.target.value)}
               onKeyDown={(e) => {
@@ -377,6 +250,18 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
               Add
             </Button>
           </div>
+
+          {/* Close button */}
+          {onClose && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="absolute top-2 right-2 z-10"
+              onClick={onClose}
+            >
+              <X className="h-4 w-4" />
+            </Button>
+          )}
         </div>
       </CardContent>
     </Card>
