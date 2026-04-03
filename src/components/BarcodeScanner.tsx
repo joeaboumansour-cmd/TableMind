@@ -61,14 +61,23 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
         const html5QrcodeScanner = new Html5Qrcode(scannerContainerId);
         scannerRef.current = html5QrcodeScanner;
 
-        // Start scanning with optimized settings
+        // Start scanning with optimized settings for real-world objects
         await html5QrcodeScanner.start(
-          { facingMode: "environment" },
+          { 
+            facingMode: "environment",
+            width: { ideal: 1920 },
+            height: { ideal: 1080 },
+          },
           {
-            fps: 15,
-            qrbox: { width: 250, height: 150 },
+            fps: 30,
+            qrbox: { width: 350, height: 200 },
             aspectRatio: 1.777778,
             disableFlip: false,
+            videoConstraints: {
+              facingMode: "environment",
+              width: { ideal: 1920 },
+              height: { ideal: 1080 },
+            },
           },
           (decodedText, decodedResult) => {
             // Avoid duplicate scans
