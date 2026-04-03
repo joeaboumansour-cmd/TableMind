@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { Html5Qrcode } from "html5-qrcode";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -14,6 +14,7 @@ interface BarcodeScannerProps {
 }
 
 export default function BarcodeScanner({ onScan, onClose, isActive = true }: BarcodeScannerProps) {
+  const videoRef = useRef<HTMLVideoElement>(null);
   const scannerRef = useRef<Html5Qrcode | null>(null);
   const [isScanning, setIsScanning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -21,6 +22,8 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
   const [manualBarcode, setManualBarcode] = useState<string>("");
   const audioContextRef = useRef<AudioContext | null>(null);
   const scannerContainerId = "barcode-scanner-container";
+  const animationFrameRef = useRef<number | null>(null);
+  const barcodeDetectorRef = useRef<any>(null);
 
   // Create beep sound
   const playBeepSound = () => {
@@ -49,6 +52,37 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
     }
   };
 
+  // Handle barcode detection
+  const handleBarcodeDetected = useCallback((barcode: string) => {
+    if (barcode !== lastScannedCode) {
+      setLastScannedCode(barcode);
+      playBeepSound();
+      onScan(barcode);
+      
+      setTimeout(() => {
+        setLastScannedCode(null);
+      }, 2000);
+    }
+  }, [lastScannedCode, onScan]);
+
+  // Native BarcodeDetector scanning loop
+  const scanWithNativeDetector = useCallback(async () => {
+    if (!barcodeDetectorRef.current || !videoRef.current) return;
+    
+    try {
+      const barcodes = await barcodeDetectorRef.current.detect(videoRef.current);
+      if (barcodes.length > 0) {
+        handleBarcodeDetected(barcodes[0].rawValue);
+      }
+    } catch (err) {
+      // Ignore detection errors
+    }
+    
+    if (isScanning) {
+      animationFrameRef.current = requestAnimationFrame(scanWithNativeDetector);
+    }
+  }, [isScanning, handleBarcodeDetected]);
+
   useEffect(() => {
     if (!isActive) return;
 
@@ -57,48 +91,66 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
         setError(null);
         setIsScanning(true);
 
-        // Create scanner instance
-        const html5QrcodeScanner = new Html5Qrcode(scannerContainerId);
-        scannerRef.current = html5QrcodeScanner;
+        // Check for native BarcodeDetector support
+        const hasNativeSupport = 'BarcodeDetector' in window;
+        
+        if (hasNativeSupport) {
+          console.log("Using native BarcodeDetector API");
+          
+          // Create BarcodeDetector instance
+          const formats = ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'code_39', 'code_93', 'qr_code', 'data_matrix', 'itf'];
+          barcodeDetectorRef.current = new (window as any).BarcodeDetector({ formats });
+          
+          // Get camera stream
+          const stream = await navigator.mediaDevices.getUserMedia({
+            video: {
+              facingMode: 'environment',
+              width: { ideal: 1920 },
+              height: { ideal: 1080 },
+            }
+          });
+          
+          if (videoRef.current) {
+            videoRef.current.srcObject = stream;
+            await videoRef.current.play();
+            
+            // Start native scanning loop
+            animationFrameRef.current = requestAnimationFrame(scanWithNativeDetector);
+          }
+        } else {
+          console.log("Native BarcodeDetector not supported, using html5-qrcode");
+          
+          // Fallback to html5-qrcode
+          const html5QrcodeScanner = new Html5Qrcode(scannerContainerId);
+          scannerRef.current = html5QrcodeScanner;
 
-        // Start scanning with optimized settings for real-world objects
-        await html5QrcodeScanner.start(
-          { 
-            facingMode: "environment",
-            width: { ideal: 1920 },
-            height: { ideal: 1080 },
-          },
-          {
-            fps: 30,
-            qrbox: { width: 350, height: 200 },
-            aspectRatio: 1.777778,
-            disableFlip: false,
-            videoConstraints: {
+          await html5QrcodeScanner.start(
+            { 
               facingMode: "environment",
               width: { ideal: 1920 },
               height: { ideal: 1080 },
             },
-          },
-          (decodedText, decodedResult) => {
-            // Avoid duplicate scans
-            if (decodedText !== lastScannedCode) {
-              setLastScannedCode(decodedText);
-              playBeepSound();
-              onScan(decodedText);
-              
-              // Reset last scanned code after 2 seconds
-              setTimeout(() => {
-                setLastScannedCode(null);
-              }, 2000);
+            {
+              fps: 30,
+              qrbox: { width: 350, height: 200 },
+              aspectRatio: 1.777778,
+              disableFlip: false,
+              videoConstraints: {
+                facingMode: "environment",
+                width: { ideal: 1920 },
+                height: { ideal: 1080 },
+              },
+            },
+            (decodedText) => {
+              handleBarcodeDetected(decodedText);
+            },
+            (errorMessage) => {
+              if (!errorMessage.includes("NotFoundException")) {
+                console.log("Scan error:", errorMessage);
+              }
             }
-          },
-          (errorMessage) => {
-            // Ignore NotFoundException errors - normal when no barcode in frame
-            if (!errorMessage.includes("NotFoundException")) {
-              console.log("Scan error:", errorMessage);
-            }
-          }
-        );
+          );
+        }
       } catch (err: any) {
         console.error("Error starting barcode scanner:", err);
         if (err.name === "NotAllowedError") {
@@ -114,7 +166,6 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
       }
     };
 
-    // Small delay to ensure DOM element is ready
     const timer = setTimeout(() => {
       startScanning();
     }, 100);
@@ -122,17 +173,28 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
     // Cleanup
     return () => {
       clearTimeout(timer);
+      
+      if (animationFrameRef.current) {
+        cancelAnimationFrame(animationFrameRef.current);
+      }
+      
       if (scannerRef.current && scannerRef.current.isScanning) {
         scannerRef.current.stop().catch((err) => {
           console.log("Error stopping scanner:", err);
         });
       }
+      
+      if (videoRef.current && videoRef.current.srcObject) {
+        const stream = videoRef.current.srcObject as MediaStream;
+        stream.getTracks().forEach(track => track.stop());
+      }
+      
       if (audioContextRef.current) {
         audioContextRef.current.close();
         audioContextRef.current = null;
       }
     };
-  }, [isActive, onScan]);
+  }, [isActive, onScan, handleBarcodeDetected, scanWithNativeDetector]);
 
   if (!isActive) {
     return null;
@@ -144,7 +206,22 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
         <div className="relative">
           {/* Scanner Container */}
           <div className="relative bg-black rounded-lg overflow-hidden">
-            <div id={scannerContainerId} className="w-full" />
+            {/* Native BarcodeDetector uses video element */}
+            <video
+              ref={videoRef}
+              className="w-full h-auto"
+              autoPlay
+              playsInline
+              muted
+              style={{ display: barcodeDetectorRef.current ? 'block' : 'none' }}
+            />
+            
+            {/* html5-qrcode container (hidden when using native) */}
+            <div 
+              id={scannerContainerId} 
+              className="w-full"
+              style={{ display: barcodeDetectorRef.current ? 'none' : 'block' }}
+            />
             
             {/* Scanning Overlay */}
             {isScanning && !error && (
