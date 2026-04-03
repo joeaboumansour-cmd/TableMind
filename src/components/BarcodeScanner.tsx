@@ -63,11 +63,8 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
           videoStream = await navigator.mediaDevices.getUserMedia({ 
             video: { 
               facingMode: { exact: 'environment' }, // Force back camera on mobile
-              width: { ideal: 1280 },
-              height: { ideal: 720 },
-              focusMode: 'continuous',
-              exposureMode: 'continuous',
-              whiteBalanceMode: 'continuous'
+              width: { ideal: 1920 }, // Higher resolution for better detail
+              height: { ideal: 1080 }
             } 
           });
           
@@ -235,6 +232,7 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
             <video
               ref={videoRef}
               className="w-full h-full object-cover"
+              style={{ transform: 'scale(1.5)', transformOrigin: 'center center' }}
               autoPlay
               playsInline
               muted
