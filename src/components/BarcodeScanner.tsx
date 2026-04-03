@@ -5,7 +5,7 @@ import { Html5Qrcode } from "html5-qrcode";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Camera, X, Scan } from "lucide-react";
+import { Camera, X, Scan, Zap } from "lucide-react";
 
 interface BarcodeScannerProps {
   onScan: (barcode: string) => void;
@@ -20,10 +20,12 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
   const [error, setError] = useState<string | null>(null);
   const [lastScannedCode, setLastScannedCode] = useState<string | null>(null);
   const [manualBarcode, setManualBarcode] = useState<string>("");
+  const [torchEnabled, setTorchEnabled] = useState(false);
   const audioContextRef = useRef<AudioContext | null>(null);
   const scannerContainerId = "barcode-scanner-container";
   const animationFrameRef = useRef<number | null>(null);
   const barcodeDetectorRef = useRef<any>(null);
+  const streamRef = useRef<MediaStream | null>(null);
 
   // Create beep sound
   const playBeepSound = () => {
@@ -65,6 +67,60 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
     }
   }, [lastScannedCode, onScan]);
 
+  // Toggle torch/flash
+  const toggleTorch = useCallback(async () => {
+    if (!streamRef.current) return;
+    
+    try {
+      const track = streamRef.current.getVideoTracks()[0];
+      const capabilities = track.getCapabilities() as any;
+      
+      if (capabilities.torch) {
+        await track.applyConstraints({
+          advanced: [{ torch: !torchEnabled } as any]
+        });
+        setTorchEnabled(!torchEnabled);
+      }
+    } catch (err) {
+      console.log("Torch not supported:", err);
+    }
+  }, [torchEnabled]);
+
+  // Handle tap to focus
+  const handleTapToFocus = useCallback(async (e: React.TouchEvent | React.MouseEvent) => {
+    if (!streamRef.current || !videoRef.current) return;
+    
+    try {
+      const track = streamRef.current.getVideoTracks()[0];
+      const capabilities = track.getCapabilities() as any;
+      
+      if (capabilities.focusMode) {
+        // Get tap position relative to video
+        const rect = videoRef.current.getBoundingClientRect();
+        const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
+        const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY;
+        
+        // Trigger focus
+        await track.applyConstraints({
+          advanced: [{ focusMode: 'single-shot' } as any]
+        });
+        
+        // Return to continuous focus after a delay
+        setTimeout(async () => {
+          try {
+            await track.applyConstraints({
+              advanced: [{ focusMode: 'continuous' } as any]
+            });
+          } catch (err) {
+            console.log("Error returning to continuous focus:", err);
+          }
+        }, 1000);
+      }
+    } catch (err) {
+      console.log("Tap to focus not supported:", err);
+    }
+  }, []);
+
   // Native BarcodeDetector scanning loop
   const scanWithNativeDetector = useCallback(async () => {
     if (!barcodeDetectorRef.current || !videoRef.current) return;
@@ -94,21 +150,34 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
         // Check for native BarcodeDetector support
         const hasNativeSupport = 'BarcodeDetector' in window;
         
+        // Request camera with advanced constraints for mobile
+        const constraints: MediaStreamConstraints = {
+          video: {
+            facingMode: 'environment',
+            width: { ideal: 1920, min: 640 },
+            height: { ideal: 1080, min: 480 },
+            frameRate: { ideal: 30, min: 15 },
+            // Advanced constraints for better mobile performance
+            ...(hasNativeSupport && {
+              advanced: [
+                { focusMode: 'continuous' },
+                { focusDistance: { min: 0, ideal: 0.15, max: 0.5 } },
+                { exposureMode: 'continuous' },
+                { whiteBalanceMode: 'continuous' },
+              ] as any
+            })
+          }
+        };
+        
+        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        streamRef.current = stream;
+        
         if (hasNativeSupport) {
           console.log("Using native BarcodeDetector API");
           
           // Create BarcodeDetector instance
           const formats = ['ean_13', 'ean_8', 'upc_a', 'upc_e', 'code_128', 'code_39', 'code_93', 'qr_code', 'data_matrix', 'itf'];
           barcodeDetectorRef.current = new (window as any).BarcodeDetector({ formats });
-          
-          // Get camera stream
-          const stream = await navigator.mediaDevices.getUserMedia({
-            video: {
-              facingMode: 'environment',
-              width: { ideal: 1920 },
-              height: { ideal: 1080 },
-            }
-          });
           
           if (videoRef.current) {
             videoRef.current.srcObject = stream;
@@ -125,21 +194,12 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
           scannerRef.current = html5QrcodeScanner;
 
           await html5QrcodeScanner.start(
-            { 
-              facingMode: "environment",
-              width: { ideal: 1920 },
-              height: { ideal: 1080 },
-            },
+            { facingMode: "environment" },
             {
               fps: 30,
               qrbox: { width: 350, height: 200 },
               aspectRatio: 1.777778,
               disableFlip: false,
-              videoConstraints: {
-                facingMode: "environment",
-                width: { ideal: 1920 },
-                height: { ideal: 1080 },
-              },
             },
             (decodedText) => {
               handleBarcodeDetected(decodedText);
@@ -184,9 +244,9 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
         });
       }
       
-      if (videoRef.current && videoRef.current.srcObject) {
-        const stream = videoRef.current.srcObject as MediaStream;
-        stream.getTracks().forEach(track => track.stop());
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => track.stop());
+        streamRef.current = null;
       }
       
       if (audioContextRef.current) {
@@ -213,6 +273,8 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
               autoPlay
               playsInline
               muted
+              onClick={handleTapToFocus}
+              onTouchStart={handleTapToFocus}
               style={{ display: barcodeDetectorRef.current ? 'block' : 'none' }}
             />
             
@@ -233,13 +295,25 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
                 <div className="absolute bottom-4 right-4 w-8 h-8 border-b-4 border-r-4 border-amber-500 rounded-br-lg" />
                 
                 {/* Status text */}
-                <div className="absolute bottom-4 inset-x-0 flex justify-center">
+                <div className="absolute bottom-4 inset-x-0 flex justify-center pointer-events-auto">
                   <div className="bg-black/60 px-4 py-2 rounded-full text-white text-sm flex items-center gap-2">
                     <Scan className="h-4 w-4" />
-                    Point barcode here
+                    Tap to focus • Point barcode here
                   </div>
                 </div>
               </div>
+            )}
+
+            {/* Torch button */}
+            {isScanning && !error && streamRef.current && (
+              <button
+                onClick={toggleTorch}
+                className={`absolute top-4 right-4 p-2 rounded-full pointer-events-auto ${
+                  torchEnabled ? 'bg-amber-500 text-black' : 'bg-black/60 text-white'
+                }`}
+              >
+                <Zap className="h-5 w-5" />
+              </button>
             )}
 
             {/* Error state */}
