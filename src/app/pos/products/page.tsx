@@ -118,7 +118,7 @@ export default function StoreProductsPage() {
       
       // Update selected product if it exists in the new data
       if (selectedProduct && data) {
-        const updatedProduct = data.find(p => p.id === selectedProduct.id);
+        const updatedProduct = data.find((p: Product) => p.id === selectedProduct.id);
         if (updatedProduct) {
           setSelectedProduct(updatedProduct);
         }

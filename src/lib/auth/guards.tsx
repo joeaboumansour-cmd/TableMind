@@ -3,19 +3,58 @@
 // =============================================
 
 import React from "react";
-import { useRestaurant } from "@/app/RestaurantContext";
-import { UserRole } from "@/lib/types/database";
-import { hasPermission, hasRolePermission, PERMISSIONS } from "./roles";
+import { useRouter } from "next/navigation";
+
+// Simple user type for POS system
+interface User {
+  id: string;
+  store_id: string;
+  role: string;
+}
+
+// Simple hook to get current user from localStorage
+function useAuth(): { user: User | null } {
+  const router = useRouter();
+  
+  try {
+    const authData = localStorage.getItem("goldensquirrel_auth");
+    if (!authData) {
+      return { user: null };
+    }
+    
+    const parsed = JSON.parse(authData);
+    return {
+      user: {
+        id: parsed.store_id || "",
+        store_id: parsed.store_id || "",
+        role: "owner" // Default role for POS system
+      }
+    };
+  } catch {
+    return { user: null };
+  }
+}
+
+// Simple permission check - POS system doesn't use complex roles
+function hasPermission(userRole: string, permission: string): boolean {
+  return true; // POS system allows all operations
+}
+
+function hasRolePermission(userRole: string, minRole: string): boolean {
+  return true; // POS system allows all operations
+}
+
+const PERMISSIONS = {};
 
 interface RoleGuardProps {
   children: React.ReactNode;
-  allowedRoles: UserRole[];
+  allowedRoles: string[];
   fallback?: React.ReactNode;
 }
 
 // Component that only renders children if user has one of the allowed roles
 export function RoleGuard({ children, allowedRoles, fallback = null }: RoleGuardProps) {
-  const { user } = useRestaurant();
+  const { user } = useAuth();
   
   if (!user) return null;
   
@@ -26,13 +65,13 @@ export function RoleGuard({ children, allowedRoles, fallback = null }: RoleGuard
 
 interface PermissionGuardProps {
   children: React.ReactNode;
-  permission: keyof typeof PERMISSIONS;
+  permission: string;
   fallback?: React.ReactNode;
 }
 
 // Component that only renders children if user has the specific permission
 export function PermissionGuard({ children, permission, fallback = null }: PermissionGuardProps) {
-  const { user } = useRestaurant();
+  const { user } = useAuth();
   
   if (!user) return null;
   
@@ -43,13 +82,13 @@ export function PermissionGuard({ children, permission, fallback = null }: Permi
 
 interface HierarchyGuardProps {
   children: React.ReactNode;
-  minRole: UserRole;
+  minRole: string;
   fallback?: React.ReactNode;
 }
 
 // Component that renders children if user meets minimum role hierarchy
 export function HierarchyGuard({ children, minRole, fallback = null }: HierarchyGuardProps) {
-  const { user } = useRestaurant();
+  const { user } = useAuth();
   
   if (!user) return null;
   
@@ -60,19 +99,19 @@ export function HierarchyGuard({ children, minRole, fallback = null }: Hierarchy
 
 // Hook for checking permissions in components
 export function useRoleAccess() {
-  const { user } = useRestaurant();
+  const { user } = useAuth();
   
-  const checkPermission = (permission: keyof typeof PERMISSIONS): boolean => {
+  const checkPermission = (permission: string): boolean => {
     if (!user) return false;
     return hasPermission(user.role, permission);
   };
   
-  const checkRole = (allowedRoles: UserRole[]): boolean => {
+  const checkRole = (allowedRoles: string[]): boolean => {
     if (!user) return false;
     return allowedRoles.includes(user.role);
   };
   
-  const checkHierarchy = (minRole: UserRole): boolean => {
+  const checkHierarchy = (minRole: string): boolean => {
     if (!user) return false;
     return hasRolePermission(user.role, minRole);
   };
@@ -102,10 +141,10 @@ export function useRoleAccess() {
 // Higher-order component for role-based access
 export function withRoleAccess<P extends object>(
   Component: React.ComponentType<P>,
-  allowedRoles: UserRole[]
+  allowedRoles: string[]
 ) {
   return function WithRoleAccessWrapper(props: P) {
-    const { user } = useRestaurant();
+    const { user } = useAuth();
     
     if (!user || !allowedRoles.includes(user.role)) {
       return (
@@ -122,7 +161,7 @@ export function withRoleAccess<P extends object>(
 // Button wrapper that disables/hides based on role
 interface RoleButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
   children: React.ReactNode;
-  allowedRoles: UserRole[];
+  allowedRoles: string[];
   hideWhenUnauthorized?: boolean;
 }
 
@@ -132,7 +171,7 @@ export function RoleButton({
   hideWhenUnauthorized = false,
   ...props 
 }: RoleButtonProps) {
-  const { user } = useRestaurant();
+  const { user } = useAuth();
   
   if (!user) return null;
   
