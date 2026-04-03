@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Camera, X, Scan, ZoomIn, ZoomOut } from "lucide-react";
+import { Camera, X, Scan, ZoomIn, ZoomOut, Flashlight } from "lucide-react";
 
 interface BarcodeScannerProps {
   onScan: (barcode: string) => void;
@@ -22,6 +22,8 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
   const [maxZoom, setMaxZoom] = useState<number>(1);
   const [minZoom, setMinZoom] = useState<number>(1);
   const [zoomSupported, setZoomSupported] = useState<boolean>(false);
+  const [torchEnabled, setTorchEnabled] = useState<boolean>(false);
+  const [torchSupported, setTorchSupported] = useState<boolean>(false);
   const audioContextRef = useRef<AudioContext | null>(null);
   const videoTrackRef = useRef<MediaStreamTrack | null>(null);
   const isProcessingRef = useRef<boolean>(false);
@@ -81,6 +83,21 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
     const newZoom = Math.max(currentZoom - 0.5, minZoom);
     applyZoom(newZoom);
   }, [currentZoom, minZoom, applyZoom]);
+
+  // Toggle torch/flashlight
+  const toggleTorch = useCallback(async () => {
+    if (!videoTrackRef.current || !torchSupported) return;
+    
+    try {
+      const newTorchState = !torchEnabled;
+      await videoTrackRef.current.applyConstraints({
+        advanced: [{ torch: newTorchState } as any]
+      });
+      setTorchEnabled(newTorchState);
+    } catch (err) {
+      console.error("Error toggling torch:", err);
+    }
+  }, [torchEnabled, torchSupported]);
 
   // Handle barcode detection with debouncing
   const handleBarcodeDetected = useCallback((barcode: string) => {
@@ -180,9 +197,22 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
                     setZoomSupported(true);
                     setMinZoom(capabilities.zoom.min);
                     setMaxZoom(capabilities.zoom.max);
-                    setCurrentZoom(capabilities.zoom.min);
+                    // Set default zoom to 3x or max available
+                    const defaultZoom = Math.min(3, capabilities.zoom.max);
+                    setCurrentZoom(defaultZoom);
+                    // Apply the zoom
+                    videoTrack.applyConstraints({
+                      advanced: [{ zoom: defaultZoom } as any]
+                    }).catch(() => {});
                   } else {
                     setZoomSupported(false);
+                  }
+                  
+                  // Check torch support
+                  if (capabilities.torch) {
+                    setTorchSupported(true);
+                  } else {
+                    setTorchSupported(false);
                   }
                 }
               }
@@ -241,7 +271,7 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
       <CardContent className="p-3">
         <div className="relative">
           {/* Scanner Container - Fixed Height */}
-          <div className="relative bg-black rounded-lg overflow-hidden" style={{ height: "320px" }}>
+          <div className="relative bg-black rounded-lg overflow-hidden" style={{ height: "240px" }}>
             {/* Scanner element */}
             <div 
               id="barcode-scanner" 
@@ -260,28 +290,42 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
                 <div className="absolute bottom-4 left-4 w-8 h-8 border-b-4 border-l-4 border-amber-500 rounded-bl-lg" />
                 <div className="absolute bottom-4 right-4 w-8 h-8 border-b-4 border-r-4 border-amber-500 rounded-br-lg" />
                 
-                {/* Zoom controls */}
-                {zoomSupported && (
-                  <div className="absolute top-4 left-1/2 transform -translate-x-1/2 pointer-events-auto flex items-center gap-2 bg-black/70 rounded-full px-3 py-1.5">
+                {/* Zoom and Flashlight controls */}
+                <div className="absolute top-4 left-1/2 transform -translate-x-1/2 pointer-events-auto flex items-center gap-2">
+                  {zoomSupported && (
+                    <div className="flex items-center gap-2 bg-black/70 rounded-full px-3 py-1.5">
+                      <button
+                        onClick={zoomOut}
+                        disabled={currentZoom <= minZoom}
+                        className="p-1 rounded-full text-white hover:bg-white/20 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                      >
+                        <ZoomOut className="h-4 w-4" />
+                      </button>
+                      <span className="text-white text-xs font-medium min-w-[2.5rem] text-center">
+                        {currentZoom.toFixed(1)}x
+                      </span>
+                      <button
+                        onClick={zoomIn}
+                        disabled={currentZoom >= maxZoom}
+                        className="p-1 rounded-full text-white hover:bg-white/20 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                      >
+                        <ZoomIn className="h-4 w-4" />
+                      </button>
+                    </div>
+                  )}
+                  {torchSupported && (
                     <button
-                      onClick={zoomOut}
-                      disabled={currentZoom <= minZoom}
-                      className="p-1 rounded-full text-white hover:bg-white/20 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                      onClick={toggleTorch}
+                      className={`p-2 rounded-full transition-colors ${
+                        torchEnabled 
+                          ? 'bg-amber-500 text-black' 
+                          : 'bg-black/70 text-white hover:bg-white/20'
+                      }`}
                     >
-                      <ZoomOut className="h-4 w-4" />
+                      <Flashlight className="h-4 w-4" />
                     </button>
-                    <span className="text-white text-xs font-medium min-w-[2.5rem] text-center">
-                      {currentZoom.toFixed(1)}x
-                    </span>
-                    <button
-                      onClick={zoomIn}
-                      disabled={currentZoom >= maxZoom}
-                      className="p-1 rounded-full text-white hover:bg-white/20 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                    >
-                      <ZoomIn className="h-4 w-4" />
-                    </button>
-                  </div>
-                )}
+                  )}
+                </div>
                 
                 {/* Status text */}
                 <div className="absolute bottom-4 inset-x-0 flex justify-center pointer-events-auto">
