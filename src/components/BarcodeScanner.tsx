@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Camera, X, Scan, ZoomIn, ZoomOut, Flashlight } from "lucide-react";
+import { Camera, X, Scan, ZoomIn, ZoomOut, Flashlight, FlashlightOff } from "lucide-react";
 
 interface BarcodeScannerProps {
   onScan: (barcode: string) => void;
@@ -27,6 +27,16 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
   const audioContextRef = useRef<AudioContext | null>(null);
   const videoTrackRef = useRef<MediaStreamTrack | null>(null);
   const isProcessingRef = useRef<boolean>(false);
+  const scanTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Detect browser
+  const getBrowser = useCallback(() => {
+    const ua = navigator.userAgent;
+    if (ua.includes("Safari") && !ua.includes("Chrome")) return "safari";
+    if (ua.includes("Chrome")) return "chrome";
+    if (ua.includes("SamsungBrowser")) return "samsung";
+    return "other";
+  }, []);
 
   // Create beep sound
   const playBeepSound = useCallback(() => {
@@ -110,8 +120,13 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
     playBeepSound();
     onScan(barcode);
     
+    // Clear any existing timeout
+    if (scanTimeoutRef.current) {
+      clearTimeout(scanTimeoutRef.current);
+    }
+    
     // Reset after 3 seconds to allow scanning same code again
-    setTimeout(() => {
+    scanTimeoutRef.current = setTimeout(() => {
       setLastScannedCode(null);
       isProcessingRef.current = false;
     }, 3000);
@@ -121,6 +136,7 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
     if (!isActive) return;
 
     let isMounted = true;
+    const browser = getBrowser();
 
     const startScanner = async () => {
       try {
@@ -146,8 +162,9 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
         const scanner = new Html5Qrcode("barcode-scanner");
         scannerRef.current = scanner;
 
-        const config = {
-          fps: 5, // Reduced FPS to prevent rapid scanning
+        // Browser-specific configuration
+        const config: any = {
+          fps: browser === "safari" ? 10 : 5,
           qrbox: { width: 250, height: 150 },
           aspectRatio: 1.0,
           disableFlip: false,
@@ -164,8 +181,13 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
             8,  // CODE_128
             10, // ITF
             14, // PDF_417
-          ] as any,
+          ],
         };
+
+        // Safari-specific: use verbose mode for debugging
+        if (browser === "safari") {
+          config.verbose = true;
+        }
 
         // Start scanning with camera
         await scanner.start(
@@ -182,7 +204,7 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
         if (isMounted) {
           setIsScanning(true);
           
-          // Get video track for zoom control
+          // Get video track for zoom and torch control
           setTimeout(() => {
             try {
               const videoElement = document.querySelector("#barcode-scanner video") as HTMLVideoElement;
@@ -193,6 +215,7 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
                   videoTrackRef.current = videoTrack;
                   const capabilities = videoTrack.getCapabilities() as any;
                   
+                  // Check zoom support
                   if (capabilities.zoom) {
                     setZoomSupported(true);
                     setMinZoom(capabilities.zoom.min);
@@ -208,8 +231,10 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
                     setZoomSupported(false);
                   }
                   
-                  // Check torch support
+                  // Check torch support (handle different browser implementations)
                   if (capabilities.torch) {
+                    setTorchSupported(true);
+                  } else if ((capabilities as any).fillLightMode && (capabilities as any).fillLightMode.includes("flash")) {
                     setTorchSupported(true);
                   } else {
                     setTorchSupported(false);
@@ -218,8 +243,9 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
               }
             } catch (zoomErr) {
               setZoomSupported(false);
+              setTorchSupported(false);
             }
-          }, 500);
+          }, 1000);
         }
       } catch (err: any) {
         if (!isMounted) return;
@@ -231,10 +257,57 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
           setError("No camera found. Please connect a camera and refresh.");
         } else if (err.message?.includes("in use") || err.name === "NotReadableError") {
           setError("Camera is in use by another application.");
+        } else if (err.message?.includes("Overconstrained")) {
+          setError("Camera constraints not supported. Trying basic settings...");
+          // Retry with basic constraints
+          setTimeout(() => {
+            if (isMounted) {
+              retryWithBasicConstraints();
+            }
+          }, 1000);
         } else {
           setError(`Unable to start scanner: ${err.message || "Unknown error"}. Please try manual entry.`);
         }
         setIsScanning(false);
+      }
+    };
+
+    const retryWithBasicConstraints = async () => {
+      try {
+        if (!isMounted) return;
+        
+        const { Html5Qrcode } = await import("html5-qrcode");
+        if (!isMounted) return;
+        
+        if (scannerRef.current) {
+          try {
+            await scannerRef.current.stop();
+          } catch (e) {}
+        }
+        
+        const scanner = new Html5Qrcode("barcode-scanner");
+        scannerRef.current = scanner;
+        
+        await scanner.start(
+          { facingMode: "environment" },
+          {
+            fps: 5,
+            qrbox: { width: 250, height: 150 },
+          },
+          (decodedText: string) => {
+            handleBarcodeDetected(decodedText);
+          },
+          () => {}
+        );
+        
+        if (isMounted) {
+          setIsScanning(true);
+          setError(null);
+        }
+      } catch (retryErr: any) {
+        if (isMounted) {
+          setError("Unable to start camera. Please check permissions and try manual entry.");
+        }
       }
     };
 
@@ -244,6 +317,9 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
     return () => {
       isMounted = false;
       clearTimeout(timer);
+      if (scanTimeoutRef.current) {
+        clearTimeout(scanTimeoutRef.current);
+      }
       isProcessingRef.current = false;
       
       if (scannerRef.current) {
@@ -260,7 +336,7 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
         audioContextRef.current = null;
       }
     };
-  }, [isActive, handleBarcodeDetected]);
+  }, [isActive, handleBarcodeDetected, getBrowser]);
 
   if (!isActive) {
     return null;
@@ -322,7 +398,11 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
                           : 'bg-black/70 text-white hover:bg-white/20'
                       }`}
                     >
-                      <Flashlight className="h-4 w-4" />
+                      {torchEnabled ? (
+                        <Flashlight className="h-4 w-4" />
+                      ) : (
+                        <FlashlightOff className="h-4 w-4" />
+                      )}
                     </button>
                   )}
                 </div>
