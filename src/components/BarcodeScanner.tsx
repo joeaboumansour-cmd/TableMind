@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { BrowserMultiFormatReader, BarcodeFormat } from "@zxing/library";
+import { BrowserMultiFormatReader, BarcodeFormat, DecodeHintType } from "@zxing/library";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -57,21 +57,16 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
         setError(null);
         setIsScanning(true);
 
-        // Request camera permission first and get the stream
+        // Request camera permission with optimal settings for barcode scanning
         let videoStream: MediaStream | null = null;
         try {
           videoStream = await navigator.mediaDevices.getUserMedia({ 
             video: { 
-              facingMode: { exact: 'environment' }, // Force back camera on mobile
-              width: { ideal: 1920 }, // Higher resolution for better detail
+              facingMode: 'environment', // Prefer back camera on mobile
+              width: { ideal: 1920 }, // Higher resolution for distance detection
               height: { ideal: 1080 },
-              advanced: [
-                { focusMode: 'continuous' },
-                { exposureMode: 'continuous' },
-                { whiteBalanceMode: 'continuous' },
-                { zoom: 2.0 }
-              ]
-            } as unknown as MediaTrackConstraints
+              frameRate: { ideal: 30, min: 15 } // Higher frame rate for faster detection
+            } 
           });
           
           // Set the video stream to the video element so we can see the feed
@@ -93,8 +88,27 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
           return;
         }
 
-        // Create reader instance
-        readerRef.current = new BrowserMultiFormatReader();
+        // Create reader instance with optimized hints for fast detection
+        const hints = new Map<DecodeHintType, any>();
+        
+        // Specify common barcode formats for faster scanning
+        hints.set(DecodeHintType.POSSIBLE_FORMATS, [
+          BarcodeFormat.EAN_13,
+          BarcodeFormat.EAN_8,
+          BarcodeFormat.UPC_A,
+          BarcodeFormat.UPC_E,
+          BarcodeFormat.CODE_128,
+          BarcodeFormat.CODE_39,
+          BarcodeFormat.CODE_93,
+          BarcodeFormat.QR_CODE,
+          BarcodeFormat.DATA_MATRIX,
+          BarcodeFormat.ITF,
+        ]);
+        
+        // Try harder mode - more thorough scanning for distant/partial barcodes
+        hints.set(DecodeHintType.TRY_HARDER, true);
+        
+        readerRef.current = new BrowserMultiFormatReader(hints);
 
         // Get video devices
         const videoInputDevices = await readerRef.current.listVideoInputDevices();
@@ -143,8 +157,8 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
           checkVideo();
         });
 
-        // Add a delay to ensure video is fully loaded
-        await new Promise(resolve => setTimeout(resolve, 500));
+        // Short delay to ensure video is fully loaded
+        await new Promise(resolve => setTimeout(resolve, 200));
 
         // Start decoding from video element with error handling
         try {
@@ -238,7 +252,6 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
             <video
               ref={videoRef}
               className="w-full h-full object-cover"
-              style={{ transform: 'scale(1.5)', transformOrigin: 'center center' }}
               autoPlay
               playsInline
               muted
@@ -264,7 +277,7 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
                   <div className="absolute inset-0 flex items-center justify-center">
                     <div className="bg-black/50 px-3 py-1 rounded text-white text-sm">
                       <Scan className="h-4 w-4 inline mr-2" />
-                      Place barcode here
+                      Auto-detecting...
                     </div>
                   </div>
                 </div>
