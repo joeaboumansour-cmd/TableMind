@@ -24,6 +24,7 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
   const [zoomSupported, setZoomSupported] = useState<boolean>(false);
   const audioContextRef = useRef<AudioContext | null>(null);
   const videoTrackRef = useRef<MediaStreamTrack | null>(null);
+  const isProcessingRef = useRef<boolean>(false);
 
   // Create beep sound
   const playBeepSound = useCallback(() => {
@@ -64,7 +65,6 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
           advanced: [{ zoom: clampedZoom } as any]
         });
         setCurrentZoom(clampedZoom);
-        console.log(`Zoom applied: ${clampedZoom}x`);
       }
     } catch (err) {
       console.error("Error applying zoom:", err);
@@ -82,17 +82,22 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
     applyZoom(newZoom);
   }, [currentZoom, minZoom, applyZoom]);
 
-  // Handle barcode detection
+  // Handle barcode detection with debouncing
   const handleBarcodeDetected = useCallback((barcode: string) => {
-    if (barcode !== lastScannedCode) {
-      setLastScannedCode(barcode);
-      playBeepSound();
-      onScan(barcode);
-      
-      setTimeout(() => {
-        setLastScannedCode(null);
-      }, 2000);
-    }
+    // Prevent multiple rapid scans
+    if (isProcessingRef.current) return;
+    if (barcode === lastScannedCode) return;
+    
+    isProcessingRef.current = true;
+    setLastScannedCode(barcode);
+    playBeepSound();
+    onScan(barcode);
+    
+    // Reset after 3 seconds to allow scanning same code again
+    setTimeout(() => {
+      setLastScannedCode(null);
+      isProcessingRef.current = false;
+    }, 3000);
   }, [lastScannedCode, onScan, playBeepSound]);
 
   useEffect(() => {
@@ -111,15 +116,25 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
         
         if (!isMounted) return;
 
+        // Clear any existing scanner
+        if (scannerRef.current) {
+          try {
+            await scannerRef.current.stop();
+          } catch (e) {
+            // Ignore
+          }
+        }
+
         // Create scanner instance
         const scanner = new Html5Qrcode("barcode-scanner");
         scannerRef.current = scanner;
 
         const config = {
-          fps: 10,
+          fps: 5, // Reduced FPS to prevent rapid scanning
           qrbox: { width: 250, height: 150 },
           aspectRatio: 1.0,
           disableFlip: false,
+          rememberLastUsedCamera: true,
           formatsToSupport: [
             0,  // QR_CODE
             1,  // DATA_MATRIX
@@ -142,42 +157,39 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
           (decodedText: string) => {
             handleBarcodeDetected(decodedText);
           },
-          (errorMessage: string) => {
-            // Ignore scanning errors - they happen frequently during normal operation
+          () => {
+            // Ignore scanning errors - they happen frequently
           }
         );
 
         if (isMounted) {
           setIsScanning(true);
-          console.log("Barcode scanner started successfully");
           
           // Get video track for zoom control
-          try {
-            const videoElement = document.querySelector("#barcode-scanner video") as HTMLVideoElement;
-            if (videoElement && videoElement.srcObject) {
-              const stream = videoElement.srcObject as MediaStream;
-              const videoTrack = stream.getVideoTracks()[0];
-              if (videoTrack) {
-                videoTrackRef.current = videoTrack;
-                const capabilities = videoTrack.getCapabilities() as any;
-                console.log("Camera capabilities:", capabilities);
-                
-                if (capabilities.zoom) {
-                  setZoomSupported(true);
-                  setMinZoom(capabilities.zoom.min);
-                  setMaxZoom(capabilities.zoom.max);
-                  setCurrentZoom(capabilities.zoom.min);
-                  console.log(`Zoom supported: ${capabilities.zoom.min}x to ${capabilities.zoom.max}x`);
-                } else {
-                  console.log("Zoom not supported on this camera");
-                  setZoomSupported(false);
+          setTimeout(() => {
+            try {
+              const videoElement = document.querySelector("#barcode-scanner video") as HTMLVideoElement;
+              if (videoElement && videoElement.srcObject) {
+                const stream = videoElement.srcObject as MediaStream;
+                const videoTrack = stream.getVideoTracks()[0];
+                if (videoTrack) {
+                  videoTrackRef.current = videoTrack;
+                  const capabilities = videoTrack.getCapabilities() as any;
+                  
+                  if (capabilities.zoom) {
+                    setZoomSupported(true);
+                    setMinZoom(capabilities.zoom.min);
+                    setMaxZoom(capabilities.zoom.max);
+                    setCurrentZoom(capabilities.zoom.min);
+                  } else {
+                    setZoomSupported(false);
+                  }
                 }
               }
+            } catch (zoomErr) {
+              setZoomSupported(false);
             }
-          } catch (zoomErr) {
-            console.log("Could not initialize zoom controls:", zoomErr);
-            setZoomSupported(false);
-          }
+          }, 500);
         }
       } catch (err: any) {
         if (!isMounted) return;
@@ -188,7 +200,7 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
         } else if (err.message?.includes("No camera") || err.name === "NotFoundError") {
           setError("No camera found. Please connect a camera and refresh.");
         } else if (err.message?.includes("in use") || err.name === "NotReadableError") {
-          setError("Camera is in use by another application. Please close other apps using the camera.");
+          setError("Camera is in use by another application.");
         } else {
           setError(`Unable to start scanner: ${err.message || "Unknown error"}. Please try manual entry.`);
         }
@@ -202,14 +214,13 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
     return () => {
       isMounted = false;
       clearTimeout(timer);
+      isProcessingRef.current = false;
       
       if (scannerRef.current) {
         try {
-          scannerRef.current.stop().catch(() => {
-            // Ignore errors during cleanup
-          });
+          scannerRef.current.stop().catch(() => {});
         } catch (err) {
-          // Ignore errors during cleanup
+          // Ignore
         }
         scannerRef.current = null;
       }
@@ -229,10 +240,16 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
     <Card className="w-full">
       <CardContent className="p-3">
         <div className="relative">
-          {/* Scanner Container */}
-          <div className="relative bg-black rounded-lg overflow-hidden">
+          {/* Scanner Container - Fixed Height */}
+          <div className="relative bg-black rounded-lg overflow-hidden" style={{ height: "320px" }}>
             {/* Scanner element */}
-            <div id="barcode-scanner" className="w-full" style={{ minHeight: "300px" }} />
+            <div 
+              id="barcode-scanner" 
+              className="w-full h-full"
+              style={{ 
+                overflow: "hidden"
+              }}
+            />
             
             {/* Scanning Overlay */}
             {isScanning && !error && (
@@ -245,21 +262,21 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
                 
                 {/* Zoom controls */}
                 {zoomSupported && (
-                  <div className="absolute top-4 left-1/2 transform -translate-x-1/2 pointer-events-auto flex items-center gap-2 bg-black/60 rounded-full px-3 py-2">
+                  <div className="absolute top-4 left-1/2 transform -translate-x-1/2 pointer-events-auto flex items-center gap-2 bg-black/70 rounded-full px-3 py-1.5">
                     <button
                       onClick={zoomOut}
                       disabled={currentZoom <= minZoom}
-                      className="p-1 rounded-full text-white hover:bg-white/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                      className="p-1 rounded-full text-white hover:bg-white/20 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                     >
                       <ZoomOut className="h-4 w-4" />
                     </button>
-                    <span className="text-white text-sm font-medium min-w-[3rem] text-center">
+                    <span className="text-white text-xs font-medium min-w-[2.5rem] text-center">
                       {currentZoom.toFixed(1)}x
                     </span>
                     <button
                       onClick={zoomIn}
                       disabled={currentZoom >= maxZoom}
-                      className="p-1 rounded-full text-white hover:bg-white/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                      className="p-1 rounded-full text-white hover:bg-white/20 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                     >
                       <ZoomIn className="h-4 w-4" />
                     </button>
@@ -268,7 +285,7 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
                 
                 {/* Status text */}
                 <div className="absolute bottom-4 inset-x-0 flex justify-center pointer-events-auto">
-                  <div className="bg-black/60 px-4 py-2 rounded-full text-white text-sm flex items-center gap-2">
+                  <div className="bg-black/70 px-4 py-2 rounded-full text-white text-sm flex items-center gap-2">
                     <Scan className="h-4 w-4" />
                     Point barcode here
                   </div>
@@ -278,10 +295,10 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
 
             {/* Error state */}
             {error && (
-              <div className="absolute inset-0 flex items-center justify-center bg-black/80">
+              <div className="absolute inset-0 flex items-center justify-center bg-black/90">
                 <div className="text-center text-white p-4">
-                  <Camera className="h-12 w-12 mx-auto mb-4 opacity-50" />
-                  <p className="text-sm mb-4">{error}</p>
+                  <Camera className="h-10 w-10 mx-auto mb-3 opacity-50" />
+                  <p className="text-sm mb-3">{error}</p>
                   <Button 
                     variant="outline" 
                     size="sm" 
@@ -295,9 +312,9 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
 
             {/* Loading state */}
             {!isScanning && !error && (
-              <div className="absolute inset-0 flex items-center justify-center bg-black/80">
+              <div className="absolute inset-0 flex items-center justify-center bg-black/90">
                 <div className="text-center text-white">
-                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-amber-500 mx-auto mb-4" />
+                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-amber-500 mx-auto mb-3" />
                   <p className="text-sm">Starting camera...</p>
                 </div>
               </div>
@@ -305,7 +322,7 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
           </div>
 
           {/* Manual barcode entry */}
-          <div className="mt-2 flex gap-2">
+          <div className="mt-3 flex gap-2">
             <Input
               placeholder="Enter barcode manually..."
               value={manualBarcode}
@@ -316,7 +333,7 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
                   setManualBarcode("");
                 }
               }}
-              className="h-9"
+              className="h-9 text-sm"
             />
             <Button 
               variant="outline"
@@ -342,7 +359,7 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
             <Button
               variant="ghost"
               size="sm"
-              className="absolute top-2 right-2 z-10"
+              className="absolute top-2 right-2 z-10 h-8 w-8 p-0"
               onClick={onClose}
             >
               <X className="h-4 w-4" />
