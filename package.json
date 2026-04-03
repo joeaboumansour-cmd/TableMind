@@ -13,6 +13,8 @@
     "@dnd-kit/utilities": "^3.2.2",
     "@modelcontextprotocol/sdk": "^1.26.0",
     "@radix-ui/react-alert-dialog": "^1.1.15",
+    "@serwist/next": "^9.5.7",
+    "@serwist/window": "^9.5.7",
     "@supabase/ssr": "^0.8.0",
     "@supabase/supabase-js": "^2.97.0",
     "@tanstack/react-query": "^5.90.20",
@@ -29,6 +31,7 @@
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "recharts": "^3.7.0",
+    "serwist": "^9.5.7",
     "sonner": "^2.0.7",
     "tailwind-merge": "^3.4.0",
     "zustand": "^5.0.12"
