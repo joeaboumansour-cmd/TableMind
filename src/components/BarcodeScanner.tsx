@@ -63,8 +63,8 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
           videoStream = await navigator.mediaDevices.getUserMedia({ 
             video: { 
               facingMode: 'environment', // Prefer back camera on mobile
-              width: { ideal: 1920 }, // Higher resolution for distance detection
-              height: { ideal: 1080 },
+              width: { ideal: 1280 }, // Balanced resolution for scanning
+              height: { ideal: 720 },
               frameRate: { ideal: 30, min: 15 } // Higher frame rate for faster detection
             } 
           });
@@ -257,16 +257,16 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
               muted
             />
             
-            {/* Scanning Overlay */}
+            {/* Scanning Overlay - Centered single barcode */}
             {isScanning && (
               <div className="absolute inset-0 flex items-center justify-center">
-                {/* Square scanning area */}
-                <div className="relative w-64 h-40 border-2 border-amber-500 rounded-lg">
+                {/* Centered scanning area */}
+                <div className="relative w-72 h-48 border-2 border-amber-500 rounded-xl">
                   {/* Corner markers */}
-                  <div className="absolute top-0 left-0 w-6 h-6 border-t-4 border-l-4 border-amber-500 rounded-tl-lg" />
-                  <div className="absolute top-0 right-0 w-6 h-6 border-t-4 border-r-4 border-amber-500 rounded-tr-lg" />
-                  <div className="absolute bottom-0 left-0 w-6 h-6 border-b-4 border-l-4 border-amber-500 rounded-bl-lg" />
-                  <div className="absolute bottom-0 right-0 w-6 h-6 border-b-4 border-r-4 border-amber-500 rounded-br-lg" />
+                  <div className="absolute top-0 left-0 w-8 h-8 border-t-4 border-l-4 border-amber-500 rounded-tl-xl" />
+                  <div className="absolute top-0 right-0 w-8 h-8 border-t-4 border-r-4 border-amber-500 rounded-tr-xl" />
+                  <div className="absolute bottom-0 left-0 w-8 h-8 border-b-4 border-l-4 border-amber-500 rounded-bl-xl" />
+                  <div className="absolute bottom-0 right-0 w-8 h-8 border-b-4 border-r-4 border-amber-500 rounded-br-xl" />
                   
                   {/* Scanning line animation */}
                   <div className="absolute inset-0 flex items-center justify-center">
@@ -275,9 +275,9 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
                   
                   {/* Center text */}
                   <div className="absolute inset-0 flex items-center justify-center">
-                    <div className="bg-black/50 px-3 py-1 rounded text-white text-sm">
-                      <Scan className="h-4 w-4 inline mr-2" />
-                      Auto-detecting...
+                    <div className="bg-black/60 px-4 py-2 rounded-full text-white text-sm flex items-center gap-2">
+                      <Scan className="h-4 w-4" />
+                      Point barcode here
                     </div>
                   </div>
                 </div>
