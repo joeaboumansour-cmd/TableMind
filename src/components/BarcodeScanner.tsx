@@ -64,8 +64,14 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
             video: { 
               facingMode: { exact: 'environment' }, // Force back camera on mobile
               width: { ideal: 1920 }, // Higher resolution for better detail
-              height: { ideal: 1080 }
-            } 
+              height: { ideal: 1080 },
+              advanced: [
+                { focusMode: 'continuous' },
+                { exposureMode: 'continuous' },
+                { whiteBalanceMode: 'continuous' },
+                { zoom: 2.0 }
+              ]
+            } as unknown as MediaTrackConstraints
           });
           
           // Set the video stream to the video element so we can see the feed
