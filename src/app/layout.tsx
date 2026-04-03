@@ -61,7 +61,7 @@ export default function RootLayout({
         className={`${geistSans.variable} ${geistMono.variable} antialiased dark`}
       >
         <Providers>{children}</Providers>
-        <script
+<script
           dangerouslySetInnerHTML={{
             __html: `
               // Register service worker for PWA functionality
@@ -91,6 +91,13 @@ export default function RootLayout({
                       console.log('ServiceWorker registration failed: ', err);
                     });
                 });
+              }
+              
+              // Check if service worker controller is active
+              if (navigator.serviceWorker.controller) {
+                console.log('ServiceWorker controller is active');
+              } else {
+                console.log('ServiceWorker controller is not active');
               }
               
               // Prevent Chrome from showing the URL bar

@@ -1,9 +1,13 @@
 const CACHE_NAME = 'golden-squirrel-v1';
 const urlsToCache = [
+  '/',
   '/manifest.json',
   '/icons/icon-192x192.png',
   '/icons/icon-512x512.png'
 ];
+
+// Fallback page for offline mode
+const FALLBACK_PAGE = '/offline.html';
 
 // 1. Merged Install Event
 self.addEventListener('install', (event) => {
@@ -51,10 +55,21 @@ self.addEventListener('fetch', (event) => {
         })
         .catch((error) => {
           console.error('SW: Network fetch failed for:', event.request.url, 'Error:', error);
-          // Return a basic response instead of crashing
-          return new Response("Offline content not available", {
-            status: 503,
-            statusText: 'Service Unavailable'
+
+          // Try to return the fallback page for offline mode
+          console.log('SW: Trying to return fallback page for offline mode');
+          return caches.match(FALLBACK_PAGE).then((fallbackResponse) => {
+            if (fallbackResponse) {
+              console.log('SW: Found fallback page in cache');
+              return fallbackResponse;
+            }
+
+            // Return a basic response if fallback page is not available
+            console.log('SW: Fallback page not available, returning basic response');
+            return new Response("Offline content not available", {
+              status: 503,
+              statusText: 'Service Unavailable'
+            });
           });
         });
     })
