@@ -62,7 +62,7 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
         try {
           videoStream = await navigator.mediaDevices.getUserMedia({ 
             video: { 
-              facingMode: 'environment', // Prefer back camera on mobile
+              facingMode: { exact: 'environment' }, // Force back camera on mobile
               width: { ideal: 1280 },
               height: { ideal: 720 }
             } 
