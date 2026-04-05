@@ -60,27 +60,29 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased dark`}
       >
-        <Providers>{children}</Providers>
+        <Providers>
+          {children}
+        </Providers>
 <script
           dangerouslySetInnerHTML={{
             __html: `
               // Register service worker for PWA functionality
-              if ('serviceWorker' in navigator) {
+if ('serviceWorker' in navigator) {
                 window.addEventListener('load', function() {
                   navigator.serviceWorker.register('/sw.js', { scope: '/' })
                     .then(function(registration) {
                       console.log('ServiceWorker registration successful with scope: ', registration.scope);
-                      
+
                       // Check for updates on page load
                       registration.update();
-                      
+
                       // Handle updates
                       registration.addEventListener('updatefound', function() {
                         const newWorker = registration.installing;
                         if (newWorker) {
                           newWorker.addEventListener('statechange', function() {
                             if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
-                              // New content is available, notify user
+                              // New content is available; please refresh.
                               console.log('New content is available; please refresh.');
                             }
                           });
@@ -92,18 +94,48 @@ export default function RootLayout({
                     });
                 });
               }
-              
+
               // Check if service worker controller is active
               if (navigator.serviceWorker.controller) {
                 console.log('ServiceWorker controller is active');
               } else {
                 console.log('ServiceWorker controller is not active');
               }
-              
+
               // Prevent Chrome from showing the URL bar
               if (window.matchMedia('(display-mode: standalone)').matches) {
                 // App is running in standalone mode
                 console.log('App is running in standalone mode');
+              }
+
+              // Install prompt handling
+              let deferredPrompt;
+              window.addEventListener('beforeinstallprompt', (e) => {
+                e.preventDefault();
+                deferredPrompt = e;
+                showInstallPrompt();
+              });
+
+              function showInstallPrompt() {
+                if (typeof window !== 'undefined' && 'localStorage' in window) {
+                  const installButton = document.createElement('button');
+                  installButton.innerHTML = 'Install App';
+                  installButton.className = 'fixed bottom-4 right-4 z-50 bg-blue-600 text-white px-4 py-2 rounded-lg shadow-lg hover:bg-blue-700 transition-colors';
+                  installButton.onclick = () => {
+                    if (!deferredPrompt) return;
+                    deferredPrompt.prompt();
+                    deferredPrompt.userChoice.then((choiceResult) => {
+                      if (choiceResult.outcome === 'accepted') {
+                        console.log('User accepted the install prompt');
+                      } else {
+                        console.log('User dismissed the install prompt');
+                      }
+                      deferredPrompt = null;
+                      installButton.remove();
+                    });
+                  };
+                  document.body.appendChild(installButton);
+                }
               }
             `,
           }}

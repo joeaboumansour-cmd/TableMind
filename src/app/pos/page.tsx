@@ -29,6 +29,13 @@ const supabase = createClient();
 
 export default function POSPage() {
   const router = useRouter();
+  const [isScannerActive, setIsScannerActive] = useState(() => {
+    if (typeof window !== 'undefined' && 'localStorage' in window) {
+      const saved = localStorage.getItem("scanner_active");
+      return saved === null ? true : saved === "true";
+    }
+    return true;
+  });
   const [products, setProducts] = useState<Product[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [merchant, setMerchant] = useState<any>(null);
@@ -54,37 +61,39 @@ export default function POSPage() {
     const loadData = async () => {
       try {
         // Get auth data from localStorage
-        const authData = localStorage.getItem("goldensquirrel_auth");
-        if (!authData) {
-          router.push("/login");
-          return;
+        if (typeof window !== 'undefined' && 'localStorage' in window) {
+          const authData = localStorage.getItem("goldensquirrel_auth");
+          if (!authData) {
+            router.push("/login");
+            return;
+          }
+
+          const { store_id, license_expires_at } = JSON.parse(authData);
+
+          // Check license expiration
+          const licenseExpires = new Date(license_expires_at);
+          const now = new Date();
+
+          if (licenseExpires < now) {
+            toast.error("Your license has expired. Please contact support.");
+            localStorage.removeItem("goldensquirrel_auth");
+            router.push("/login");
+            return;
+          }
+
+          setMerchant({ id: store_id });
+          setStoreId(store_id);
+
+          // Fetch products for this store
+          const { data: productsData, error } = await supabase
+            .from("products")
+            .select("*")
+            .eq("store_id", store_id)
+            .order("name");
+
+          if (error) throw error;
+          setProducts(productsData || []);
         }
-
-        const { store_id, license_expires_at } = JSON.parse(authData);
-        
-        // Check license expiration
-        const licenseExpires = new Date(license_expires_at);
-        const now = new Date();
-        
-        if (licenseExpires < now) {
-          toast.error("Your license has expired. Please contact support.");
-          localStorage.removeItem("goldensquirrel_auth");
-          router.push("/login");
-          return;
-        }
-
-        setMerchant({ id: store_id });
-        setStoreId(store_id);
-
-        // Fetch products for this store
-        const { data: productsData, error } = await supabase
-          .from("products")
-          .select("*")
-          .eq("store_id", store_id)
-          .order("name");
-
-        if (error) throw error;
-        setProducts(productsData || []);
       } catch (error) {
         console.error("Error loading data:", error);
         toast.error("Failed to load products");
@@ -112,21 +121,21 @@ export default function POSPage() {
     if (product) {
       // Check if item already exists in cart
       const existingItem = items.find(item => item.product_id === product.id);
-      
+
       if (existingItem) {
         // Item exists - highlight it instead of increasing quantity
         setHighlightedItemId(product.id);
-        
+
         // Clear previous timeout if exists
         if (highlightTimeoutRef.current) {
           clearTimeout(highlightTimeoutRef.current);
         }
-        
+
         // Set timeout to remove highlight after 2 seconds
         highlightTimeoutRef.current = setTimeout(() => {
           setHighlightedItemId(null);
         }, 2000);
-        
+
         toast.info(`${product.name} is already in cart`);
       } else {
         // Item doesn't exist - add it
@@ -138,9 +147,18 @@ export default function POSPage() {
     }
   };
 
+  const toggleScanner = () => {
+    setIsScannerActive(!isScannerActive);
+    if (typeof window !== 'undefined' && 'localStorage' in window) {
+      localStorage.setItem("scanner_active", String(!isScannerActive));
+    }
+  };
+
   // Handle logout
   const handleLogout = () => {
-    localStorage.removeItem("goldensquirrel_auth");
+    if (typeof window !== 'undefined' && 'localStorage' in window) {
+      localStorage.removeItem("goldensquirrel_auth");
+    }
     router.push("/login");
   };
 
@@ -197,9 +215,23 @@ export default function POSPage() {
       <div className="flex-1 flex flex-col overflow-hidden p-4 gap-3">
         {/* Barcode Scanner - Always Open - Compact */}
         <div className="flex-shrink-0">
+          <div className="flex items-center justify-between mb-2">
+            <Button
+              variant={isScannerActive ? "default" : "outline"}
+              size="sm"
+              onClick={toggleScanner}
+              className="flex items-center gap-1"
+            >
+              <Scan className="h-4 w-4" />
+              {isScannerActive ? "Turn Off Scanner" : "Turn On Scanner"}
+            </Button>
+            <Badge variant={isScannerActive ? "default" : "secondary"}>
+              {isScannerActive ? "ON" : "OFF"}
+            </Badge>
+          </div>
           <BarcodeScanner
             onScan={handleBarcodeScan}
-            isActive={true}
+            isActive={isScannerActive}
           />
         </div>
 
@@ -216,57 +248,57 @@ export default function POSPage() {
             ) : (
               <div className="space-y-3">
                 {items.map((item) => (
-                  <div
-                    key={item.product_id}
-                    className={`p-4 rounded-xl transition-all duration-300 ${
-                      highlightedItemId === item.product_id
-                        ? "bg-amber-100 border-2 border-amber-500 shadow-lg scale-[1.02]"
-                        : "bg-muted/50 border-2 border-transparent"
-                    }`}
-                  >
-                    {/* Product Name - Always Visible */}
-                    <div className="mb-3">
-                      <p className="font-bold text-lg leading-tight">
-                        {item.product_name}
-                      </p>
-                      <p className="text-sm text-muted-foreground text-center">
-                        {formatLL(item.unit_price)} each
-                      </p>
-                    </div>
+<div
+  key={item.product_id}
+  className={`p-1 rounded-lg transition-all duration-300 ${
+    highlightedItemId === item.product_id
+      ? "bg-amber-100 border-2 border-amber-500 shadow-lg scale-[1.02]"
+      : "bg-muted/50 border-2 border-transparent"
+  }`}
+>
+  {/* Product Name - Always Visible */}
+  <div className="mb-2">
+    <p className="font-semibold text-base leading-tight">
+      {item.product_name}
+    </p>
+    <p className="text-xs text-muted-foreground text-center">
+      {formatLL(item.unit_price)} each
+    </p>
+  </div>
 
-                    {/* Quantity and Price Row */}
-                    <div className="flex items-center justify-between">
-                      {/* Quantity Controls */}
-                      <div className="flex items-center gap-3">
-                        <Button
-                          variant="outline"
-                          size="icon"
-                          className="h-10 w-10 rounded-lg"
-                          onClick={() => decrementQuantity(item.product_id)}
-                        >
-                          <Minus className="h-4 w-4" />
-                        </Button>
-                        <span className="w-10 text-center text-xl font-bold">
-                          {item.quantity}
-                        </span>
-                        <Button
-                          variant="outline"
-                          size="icon"
-                          className="h-10 w-10 rounded-lg"
-                          onClick={() => incrementQuantity(item.product_id)}
-                        >
-                          <Plus className="h-4 w-4" />
-                        </Button>
-                      </div>
+  {/* Quantity and Price Row */}
+  <div className="flex items-center justify-between">
+    {/* Quantity Controls */}
+    <div className="flex items-center gap-2">
+      <Button
+        variant="outline"
+        size="icon"
+        className="h-8 w-8 rounded"
+        onClick={() => decrementQuantity(item.product_id)}
+      >
+        <Minus className="h-3 w-3" />
+      </Button>
+      <span className="w-8 text-center text-base font-bold">
+        {item.quantity}
+      </span>
+      <Button
+        variant="outline"
+        size="icon"
+        className="h-8 w-8 rounded"
+        onClick={() => incrementQuantity(item.product_id)}
+      >
+        <Plus className="h-3 w-3" />
+      </Button>
+    </div>
 
-                      {/* Item Total */}
-                      <div className="text-right">
-                        <p className="font-bold text-xl text-amber-600">
-                          {formatLL(item.total_price)}
-                        </p>
-                      </div>
-                    </div>
-                  </div>
+    {/* Item Total */}
+    <div className="text-right">
+      <p className="font-semibold text-base text-amber-600">
+        {formatLL(item.total_price)}
+      </p>
+    </div>
+  </div>
+</div>
                 ))}
               </div>
             )}
