@@ -23,14 +23,14 @@
   "screenshots": [
     {
       "src": "/screenshots/mobile.png",
-      "sizes": "390x844",
+      "sizes": "369x802",
       "type": "image/png",
       "form_factor": "narrow",
       "label": "Golden Squirrel POS Mobile"
     },
     {
       "src": "/screenshots/desktop.png",
-      "sizes": "1920x1080",
+      "sizes": "1919x942",
       "type": "image/png",
       "form_factor": "wide",
       "label": "Golden Squirrel POS Desktop"
