@@ -1,20 +1,22 @@
 {
+  "id": "/pos",
   "name": "Golden Squirrel POS",
   "short_name": "SquirrelPOS",
   "description": "Mobile Point of Sale",
   "start_url": "/pos",
+  "scope": "/",
   "display": "standalone",
   "background_color": "#000000",
   "theme_color": "#f59e0b",
   "icons": [
     {
-      "src": "/icons/icon-192x192.png",
+      "src": "/icons/launchericon-192x192.png",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/icons/icon-512x512.png",
+      "src": "/icons/launchericon-512x512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "maskable"
