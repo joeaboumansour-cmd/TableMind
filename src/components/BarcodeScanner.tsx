@@ -24,40 +24,25 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
   const [error, setError] = useState<string | null>(null);
   const [manualBarcode, setManualBarcode] = useState<string>("");
 
-  // --- NEW: SYNTHETIC BEEP GENERATOR ---
-  // This avoids loading external MP3 files and works instantly
   const playSuccessSound = useCallback(() => {
     try {
       const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
-      
-      // Create nodes
       const oscillator = audioCtx.createOscillator();
       const gainNode = audioCtx.createGain();
 
       oscillator.connect(gainNode);
       gainNode.connect(audioCtx.destination);
 
-      // --- TUNING FOR AUTHENTICITY ---
-      // 'square' sounds like an old-school electronic beep
-      // 'triangle' is a bit cleaner but still sharp
       oscillator.type = "square"; 
-      
-      // Frequency: 1500Hz is a sharp, piercing "chirp"
       oscillator.frequency.setValueAtTime(1500, audioCtx.currentTime); 
-      
-      // Volume: Start at 0.1 (not too loud), then drop to 0 instantly
       gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime);
-      
-      // The "Snap": Cutting the sound off at 0.07 seconds makes it a "click" or "chirp"
-      // rather than a "beeeeeep"
       gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.07);
 
       oscillator.start();
       oscillator.stop(audioCtx.currentTime + 0.07);
 
-      // Haptic feedback
       if (typeof navigator !== "undefined" && navigator.vibrate) {
-        navigator.vibrate(60); // Short pulse for a "click" feel
+        navigator.vibrate(60);
       }
     } catch (e) {
       console.warn("Audio feedback failed:", e);
@@ -75,17 +60,13 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
     if (isProcessingRef.current || !barcode) return;
     isProcessingRef.current = true;
     
-    // Play the beep immediately on detection
     playSuccessSound();
-    
     onScan(barcode);
     
     setTimeout(() => { 
       isProcessingRef.current = false; 
     }, 2000);
   }, [onScan, playSuccessSound]);
-
-  // ... rest of your useEffect logic (stays the same) ...
 
   useEffect(() => {
     if (!isActive || !scannerRef.current) return;
@@ -118,14 +99,27 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
               width: { ideal: 1920 },
               height: { ideal: 1080 },
               deviceId: cachedTargetCameraId ? { exact: cachedTargetCameraId } : undefined,
-              facingMode: "environment"
+              facingMode: "environment",
+              aspectRatio: {ideal: 1.7777777778}
+            },
+            // OPTIMIZATION 2: Target Area (The Patch)
+            // This restricts scanning to the middle rectangle only
+            area: {
+              top: "10%",    // start 30% from top
+              right: "10%",  // leave 20% margin on right
+              left: "10%",   // leave 20% margin on left
+              bottom: "40%"  // end 30% from bottom
             },
           },
+          locator: {
+              halfSample: false,
+              patchSize: "medium"
+            },
           decoder: {
-            readers: ["ean_reader", "ean_8_reader", "code_128_reader", "code_39_reader", "upc_reader"]
+            // Keep only what you use to save CPU cycles
+            readers: ["ean_reader", "code_128_reader", "upc_reader"]
           },
-          locate: true,
-          frequency: 20,
+          locate: true, 
         }, (err) => {
           if (err) throw err;
           if (!isMounted) return;
@@ -163,17 +157,30 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
         <div className="relative group">
           <div className="relative bg-zinc-950 aspect-[4/3] sm:h-[280px] w-full overflow-hidden [&_video]:object-cover">
             <div ref={scannerRef} className="w-full h-full" />
+            
+            {/* HUD Overlay - Adjusted to match the "Patch" area */}
             {isScanning && !error && (
-              <div className="absolute inset-0 pointer-events-none border-[12px] border-black/20">
-                <div className="absolute top-6 left-6 w-10 h-10 border-t-4 border-l-4 border-amber-500 rounded-tl-xl" />
-                <div className="absolute top-6 right-6 w-10 h-10 border-t-4 border-r-4 border-amber-500 rounded-tr-xl" />
-                <div className="absolute bottom-6 left-6 w-10 h-10 border-b-4 border-l-4 border-amber-500 rounded-bl-xl" />
-                <div className="absolute bottom-6 right-6 w-10 h-10 border-b-4 border-r-4 border-amber-500 rounded-br-xl" />
-                <div className="absolute inset-0 flex items-center justify-center">
-                   <div className="w-[80%] h-[1px] bg-amber-500/20 shadow-[0_0_8px_rgba(245,158,11,0.5)] animate-pulse" />
+              <div className="absolute inset-0 pointer-events-none">
+                {/* Dimm the non-scanned areas */}
+                <div className="absolute inset-0 bg-black/40" style={{ clipPath: 'polygon(0% 0%, 0% 100%, 20% 100%, 20% 30%, 80% 30%, 80% 70%, 20% 70%, 20% 100%, 100% 100%, 100% 0%)' }} />
+                
+                {/* The Target Box */}
+                <div className="absolute top-[30%] left-[20%] right-[20%] bottom-[30%] border-2 border-amber-500/50 rounded-lg">
+                  <div className="absolute top-0 left-0 w-4 h-4 border-t-4 border-l-4 border-amber-500" />
+                  <div className="absolute top-0 right-0 w-4 h-4 border-t-4 border-r-4 border-amber-500" />
+                  <div className="absolute bottom-0 left-0 w-4 h-4 border-b-4 border-l-4 border-amber-500" />
+                  <div className="absolute bottom-0 right-0 w-4 h-4 border-b-4 border-r-4 border-amber-500" />
+                  
+                  {/* Laser Line */}
+                  <div className="absolute inset-x-0 top-1/2 h-[1px] bg-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.8)] animate-pulse" />
                 </div>
+                
+                <p className="absolute bottom-4 left-0 right-0 text-center text-[10px] text-amber-500 uppercase tracking-widest font-bold">
+                  Align Barcode in Box
+                </p>
               </div>
             )}
+            
             {error && (
                <div className="absolute inset-0 flex flex-col items-center justify-center bg-zinc-900/95 p-6 text-center">
                  <Camera className="h-10 w-10 text-zinc-700 mb-4" />
@@ -182,6 +189,7 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
                </div>
             )}
           </div>
+          
           <div className="p-4 dark:bg-zinc-900 flex flex-col gap-3">
             <div className="flex gap-2">
               <Input
@@ -194,7 +202,7 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
               <Button onClick={() => handleBarcodeDetected(manualBarcode.trim())}>Add</Button>
             </div>
             {onClose && (
-              <Button variant="ghost" size="sm" onClick={onClose}>Cancel</Button>
+              <Button variant="ghost" size="sm" onClick={onClose} className="text-zinc-500">Cancel</Button>
             )}
           </div>
         </div>
