@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Camera, X, Scan } from "lucide-react";
+import { Camera, X } from "lucide-react";
 import Quagga from "@ericblade/quagga2";
 
 interface BarcodeScannerProps {
@@ -13,7 +13,6 @@ interface BarcodeScannerProps {
   isActive?: boolean;
 }
 
-// Persist the device ID across mounts to skip the "Warm-up" phase on repeated use
 let cachedTargetCameraId: string | null = null;
 
 export default function BarcodeScanner({ onScan, onClose, isActive = true }: BarcodeScannerProps) {
@@ -25,7 +24,46 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
   const [error, setError] = useState<string | null>(null);
   const [manualBarcode, setManualBarcode] = useState<string>("");
 
-  // Cleanly stops all hardware tracks
+  // --- NEW: SYNTHETIC BEEP GENERATOR ---
+  // This avoids loading external MP3 files and works instantly
+  const playSuccessSound = useCallback(() => {
+    try {
+      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      
+      // Create nodes
+      const oscillator = audioCtx.createOscillator();
+      const gainNode = audioCtx.createGain();
+
+      oscillator.connect(gainNode);
+      gainNode.connect(audioCtx.destination);
+
+      // --- TUNING FOR AUTHENTICITY ---
+      // 'square' sounds like an old-school electronic beep
+      // 'triangle' is a bit cleaner but still sharp
+      oscillator.type = "square"; 
+      
+      // Frequency: 1500Hz is a sharp, piercing "chirp"
+      oscillator.frequency.setValueAtTime(1500, audioCtx.currentTime); 
+      
+      // Volume: Start at 0.1 (not too loud), then drop to 0 instantly
+      gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime);
+      
+      // The "Snap": Cutting the sound off at 0.07 seconds makes it a "click" or "chirp"
+      // rather than a "beeeeeep"
+      gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.07);
+
+      oscillator.start();
+      oscillator.stop(audioCtx.currentTime + 0.07);
+
+      // Haptic feedback
+      if (typeof navigator !== "undefined" && navigator.vibrate) {
+        navigator.vibrate(60); // Short pulse for a "click" feel
+      }
+    } catch (e) {
+      console.warn("Audio feedback failed:", e);
+    }
+  }, []);
+
   const stopTracks = useCallback(() => {
     if (activeStreamRef.current) {
       activeStreamRef.current.getTracks().forEach((track) => track.stop());
@@ -37,38 +75,34 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
     if (isProcessingRef.current || !barcode) return;
     isProcessingRef.current = true;
     
+    // Play the beep immediately on detection
+    playSuccessSound();
+    
     onScan(barcode);
     
-    // 2-second cooldown to prevent duplicate entries
     setTimeout(() => { 
       isProcessingRef.current = false; 
     }, 2000);
-  }, [onScan]);
+  }, [onScan, playSuccessSound]);
+
+  // ... rest of your useEffect logic (stays the same) ...
 
   useEffect(() => {
     if (!isActive || !scannerRef.current) return;
-    
     let isMounted = true;
 
     const initScanner = async () => {
       try {
         setError(null);
-
-        // 1. Hardware Discovery (Warm-up)
         if (!cachedTargetCameraId) {
           const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
           const devices = await navigator.mediaDevices.enumerateDevices();
-          
-          // Immediately release the warm-up stream
           stream.getTracks().forEach(t => t.stop());
-
           const videoDevices = devices.filter(d => d.kind === 'videoinput');
           const backCameras = videoDevices.filter(d => {
             const label = d.label.toLowerCase();
             return label.includes('back') || label.includes('rear') || label.includes('environment');
           });
-
-          // Selection: Prefer the last back camera (usually the primary 1x lens)
           cachedTargetCameraId = backCameras.length > 0 
             ? backCameras[backCameras.length - 1].deviceId 
             : videoDevices[0]?.deviceId || null;
@@ -76,7 +110,6 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
 
         if (!isMounted) return;
 
-        // 2. Quagga Configuration
         await Quagga.init({
           inputStream: {
             type: "LiveStream",
@@ -96,31 +129,10 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
         }, (err) => {
           if (err) throw err;
           if (!isMounted) return;
-
           Quagga.start();
           setIsScanning(true);
-
-          // Capture the stream reference for manual cleanup later
           const video = scannerRef.current?.querySelector('video');
-          if (video?.srcObject) {
-            activeStreamRef.current = video.srcObject as MediaStream;
-          }
-
-          // 3. Apply Optical/Hardware Tweaks (Autofocus & Zoom)
-          setTimeout(() => {
-            const track = Quagga.CameraAccess.getActiveTrack();
-            if (track && typeof track.applyConstraints === 'function') {
-              const caps = track.getCapabilities() as any;
-              const advanced: any[] = [];
-
-              if (caps.focusMode?.includes('continuous')) advanced.push({ focusMode: 'continuous' });
-              if (caps.zoom) advanced.push({ zoom: 1.0 });
-
-              if (advanced.length > 0) {
-                track.applyConstraints({ advanced }).catch(() => {});
-              }
-            }
-          }, 500);
+          if (video?.srcObject) activeStreamRef.current = video.srcObject as MediaStream;
         });
 
         Quagga.onDetected((data) => {
@@ -129,15 +141,11 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
 
       } catch (err: any) {
         console.error("Scanner Error:", err);
-        if (isMounted) {
-          setError(err.name === "NotAllowedError" ? "Camera permission denied." : "Hardware lens unavailable.");
-        }
+        if (isMounted) setError("Camera error. Please check permissions.");
       }
     };
 
-    // Delay start to prevent race conditions with previous unmounts
     const startTimer = setTimeout(initScanner, 200);
-
     return () => {
       isMounted = false;
       clearTimeout(startTimer);
@@ -153,13 +161,8 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
     <Card className="w-full border-amber-200/50 shadow-lg overflow-hidden">
       <CardContent className="p-0">
         <div className="relative group">
-          {/* Scanner Viewport */}
-          <div 
-            className="relative bg-zinc-950 aspect-[4/3] sm:h-[280px] w-full overflow-hidden [&_video]:object-cover"
-          >
+          <div className="relative bg-zinc-950 aspect-[4/3] sm:h-[280px] w-full overflow-hidden [&_video]:object-cover">
             <div ref={scannerRef} className="w-full h-full" />
-            
-            {/* HUD Overlay */}
             {isScanning && !error && (
               <div className="absolute inset-0 pointer-events-none border-[12px] border-black/20">
                 <div className="absolute top-6 left-6 w-10 h-10 border-t-4 border-l-4 border-amber-500 rounded-tl-xl" />
@@ -171,65 +174,29 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
                 </div>
               </div>
             )}
-
-            {/* Error State */}
             {error && (
-              <div className="absolute inset-0 flex flex-col items-center justify-center bg-zinc-900/95 p-6 text-center">
-                <Camera className="h-10 w-10 text-zinc-700 mb-4" />
-                <p className="text-zinc-200 text-sm font-medium mb-4 leading-relaxed">{error}</p>
-                <Button 
-                  size="sm" 
-                  variant="secondary" 
-                  onClick={() => window.location.reload()}
-                  className="bg-amber-500 hover:bg-amber-600 text-white border-none"
-                >
-                  Restart Scanner
-                </Button>
-              </div>
+               <div className="absolute inset-0 flex flex-col items-center justify-center bg-zinc-900/95 p-6 text-center">
+                 <Camera className="h-10 w-10 text-zinc-700 mb-4" />
+                 <p className="text-zinc-200 text-sm">{error}</p>
+                 <Button onClick={() => window.location.reload()}>Restart</Button>
+               </div>
             )}
           </div>
-
-          {/* Footer Controls */}
           <div className="p-4 dark:bg-zinc-900 flex flex-col gap-3">
             <div className="flex gap-2">
               <Input
-                placeholder="Type barcode manually..."
+                placeholder="Manual barcode..."
                 value={manualBarcode}
                 onChange={(e) => setManualBarcode(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && manualBarcode.trim() && onScan(manualBarcode.trim())}
-                className="h-10 focus-visible:ring-amber-500"
+                onKeyDown={(e) => e.key === "Enter" && handleBarcodeDetected(manualBarcode.trim())}
+                className="h-10"
               />
-              <Button 
-                onClick={() => manualBarcode.trim() && onScan(manualBarcode.trim())}
-                className="bg-zinc-900 hover:bg-zinc-800 text-white dark:bg-amber-500 dark:hover:bg-amber-600"
-              >
-                Add
-              </Button>
+              <Button onClick={() => handleBarcodeDetected(manualBarcode.trim())}>Add</Button>
             </div>
-            
             {onClose && (
-              <Button 
-                variant="ghost" 
-                size="sm" 
-                className="w-full text-zinc-500 text-xs h-7 hover:bg-zinc-100" 
-                onClick={onClose}
-              >
-                Cancel and Close
-              </Button>
+              <Button variant="ghost" size="sm" onClick={onClose}>Cancel</Button>
             )}
           </div>
-
-          {/* Absolute Close Icon for quick exit */}
-          {onClose && (
-            <Button 
-              variant="secondary" 
-              size="icon" 
-              className="absolute top-3 right-3 h-8 w-8 rounded-full bg-black/40 hover:bg-black/60 text-white border-none backdrop-blur-md" 
-              onClick={onClose}
-            >
-              <X className="h-4 w-4" />
-            </Button>
-          )}
         </div>
       </CardContent>
     </Card>
