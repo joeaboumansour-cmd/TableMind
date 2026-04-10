@@ -20,7 +20,7 @@ import {
 } from "lucide-react";
 import { useCartStore } from "@/lib/stores/cartStore";
 import { toast } from "sonner";
-import { formatCurrency, formatLL, convertUsdToLl, formatUSD } from "@/lib/utils/format";
+import { formatCurrency, formatLL, convertUsdToLl, formatUSD, formatDateTime } from "@/lib/utils/format";
 
 const supabase = createClient();
 
@@ -30,10 +30,12 @@ function CheckoutContent() {
   const paymentMethod = searchParams.get("method") || "cash";
 
   const [amountPaid, setAmountPaid] = useState<string>("");
+  const [whatsappNumber, setWhatsappNumber] = useState<string>("");
   const [isProcessing, setIsProcessing] = useState(false);
   const [transactionComplete, setTransactionComplete] = useState(false);
   const [transactionNumber, setTransactionNumber] = useState<string>("");
   const [change, setChange] = useState<number>(0);
+  const [whatsappRedirectUrl, setWhatsappRedirectUrl] = useState<string>("");
 
   const {
     items,
@@ -141,6 +143,66 @@ function CheckoutContent() {
 
       setTransactionComplete(true);
       toast.success("Payment processed successfully!");
+      
+      // Handle WhatsApp receipt
+      if (whatsappNumber && whatsappNumber.trim()) {
+        // Format the WhatsApp number - ensure it's 8 digits (Lebanese local format)
+        const cleanNumber = whatsappNumber.replace(/\D/g, '');
+        if (cleanNumber.length === 8) {
+          // Always add 00961 before the number as specified in requirements
+          const phoneNumber = `${cleanNumber}`;
+          
+          // Parse auth data to get username for store name
+          let storeName = "TableMind Store";
+          try {
+            const authData = JSON.parse(localStorage.getItem("goldensquirrel_auth") || "{}");
+            if (authData.username) {
+              storeName = authData.username;
+            }
+          } catch (e) {
+            // Use default store name if auth data parsing fails
+          }
+          
+           // Build receipt lines array
+           const receiptLines: string[] = [];
+           receiptLines.push(`*${storeName}*`);
+           receiptLines.push(`Transaction: #${txnNumber}`);
+           receiptLines.push(`Date: ${formatDateTime(new Date().toISOString())}`);
+           receiptLines.push("");
+           receiptLines.push("*Items:*");
+
+           // Add each item with price
+           items.forEach((item) => {
+             receiptLines.push(`${item.product_name} x${item.quantity} - ${formatLL(item.total_price)}`);
+           });
+
+           receiptLines.push("");
+           receiptLines.push(`*Subtotal:* ${formatLL(getSubtotal())}`);
+           receiptLines.push(`*Total:* ${formatLL(total)}`);
+           
+           // Add paid and change for cash payments
+           if (paymentMethod === "cash") {
+             receiptLines.push(`*Paid:* ${formatLL(parseFloat(amountPaid))}`);
+             receiptLines.push(`*Change:* ${formatLL(change)}`);
+           }
+
+           receiptLines.push("");
+           receiptLines.push("Status: ✓ Paid");
+           receiptLines.push("Thank you for your purchase!");
+          
+          // Join with URL-encoded line breaks
+          const receiptText = encodeURIComponent(receiptLines.join("\n"));
+          
+          // Construct WhatsApp URL
+          const whatsappUrl = `https://wa.me/${phoneNumber}?text=${receiptText}`;
+          setWhatsappRedirectUrl(whatsappUrl);
+          
+          // Redirect to WhatsApp after a short delay
+          setTimeout(() => {
+            window.open(whatsappUrl, '_blank');
+          }, 1000);
+        }
+      }
     } catch (error) {
       console.error("Error processing payment:", error);
       toast.error("Failed to process payment");
@@ -185,10 +247,6 @@ function CheckoutContent() {
             </div>
 
             <div className="space-y-2">
-              <Button className="w-full" onClick={() => router.push(`/receipt/${transactionNumber}`)}>
-                <Receipt className="h-4 w-4 mr-2" />
-                View Receipt
-              </Button>
               <Button variant="outline" className="w-full" onClick={handleNewTransaction}>
                 New Transaction
               </Button>
@@ -248,6 +306,34 @@ function CheckoutContent() {
                     <span className="text-amber-500">{formatLL(total)}</span>
                   </div>
                 </div>
+            </CardContent>
+          </Card>
+
+          {/* WhatsApp Receipt Option */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-sm font-medium">
+                WhatsApp Receipt
+              </CardTitle>
+              <CardDescription>
+                Optional: Send receipt via WhatsApp
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-2">
+                <Label htmlFor="whatsapp">WhatsApp Number</Label>
+                <Input
+                  id="whatsapp"
+                  type="tel"
+                  placeholder="70123456"
+                  value={whatsappNumber}
+                  onChange={(e) => setWhatsappNumber(e.target.value)}
+                  className="text-lg"
+                />
+                <p className="text-xs text-muted-foreground">
+                  Enter Lebanese number starting with 70, 71, 76, etc. (no +961 or 00961 prefix)
+                </p>
+              </div>
             </CardContent>
           </Card>
 

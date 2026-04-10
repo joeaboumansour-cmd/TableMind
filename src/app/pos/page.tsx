@@ -18,6 +18,8 @@ import {
   Scan,
   X,
   Squirrel,
+  History,
+  Menu,
 } from "lucide-react";
 import { useCartStore } from "@/lib/stores/cartStore";
 import { Product } from "@/lib/types/product";
@@ -42,6 +44,7 @@ export default function POSPage() {
   const [isCharge, setIsCharge] = useState(true); // true = charge (green), false = credit (red)
   const [highlightedItemId, setHighlightedItemId] = useState<string | null>(null);
   const highlightTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
   const {
     items,
@@ -162,6 +165,18 @@ export default function POSPage() {
     router.push("/login");
   };
 
+  // Close mobile menu when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (isMobileMenuOpen && !(event.target as Element).closest('.mobile-menu-container')) {
+        setIsMobileMenuOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [isMobileMenuOpen]);
+
   // Cleanup timeout on unmount
   useEffect(() => {
     return () => {
@@ -198,14 +213,72 @@ export default function POSPage() {
               </div>
             </div>
 
-            <div className="flex items-center gap-2">
+            {/* Desktop Buttons */}
+            <div className="hidden md:flex items-center gap-2">
               <Button variant="ghost" size="sm" onClick={() => router.push("/pos/products")}>
                 <Package className="h-4 w-4 mr-1" />
                 Inventory
               </Button>
+              <Button variant="ghost" size="sm" onClick={() => router.push("/transactions")}>
+                <History className="h-4 w-4 mr-1" />
+                History
+              </Button>
               <Button variant="ghost" size="icon" onClick={handleLogout}>
                 <LogOut className="h-5 w-5" />
               </Button>
+            </div>
+
+            {/* Mobile Hamburger Menu */}
+            <div className="md:hidden relative mobile-menu-container">
+              <Button 
+                variant="ghost" 
+                size="icon" 
+                onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+                aria-label="Open menu"
+              >
+                {isMobileMenuOpen ? (
+                  <X className="h-5 w-5" />
+                ) : (
+                  <Menu className="h-5 w-5" />
+                )}
+              </Button>
+
+              {/* Mobile Dropdown Menu */}
+              {isMobileMenuOpen && (
+                <div className="absolute right-0 top-full mt-2 w-48 bg-background border rounded-lg shadow-lg z-50 overflow-hidden">
+                  <button
+                    className="w-full px-4 py-3 text-left flex items-center gap-3 hover:bg-muted/50 transition-colors"
+                    onClick={() => {
+                      router.push("/pos/products");
+                      setIsMobileMenuOpen(false);
+                    }}
+                  >
+                    <Package className="h-4 w-4" />
+                    <span>Inventory</span>
+                  </button>
+                  <button
+                    className="w-full px-4 py-3 text-left flex items-center gap-3 hover:bg-muted/50 transition-colors"
+                    onClick={() => {
+                      router.push("/transactions");
+                      setIsMobileMenuOpen(false);
+                    }}
+                  >
+                    <History className="h-4 w-4" />
+                    <span>History</span>
+                  </button>
+                  <div className="border-t" />
+                  <button
+                    className="w-full px-4 py-3 text-left flex items-center gap-3 hover:bg-muted/50 transition-colors text-red-500"
+                    onClick={() => {
+                      handleLogout();
+                      setIsMobileMenuOpen(false);
+                    }}
+                  >
+                    <LogOut className="h-4 w-4" />
+                    <span>Logout</span>
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         </div>

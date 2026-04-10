@@ -75,18 +75,49 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
     const initScanner = async () => {
       try {
         setError(null);
+
+        // Check if MediaDevices API is available (requires HTTPS)
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          const errorMessage = !window.isSecureContext
+            ? "Camera access requires a secure connection (HTTPS). Please use HTTPS or localhost."
+            : "Your browser does not support camera access. Please use a modern browser.";
+          console.error("MediaDevices API not available:", errorMessage);
+          if (isMounted) setError(errorMessage);
+          return;
+        }
+
         if (!cachedTargetCameraId) {
-          const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
-          const devices = await navigator.mediaDevices.enumerateDevices();
-          stream.getTracks().forEach(t => t.stop());
-          const videoDevices = devices.filter(d => d.kind === 'videoinput');
-          const backCameras = videoDevices.filter(d => {
-            const label = d.label.toLowerCase();
-            return label.includes('back') || label.includes('rear') || label.includes('environment');
-          });
-          cachedTargetCameraId = backCameras.length > 0 
-            ? backCameras[backCameras.length - 1].deviceId 
-            : videoDevices[0]?.deviceId || null;
+          let stream: MediaStream | null = null;
+          try {
+            stream = await navigator.mediaDevices.getUserMedia({ 
+              video: { 
+                facingMode: "environment" 
+              } 
+            });
+            const devices = await navigator.mediaDevices.enumerateDevices();
+            stream.getTracks().forEach(t => t.stop());
+            const videoDevices = devices.filter(d => d.kind === 'videoinput');
+            const backCameras = videoDevices.filter(d => {
+              const label = d.label.toLowerCase();
+              return label.includes('back') || label.includes('rear') || label.includes('environment');
+            });
+            cachedTargetCameraId = backCameras.length > 0 
+              ? backCameras[backCameras.length - 1].deviceId 
+              : videoDevices[0]?.deviceId || null;
+          } catch (streamErr: any) {
+            console.error("Failed to get camera stream for device enumeration:", streamErr);
+            // If we can't access the camera at all, provide a helpful error
+            if (streamErr.name === 'NotAllowedError' || streamErr.name === 'PermissionDeniedError') {
+              if (isMounted) setError("Camera permission denied. Please allow camera access in your browser settings.");
+            } else if (streamErr.name === 'NotFoundError' || streamErr.name === 'DevicesNotFoundError') {
+              if (isMounted) setError("No camera device found. Please connect a camera and try again.");
+            } else if (streamErr.name === 'NotReadableError' || streamErr.name === 'TrackStartError') {
+              if (isMounted) setError("Camera is already in use by another application. Please close other apps using the camera.");
+            } else {
+              if (isMounted) setError("Unable to access camera. Please check your device and try again.");
+            }
+            return;
+          }
         }
 
         if (!isMounted) return;
@@ -192,13 +223,15 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
           
           <div className="p-4 dark:bg-zinc-900 flex flex-col gap-3">
             <div className="flex gap-2">
-              <Input
-                placeholder="Manual barcode..."
-                value={manualBarcode}
-                onChange={(e) => setManualBarcode(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && handleBarcodeDetected(manualBarcode.trim())}
-                className="h-10"
-              />
+                <Input
+                  placeholder="Manual barcode..."
+                  value={manualBarcode}
+                  onChange={(e) => setManualBarcode(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && handleBarcodeDetected(manualBarcode.trim())}
+                  className="h-10"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                />
               <Button onClick={() => handleBarcodeDetected(manualBarcode.trim())}>Add</Button>
             </div>
             {onClose && (

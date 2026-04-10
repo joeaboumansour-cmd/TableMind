@@ -432,7 +432,7 @@ export default function StoreProductsPage() {
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="barcode" className="text-sm">Barcode (Optional)</Label>
+                    <Label htmlFor="barcode" className="text-sm">Barcode</Label>
                     <div className="flex gap-2">
                       <Input
                         id="barcode"
@@ -440,6 +440,8 @@ export default function StoreProductsPage() {
                         value={barcode}
                         onChange={(e) => setBarcode(e.target.value)}
                         className="h-9"
+                        inputMode="numeric"
+                        pattern="[0-9]*"
                       />
                       <Button type="button" variant="outline" size="sm" onClick={() => setShowBarcodeScanner(true)}>
                         <Scan className="h-4 w-4" />
@@ -474,6 +476,7 @@ export default function StoreProductsPage() {
                         onChange={(e) => setCostPrice(e.target.value)}
                         required
                         className="h-9"
+                        inputMode="numeric"
                       />
                     </div>
                     <div className="space-y-2">
@@ -487,6 +490,7 @@ export default function StoreProductsPage() {
                         onChange={(e) => setProfitPercentage(e.target.value)}
                         required
                         className="h-9"
+                        inputMode="numeric"
                       />
                     </div>
                   </div>
@@ -510,6 +514,7 @@ export default function StoreProductsPage() {
                         onChange={(e) => setStockQuantity(e.target.value)}
                         required
                         className="h-9"
+                        inputMode="numeric"
                       />
                     </div>
                     <div className="space-y-2">
@@ -522,6 +527,7 @@ export default function StoreProductsPage() {
                         onChange={(e) => setMinStockThreshold(e.target.value)}
                         required
                         className="h-9"
+                        inputMode="numeric"
                       />
                     </div>
                   </div>

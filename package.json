@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev -H 0.0.0.0 --webpack",
-    "build": "next build --webpack", 
+    "build": "next build --webpack",
     "start": "next start",
     "lint": "next lint"
   },
@@ -15,6 +15,7 @@
     "@ericblade/quagga2": "^1.12.1",
     "@modelcontextprotocol/sdk": "^1.26.0",
     "@radix-ui/react-alert-dialog": "^1.1.15",
+    "@radix-ui/react-collapsible": "^1.1.12",
     "@serwist/next": "^9.5.7",
     "@serwist/window": "^9.5.7",
     "@supabase/ssr": "^0.8.0",
