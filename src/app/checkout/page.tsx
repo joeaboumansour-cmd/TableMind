@@ -193,6 +193,7 @@ function CheckoutContent() {
            // Build receipt lines array
            const receiptLines: string[] = [];
            receiptLines.push(`*${storeName}*`);
+           receiptLines.push("");
            receiptLines.push(`Transaction: #${txnNumber}`);
            receiptLines.push(`Date: ${formatDateTime(new Date().toISOString())}`);
            receiptLines.push("");
@@ -204,7 +205,6 @@ function CheckoutContent() {
            });
 
            receiptLines.push("");
-           receiptLines.push(`*Subtotal:* ${formatLL(getSubtotal())}`);
            receiptLines.push(`*Total:* ${formatLL(total)}`);
            
            // Add paid and change based on payment method
@@ -235,7 +235,10 @@ function CheckoutContent() {
       }
     } catch (error) {
       console.error("Error processing payment:", JSON.stringify(error, null, 2));
-      toast.error(error.message || "Failed to process payment");
+      const errorMessage = error instanceof Error 
+        ? error.message 
+        : "Failed to process payment";
+      toast.error(errorMessage);
     } finally {
       setIsProcessing(false);
     }

@@ -180,7 +180,6 @@ export default function TransactionHistoryPage() {
     });
 
     receiptLines.push("");
-    receiptLines.push(`*Subtotal:* ${formatLL(transaction.subtotal)}`);
     receiptLines.push(`*Total:* ${formatLL(transaction.total_amount)}`);
     receiptLines.push(`*Paid:* ${formatLL(transaction.amount_paid)}`);
     receiptLines.push(`*Change:* ${formatLL(transaction.calculated_change)}`);
@@ -368,14 +367,14 @@ export default function TransactionHistoryPage() {
                           <span>Subtotal</span>
                           <span className="text-right">
                             <div>{formatLL(transaction.subtotal)}</div>
-                            <div className="text-xs text-muted-foreground">${formatUSD(convertLlToUsdForSale(transaction.subtotal))}</div>
+                            <div className="text-s text-muted-foreground">{formatUSD(convertLlToUsdForSale(transaction.subtotal))}</div>
                           </span>
                         </div>
                         <div className="flex justify-between text-sm font-semibold">
                           <span>Total</span>
                           <span className="text-right text-primary">
                             <div>{formatLL(transaction.total_amount)}</div>
-                            <div className="text-xs text-muted-foreground">${formatUSD(convertLlToUsdForSale(transaction.total_amount))}</div>
+                            <div className="text-s text-muted-foreground">{formatUSD(convertLlToUsdForSale(transaction.total_amount))}</div>
                           </span>
                         </div>
                         <Separator />
@@ -383,7 +382,7 @@ export default function TransactionHistoryPage() {
                           <span>Amount Paid</span>
                           <span className="text-right">
                             <div>{formatLL(transaction.amount_paid)}</div>
-                            <div className="text-xs text-muted-foreground">${formatUSD(convertLlToUsdForSale(transaction.amount_paid))}</div>
+                            <div className="text-s text-muted-foreground">{formatUSD(convertLlToUsdForSale(transaction.amount_paid))}</div>
                           </span>
                         </div>
                         {transaction.calculated_change > 0 && (
@@ -391,14 +390,10 @@ export default function TransactionHistoryPage() {
                             <span>Change Returned</span>
                             <span className="text-right">
                               <div>{formatLL(transaction.calculated_change)}</div>
-                              <div className="text-xs text-muted-foreground">${formatUSD(convertLlToUsdForReturn(transaction.calculated_change))}</div>
+                              <div className="text-s text-muted-foreground">{formatUSD(convertLlToUsdForReturn(transaction.calculated_change))}</div>
                             </span>
                           </div>
                         )}
-                        <Separator />
-                        <div className="text-xs text-muted-foreground text-center pt-1">
-                          Sell rate: 1 USD = {SELL_RATE.toLocaleString()} LL • Return rate: 1 USD = {RETURN_RATE.toLocaleString()} LL
-                        </div>
                       </div>
 
                       {/* Actions */}
