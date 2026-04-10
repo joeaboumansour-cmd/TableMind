@@ -17,47 +17,56 @@ import {
   Check,
   Loader2,
   Calculator,
+  DollarSign,
 } from "lucide-react";
 import { useCartStore } from "@/lib/stores/cartStore";
 import { toast } from "sonner";
-import { formatCurrency, formatLL, convertUsdToLl, formatUSD, formatDateTime } from "@/lib/utils/format";
+import { formatCurrency, formatLL, convertUsdToLl, formatUSD, formatDateTime, convertLlToUsdForReturn, convertLlToUsdForSale, SELL_RATE, RETURN_RATE } from "@/lib/utils/format";
 
 const supabase = createClient();
 
 function CheckoutContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const paymentMethod = searchParams.get("method") || "cash";
+  const [paymentMethod, setPaymentMethod] = useState(searchParams.get("method") || "cash");
 
-  const [amountPaid, setAmountPaid] = useState<string>("");
+  const [amountPaidLL, setAmountPaidLL] = useState<string>("");
+  const [amountPaidUSD, setAmountPaidUSD] = useState<string>("");
   const [whatsappNumber, setWhatsappNumber] = useState<string>("");
   const [isProcessing, setIsProcessing] = useState(false);
   const [transactionComplete, setTransactionComplete] = useState(false);
   const [transactionNumber, setTransactionNumber] = useState<string>("");
-  const [change, setChange] = useState<number>(0);
   const [whatsappRedirectUrl, setWhatsappRedirectUrl] = useState<string>("");
+  const [paidAmount, setPaidAmount] = useState<number>(0);
+  const [changeGiven, setChangeGiven] = useState<number>(0);
+  const [changeUsd, setChangeUsd] = useState<number>(0);
 
   const {
     items,
     store_id,
     getSubtotal,
+    getSubtotalUsd,
     getTotal,
+    getTotalUsd,
     clearCart,
   } = useCartStore();
 
   const total = getTotal();
+  const totalUsd = getTotalUsd();
 
-  // Calculate change for cash payments
-  useEffect(() => {
-    if (paymentMethod === "cash" && amountPaid) {
-      const paid = parseFloat(amountPaid);
-      if (!isNaN(paid) && paid >= total) {
-        setChange(paid - total);
-      } else {
-        setChange(0);
-      }
-    }
-  }, [amountPaid, total, paymentMethod]);
+  // Calculate total paid - simple direct calculation
+  const paidLL = parseFloat(amountPaidLL) || 0;
+  const paidUSD = parseFloat(amountPaidUSD) || 0;
+  const totalPaid = paidLL + (paidUSD * SELL_RATE);
+  
+  // Simple balance calculation: whatever was entered minus total
+  const difference = totalPaid - total;
+  
+  const isChangeDue = difference > 0;
+  const isExactMatch = difference === 0;
+  const displayAmount = Math.abs(difference);
+
+  // No auto-sync effects - user controls both fields manually
 
   // Generate transaction number
   const generateTransactionNumber = () => {
@@ -73,13 +82,18 @@ function CheckoutContent() {
       return;
     }
 
-    if (paymentMethod === "cash") {
-      const paid = parseFloat(amountPaid);
-      if (isNaN(paid) || paid < total) {
-        toast.error("Insufficient payment amount");
-        return;
-      }
-    }
+  if (totalPaid <= 0) {
+    toast.error("Please enter payment amount");
+    return;
+  }
+
+  if (totalPaid < total) {
+    toast.error("Insufficient payment amount");
+    return;
+  }
+
+  const paymentMethodUsed = "cash";
+  const calculatedPaidAmount = totalPaid;
 
     setIsProcessing(true);
 
@@ -96,6 +110,15 @@ function CheckoutContent() {
 
       const { store_id } = JSON.parse(authData);
 
+      // Calculate USD amounts
+      const subtotalUsd = getSubtotalUsd();
+      const calculatedChangeGiven = calculatedPaidAmount - total;
+      const calculatedChangeUsd = calculatedChangeGiven / SELL_RATE;
+
+      setPaidAmount(calculatedPaidAmount);
+      setChangeGiven(calculatedChangeGiven);
+      setChangeUsd(calculatedChangeUsd);
+
       // Create transaction record
       const { data: transaction, error: transactionError } = await supabase
         .from("transactions")
@@ -104,8 +127,12 @@ function CheckoutContent() {
           transaction_number: txnNumber,
           subtotal: getSubtotal(),
           total_amount: total,
-          amount_paid: paymentMethod === "cash" ? parseFloat(amountPaid) : total,
-          change_given: paymentMethod === "cash" ? change : 0,
+          amount_paid: calculatedPaidAmount,
+          change_given: calculatedChangeGiven,
+          usd_subtotal: subtotalUsd,
+          usd_total_amount: totalUsd,
+          usd_amount_paid: convertLlToUsdForSale(calculatedPaidAmount),
+          usd_change_given: calculatedChangeUsd,
         })
         .select()
         .single();
@@ -180,11 +207,14 @@ function CheckoutContent() {
            receiptLines.push(`*Subtotal:* ${formatLL(getSubtotal())}`);
            receiptLines.push(`*Total:* ${formatLL(total)}`);
            
-           // Add paid and change for cash payments
-           if (paymentMethod === "cash") {
-             receiptLines.push(`*Paid:* ${formatLL(parseFloat(amountPaid))}`);
-             receiptLines.push(`*Change:* ${formatLL(change)}`);
-           }
+           // Add paid and change based on payment method
+            if (paymentMethodUsed === "cash") {
+              receiptLines.push(`*Paid:* ${formatLL(calculatedPaidAmount)}`);
+              receiptLines.push(`*Change:* ${formatLL(calculatedChangeGiven)}`);
+            } else if (paymentMethodUsed === "usd") {
+              receiptLines.push(`*Paid:* $${formatUSD(calculatedPaidAmount / SELL_RATE)}`);
+              receiptLines.push(`*Change:* $${formatUSD(calculatedChangeUsd)}`);
+            }
 
            receiptLines.push("");
            receiptLines.push("Status: ✓ Paid");
@@ -204,8 +234,8 @@ function CheckoutContent() {
         }
       }
     } catch (error) {
-      console.error("Error processing payment:", error);
-      toast.error("Failed to process payment");
+      console.error("Error processing payment:", JSON.stringify(error, null, 2));
+      toast.error(error.message || "Failed to process payment");
     } finally {
       setIsProcessing(false);
     }
@@ -233,18 +263,23 @@ function CheckoutContent() {
               Transaction #{transactionNumber}
             </p>
 
-            <div className="space-y-2 mb-6">
-              <div className="flex justify-between">
-                <span>Total Paid</span>
-                <span className="font-bold">{formatLL(total)}</span>
-              </div>
-              {paymentMethod === "cash" && change > 0 && (
-                <div className="flex justify-between text-green-500">
-                  <span>Change</span>
-                  <span className="font-bold">{formatLL(change)}</span>
-                </div>
-              )}
-            </div>
+             <div className="space-y-2 mb-6">
+               <div className="flex justify-between">
+                 <span>Total Amount</span>
+                 <span className="font-bold">{formatLL(total)}</span>
+               </div>
+               <div className="flex justify-between">
+                 <span>Amount Paid</span>
+                 <span className="font-bold">{formatLL(paidAmount)}</span>
+               </div>
+               {changeGiven > 0 && (
+                 <div className="flex justify-between text-green-500">
+                   <span>Change</span>
+                   <span className="font-bold">{formatLL(changeGiven)}</span>
+                   <span className="text-sm">(${formatUSD(changeUsd)})</span>
+                 </div>
+               )}
+             </div>
 
             <div className="space-y-2">
               <Button variant="outline" className="w-full" onClick={handleNewTransaction}>
@@ -269,7 +304,7 @@ function CheckoutContent() {
             <div>
               <h1 className="font-bold text-lg">Checkout</h1>
               <p className="text-sm text-muted-foreground">
-                {paymentMethod === "cash" ? "Cash Payment" : "Card Payment"}
+                Cash Payment
               </p>
             </div>
           </div>
@@ -293,7 +328,10 @@ function CheckoutContent() {
                     <span>
                       {item.product_name} × {item.quantity}
                     </span>
-                    <span className="font-medium">{formatLL(item.total_price)}</span>
+                    <span className="text-right">
+                      <div className="font-medium">{formatLL(item.total_price)}</div>
+                      <div className="text-xs text-muted-foreground">{formatUSD(item.total_price_usd)}</div>
+                    </span>
                   </div>
                 ))}
               </div>
@@ -303,7 +341,10 @@ function CheckoutContent() {
                 <div className="space-y-2">
                   <div className="flex justify-between text-lg font-bold">
                     <span>Total</span>
-                    <span className="text-amber-500">{formatLL(total)}</span>
+                    <span className="text-right">
+                      <div className="text-amber-500">{formatLL(total)}</div>
+                      <div className="text-s text-muted-foreground">{formatUSD(totalUsd)}</div>
+                    </span>
                   </div>
                 </div>
             </CardContent>
@@ -337,84 +378,97 @@ function CheckoutContent() {
             </CardContent>
           </Card>
 
-          {/* Payment Method */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                {paymentMethod === "cash" ? (
-                  <>
-                    <Banknote className="h-5 w-5" />
-                    Cash Payment
-                  </>
-                ) : (
-                  <>
-                    <CreditCard className="h-5 w-5" />
-                    Card Payment
-                  </>
-                )}
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              {paymentMethod === "cash" ? (
-                <div className="space-y-4">
-                  <div>
-                    <Label htmlFor="amount">Amount Received (LL)</Label>
-                    <div className="relative mt-1">
-                      <Input
-                        id="amount"
-                        type="number"
-                        step="1"
-                        min={total}
-                        placeholder={total.toString()}
-                        value={amountPaid}
-                        onChange={(e) => setAmountPaid(e.target.value)}
-                        className="text-lg"
-                      />
-                    </div>
-                  </div>
+      {/* Payment Method */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm font-medium">Payment Method</CardTitle>
+        </CardHeader>
+        <CardContent>
+           <div className="space-y-4">
+             <div className="grid grid-cols-2 gap-4">
+               <div>
+                 <Label htmlFor="amountLL">Amount Received (LL)</Label>
+                 <Input
+                   id="amountLL"
+                   type="number"
+                   step="1"
+                   placeholder={total.toString()}
+                   value={amountPaidLL}
+                   onChange={(e) => {
+                     setAmountPaidLL(e.target.value);
+                     setAmountPaidUSD("");
+                   }}
+                   className="text-lg mt-1"
+                 />
+               </div>
 
-                  {/* Change Display */}
-                  {change > 0 && (
-                    <div className="p-4 bg-green-500/10 rounded-lg">
-                      <div className="flex items-center justify-between">
-                        <span className="text-green-600 font-medium">Change Due</span>
-                        <span className="text-2xl font-bold text-green-600">
-                          {formatLL(change)}
-                        </span>
-                      </div>
-                    </div>
-                  )}
+               <div>
+                 <Label htmlFor="amountUSD">Amount Received (USD)</Label>
+                 <Input
+                   id="amountUSD"
+                   type="number"
+                   step="0.01"
+                   placeholder={totalUsd.toString()}
+                   value={amountPaidUSD}
+                   onChange={(e) => {
+                     setAmountPaidUSD(e.target.value);
+                     setAmountPaidLL("");
+                   }}
+                   className="text-lg mt-1"
+                 />
+               </div>
+             </div>
 
-                  {/* Calculator hint */}
-                  {total > 0 && (
-                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                      <Calculator className="h-4 w-4" />
-                      <span>
-                        Minimum: {formatLL(total)}
-                      </span>
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <div className="text-center py-8">
-                  <CreditCard className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
-                  <p className="text-muted-foreground">
-                    Ready to process card payment
-                  </p>
-                  <p className="text-2xl font-bold mt-2">{formatLL(total)}</p>
-                </div>
-              )}
-            </CardContent>
+             {/* Balance Display - always calculate live */}
+             {totalPaid > 0 && (
+               isChangeDue ? (
+                 <div className="p-4 bg-green-500/10 rounded-lg">
+                   <div className="text-green-600 font-medium mb-1">Change Due</div>
+                   <div className="flex justify-between items-center">
+                     <span className="text-2xl font-bold text-green-600">
+                       {formatLL(displayAmount)}
+                     </span>
+                     <span className="text-green-600 font-medium">
+                       {formatUSD(displayAmount / SELL_RATE)}
+                     </span>
+                   </div>
+                 </div>
+               ) : (
+                 <div className="p-4 bg-amber-500/10 rounded-lg">
+                   <div className="text-amber-600 font-medium mb-1">Remaining Due</div>
+                   <div className="flex justify-between items-center">
+                     <span className="text-2xl font-bold text-amber-600">
+                       {formatLL(displayAmount)}
+                     </span>
+                     <span className="text-amber-600 font-medium">
+                       {formatUSD(displayAmount / SELL_RATE)}
+                     </span>
+                   </div>
+                 </div>
+               )
+             )}
+
+             {/* Calculator hint */}
+             {total > 0 && (
+               <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                 <Calculator className="h-4 w-4" />
+                 <span>
+                   Total: {formatLL(total)} / {formatUSD(totalUsd)}
+                 </span>
+               </div>
+             )}
+           </div>
+         </CardContent>
           </Card>
 
           {/* Process Payment Button */}
           <Button
             className="w-full h-14 text-lg"
             onClick={handleProcessPayment}
-            disabled={
-              isProcessing ||
-              (paymentMethod === "cash" && (parseFloat(amountPaid) < total || !amountPaid))
-            }
+             disabled={
+               isProcessing ||
+               totalPaid < total
+             }
           >
             {isProcessing ? (
               <>

@@ -9,6 +9,8 @@ export interface CartItem {
   quantity: number;
   unit_price: number;
   total_price: number;
+  unit_price_usd: number;
+  total_price_usd: number;
   stock_quantity: number;
 }
 
@@ -33,7 +35,9 @@ export interface CartActions {
   clearCart: () => void;
   setStoreId: (storeId: string) => void;
   getSubtotal: () => number;
+  getSubtotalUsd: () => number;
   getTotal: () => number;
+  getTotalUsd: () => number;
   getItemCount: () => number;
   isEmpty: () => boolean;
 }

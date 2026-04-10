@@ -4,6 +4,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { CartStore, CartItem } from '@/lib/types/cart';
 import { Product } from '@/lib/types/product';
+import { convertLlToUsdForSale } from '@/lib/utils/format';
 
 export const useCartStore = create<CartStore>()(
   persist(
@@ -17,15 +18,20 @@ export const useCartStore = create<CartStore>()(
         const { items } = get();
         const existingItem = items.find(item => item.product_id === product.id);
 
+        // Calculate USD prices using sell rate (90,000)
+        const unitPriceUsd = product.selling_price_usd || convertLlToUsdForSale(product.selling_price);
+
         if (existingItem) {
           // Update existing item
+          const newQuantity = existingItem.quantity + quantity;
           set({
             items: items.map(item =>
               item.product_id === product.id
                 ? {
                     ...item,
-                    quantity: item.quantity + quantity,
-                    total_price: (item.quantity + quantity) * item.unit_price,
+                    quantity: newQuantity,
+                    total_price: newQuantity * item.unit_price,
+                    total_price_usd: newQuantity * item.unit_price_usd,
                   }
                 : item
             ),
@@ -39,6 +45,8 @@ export const useCartStore = create<CartStore>()(
             quantity,
             unit_price: product.selling_price,
             total_price: quantity * product.selling_price,
+            unit_price_usd: unitPriceUsd,
+            total_price_usd: quantity * unitPriceUsd,
             stock_quantity: product.stock_quantity,
           };
           set({ items: [newItem, ...items] });
@@ -77,6 +85,7 @@ export const useCartStore = create<CartStore>()(
                   ...item,
                   quantity,
                   total_price: quantity * item.unit_price,
+                  total_price_usd: quantity * item.unit_price_usd,
                 }
               : item
           ),
@@ -120,8 +129,17 @@ export const useCartStore = create<CartStore>()(
         return items.reduce((sum, item) => sum + item.total_price, 0);
       },
 
+      getSubtotalUsd: () => {
+        const { items } = get();
+        return items.reduce((sum, item) => sum + item.total_price_usd, 0);
+      },
+
       getTotal: () => {
         return get().getSubtotal();
+      },
+
+      getTotalUsd: () => {
+        return get().getSubtotalUsd();
       },
 
       getItemCount: () => {

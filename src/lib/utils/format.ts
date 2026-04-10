@@ -1,22 +1,46 @@
 // Format utilities for GoldenSquirrel Mobile POS
 
 /**
- * Exchange rate: 1 USD = 89000 LL
+ * Exchange rate when SELLING (customer pays): 1 USD = 90,000 LL
+ * This rate is used when converting LL prices to USD for display during sales
  */
-const USD_TO_LL_RATE = 89000;
+export const SELL_RATE = 90000;
 
 /**
- * Convert USD to Lebanese Pounds
+ * Exchange rate when RETURNING money (giving change): 1 USD = 89,000 LL
+ * This rate is used when converting LL change back to USD
+ */
+export const RETURN_RATE = 89000;
+
+/**
+ * Convert USD to Lebanese Pounds (uses sell rate)
  */
 export function convertUsdToLl(usdAmount: number): number {
-  return Math.round(usdAmount * USD_TO_LL_RATE);
+  return Math.round(usdAmount * SELL_RATE);
 }
 
 /**
- * Convert Lebanese Pounds to USD
+ * Convert Lebanese Pounds to USD for sale display (uses sell rate: 90,000)
+ * Use this when showing product prices in USD
+ */
+export function convertLlToUsdForSale(llAmount: number): number {
+  return llAmount / SELL_RATE;
+}
+
+/**
+ * Convert Lebanese Pounds to USD for return/change (uses return rate: 89,000)
+ * Use this when calculating USD equivalent of change to give back
+ */
+export function convertLlToUsdForReturn(llAmount: number): number {
+  return llAmount / RETURN_RATE;
+}
+
+/**
+ * @deprecated Use convertLlToUsdForSale or convertLlToUsdForReturn instead
+ * Convert Lebanese Pounds to USD (defaults to sell rate for backwards compatibility)
  */
 export function convertLlToUsd(llAmount: number): number {
-  return llAmount / USD_TO_LL_RATE;
+  return convertLlToUsdForSale(llAmount);
 }
 
 /**

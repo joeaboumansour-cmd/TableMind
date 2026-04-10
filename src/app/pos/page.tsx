@@ -24,7 +24,7 @@ import {
 import { useCartStore } from "@/lib/stores/cartStore";
 import { Product } from "@/lib/types/product";
 import { toast } from "sonner";
-import { formatCurrency, formatLL, convertUsdToLl, formatUSD, convertLlToUsd } from "@/lib/utils/format";
+import { formatCurrency, formatLL, convertUsdToLl, formatUSD, convertLlToUsd, convertLlToUsdForSale, convertLlToUsdForReturn, SELL_RATE, RETURN_RATE } from "@/lib/utils/format";
 import BarcodeScanner from "@/components/BarcodeScanner";
 
 const supabase = createClient();
@@ -54,7 +54,9 @@ export default function POSPage() {
     clearCart,
     setStoreId,
     getSubtotal,
+    getSubtotalUsd,
     getTotal,
+    getTotalUsd,
     getItemCount,
     isEmpty,
   } = useCartStore();
@@ -340,6 +342,9 @@ export default function POSPage() {
     <p className="text-xs text-muted-foreground text-center">
       {formatLL(item.unit_price)} each
     </p>
+    <p className="text-xs text-muted-foreground text-center">
+      {formatUSD(item.unit_price_usd)} each
+    </p>
   </div>
 
   {/* Quantity and Price Row */}
@@ -373,12 +378,15 @@ export default function POSPage() {
       </Button>
     </div>
 
-    {/* Item Total */}
-    <div className="text-right">
-      <p className="font-semibold text-base text-amber-600">
-        {formatLL(item.total_price)}
-      </p>
-    </div>
+  {/* Item Total */}
+  <div className="text-right">
+    <p className="font-semibold text-base text-amber-600">
+      {formatLL(item.total_price)}
+    </p>
+    <p className="text-s text-muted-foreground">
+      {formatUSD(item.total_price_usd)}
+    </p>
+  </div>
   </div>
 </div>
                 ))}
@@ -393,8 +401,13 @@ export default function POSPage() {
               <div className="space-y-1">
                 <div className="flex justify-between items-center">
                   <span className="text-xl font-semibold">Total</span>
-                  <span className="text-2xl font-bold text-amber-500">
-                    {formatLL(getTotal())}
+                  <span className="text-right">
+                    <div className="text-2xl font-bold text-amber-500">
+                      {formatLL(getTotal())}
+                    </div>
+                    <div className="text-s text-muted-foreground">
+                      {formatUSD(getTotalUsd())}
+                    </div>
                   </span>
                 </div>
               </div>

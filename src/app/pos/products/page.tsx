@@ -32,7 +32,7 @@ import {
   X,
 } from "lucide-react";
 import { toast } from "sonner";
-import { formatLL, convertUsdToLl } from "@/lib/utils/format";
+import { formatLL, formatUSD, convertUsdToLl, convertLlToUsdForSale, SELL_RATE, RETURN_RATE } from "@/lib/utils/format";
 import BarcodeScanner from "@/components/BarcodeScanner";
 
 const supabase = createClient();
@@ -588,10 +588,17 @@ export default function StoreProductsPage() {
                         </Badge>
                       )}
                     </div>
-                    <div className="flex items-center justify-center gap-3 text-xs text-muted-foreground mb-2">
-                      <span>Cost: {formatLL(product.cost_price)}</span>
-                      <span>•</span>
-                      <span>Sell: {formatLL(product.selling_price)}</span>
+                    <div className="flex flex-col gap-1 text-xs text-muted-foreground mb-2">
+                      <div className="flex items-center justify-center gap-3">
+                        <span>Cost: {formatLL(product.cost_price)}</span>
+                        <span>•</span>
+                        <span>Sell: {formatLL(product.selling_price)}</span>
+                      </div>
+                      <div className="flex items-center justify-center gap-3 text-[12px]">
+                        <span>Cost: {formatUSD(product.cost_price / SELL_RATE)}</span>
+                        <span>•</span>
+                        <span>Sell: {formatUSD(product.selling_price / SELL_RATE)}</span>
+                      </div>
                     </div>
                     <div className="flex items-center gap-2 text-xs">
                       <Badge variant={product.profit_percentage >= 0 ? "default" : "destructive"} className="text-xs">
