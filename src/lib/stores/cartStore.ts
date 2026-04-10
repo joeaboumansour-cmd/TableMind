@@ -31,7 +31,7 @@ export const useCartStore = create<CartStore>()(
             ),
           });
         } else {
-          // Add new item
+          // Add new item at the top of the cart
           const newItem: CartItem = {
             product_id: product.id,
             product_name: product.name,
@@ -39,8 +39,9 @@ export const useCartStore = create<CartStore>()(
             quantity,
             unit_price: product.selling_price,
             total_price: quantity * product.selling_price,
+            stock_quantity: product.stock_quantity,
           };
-          set({ items: [...items, newItem] });
+          set({ items: [newItem, ...items] });
         }
 
         // Play beep sound if enabled
@@ -85,9 +86,13 @@ export const useCartStore = create<CartStore>()(
       incrementQuantity: (productId: string) => {
         const { items } = get();
         const item = items.find(i => i.product_id === productId);
-        if (item) {
+        // Use Infinity as default if stock_quantity is undefined (backward compatibility)
+        const maxStock = item?.stock_quantity ?? Infinity;
+        if (item && item.quantity < maxStock) {
           get().updateQuantity(productId, item.quantity + 1);
+          return true;
         }
+        return false;
       },
 
       decrementQuantity: (productId: string) => {
@@ -135,6 +140,16 @@ export const useCartStore = create<CartStore>()(
         items: state.items,
         store_id: state.store_id,
       }),
+      migrate: (persistedState: any, version: number) => {
+        // Migrate persisted cart items to include stock_quantity
+        if (persistedState && persistedState.items) {
+          persistedState.items = persistedState.items.map((item: any) => ({
+            ...item,
+            stock_quantity: item.stock_quantity ?? 9999, // Default to large number for old items
+          }));
+        }
+        return persistedState as any;
+      },
     }
   )
 );

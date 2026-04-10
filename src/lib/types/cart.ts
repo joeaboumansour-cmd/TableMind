@@ -9,6 +9,7 @@ export interface CartItem {
   quantity: number;
   unit_price: number;
   total_price: number;
+  stock_quantity: number;
 }
 
 export interface Cart {
@@ -27,7 +28,7 @@ export interface CartActions {
   addItem: (product: Product, quantity?: number) => void;
   removeItem: (productId: string) => void;
   updateQuantity: (productId: string, quantity: number) => void;
-  incrementQuantity: (productId: string) => void;
+  incrementQuantity: (productId: string) => boolean;
   decrementQuantity: (productId: string) => void;
   clearCart: () => void;
   setStoreId: (storeId: string) => void;

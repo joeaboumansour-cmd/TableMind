@@ -151,10 +151,13 @@ export default function POSPage() {
   };
 
   const toggleScanner = () => {
-    setIsScannerActive(!isScannerActive);
+    const newState = !isScannerActive;
+    setIsScannerActive(newState);
     if (typeof window !== 'undefined' && 'localStorage' in window) {
-      localStorage.setItem("scanner_active", String(!isScannerActive));
+      localStorage.setItem("scanner_active", String(newState));
     }
+    // Refresh the page for the scanner toggle effect to take effect
+    window.location.reload();
   };
 
   // Handle logout
@@ -358,7 +361,13 @@ export default function POSPage() {
         variant="outline"
         size="icon"
         className="h-8 w-8 rounded"
-        onClick={() => incrementQuantity(item.product_id)}
+        disabled={item.quantity >= item.stock_quantity}
+        onClick={() => {
+          const success = incrementQuantity(item.product_id);
+          if (!success) {
+            toast.error(`Cannot exceed available stock (${item.stock_quantity})`);
+          }
+        }}
       >
         <Plus className="h-3 w-3" />
       </Button>
