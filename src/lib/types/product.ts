@@ -7,9 +7,8 @@ export interface Product {
   barcode: string | null;
   cost_price: number;
   selling_price: number;
-  cost_price_usd: number;
-  selling_price_usd: number;
-  profit_percentage: number | null;
+  currency: 'LL' | 'USD';
+  profit_percentage: number;
   stock_quantity: number;
   min_stock_threshold: number;
 }
@@ -19,8 +18,7 @@ export interface ProductInput {
   barcode?: string;
   cost_price: number;
   selling_price?: number;
-  cost_price_usd?: number;
-  selling_price_usd?: number;
+  currency?: 'LL' | 'USD';
   profit_percentage?: number;
   stock_quantity?: number;
   min_stock_threshold?: number;
@@ -31,8 +29,7 @@ export interface ProductUpdate {
   barcode?: string;
   cost_price?: number;
   selling_price?: number;
-  cost_price_usd?: number;
-  selling_price_usd?: number;
+  currency?: 'LL' | 'USD';
   profit_percentage?: number;
   stock_quantity?: number;
   min_stock_threshold?: number;

@@ -148,6 +148,7 @@ function CheckoutContent() {
         quantity: item.quantity,
         unit_price: item.unit_price,
         total_price: item.total_price,
+        currency: item.currency || 'LL',
       }));
 
       const { error: itemsError } = await supabase
@@ -316,42 +317,63 @@ function CheckoutContent() {
 
       <div className="container mx-auto px-4 py-6">
         <div className="max-w-md mx-auto space-y-6">
-          {/* Order Summary */}
-          <Card>
-            <CardHeader>
-              <CardTitle>Order Summary</CardTitle>
-              <CardDescription>
-                {items.length} item{items.length !== 1 ? "s" : ""}
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-3 max-h-[200px] overflow-y-auto mb-4">
-                {items.map((item) => (
-                  <div key={item.product_id} className="flex justify-between text-sm">
-                    <span>
-                      {item.product_name} × {item.quantity}
-                    </span>
-                    <span className="text-right">
-                      <div className="font-medium">{formatLL(item.total_price)}</div>
-                      <div className="text-xs text-muted-foreground">{formatUSD(item.total_price_usd)}</div>
-                    </span>
+              {/* Order Summary */}
+              <Card>
+                <CardHeader>
+                  <CardTitle>Order Summary</CardTitle>
+                  <CardDescription>
+                    {items.length} item{items.length !== 1 ? "s" : ""}
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="space-y-3 max-h-[200px] overflow-y-auto mb-4">
+                    {items.map((item) => (
+                      <div key={item.product_id} className="flex justify-between text-sm">
+                        <div className="flex items-center gap-2">
+                          <span>{item.product_name} × {item.quantity}</span>
+                          <Badge variant="outline" className="text-xs px-1 py-0">
+                            {item.currency}
+                          </Badge>
+                        </div>
+                        <span className="text-right">
+                          {item.currency === 'LL' ? (
+                            <>
+                              <div className="font-medium">{formatLL(item.total_price)}</div>
+                              <div className="text-xs text-muted-foreground">{formatUSD(item.total_price_usd)}</div>
+                            </>
+                          ) : (
+                            <>
+                              <div className="font-medium">{formatUSD(item.total_price_usd)}</div>
+                              <div className="text-xs text-muted-foreground">{formatLL(item.total_price)}</div>
+                            </>
+                          )}
+                        </span>
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
 
-              <Separator className="my-4" />
+                  <Separator className="my-4" />
 
-                <div className="space-y-2">
-                  <div className="flex justify-between text-lg font-bold">
-                    <span>Total</span>
-                    <span className="text-right">
-                      <div className="text-amber-500">{formatLL(total)}</div>
-                      <div className="text-s text-muted-foreground">{formatUSD(totalUsd)}</div>
-                    </span>
+                  <div className="space-y-2">
+                    <div className="flex justify-between text-lg font-bold">
+                      <span>Total</span>
+                      <span className="text-right">
+                        {items[0]?.currency === 'LL' ? (
+                          <>
+                            <div className="text-amber-500">{formatLL(total)}</div>
+                            <div className="text-s text-muted-foreground">{formatUSD(totalUsd)}</div>
+                          </>
+                        ) : (
+                          <>
+                            <div className="text-amber-500">{formatUSD(totalUsd)}</div>
+                            <div className="text-s text-muted-foreground">{formatLL(total)}</div>
+                          </>
+                        )}
+                      </span>
+                    </div>
                   </div>
-                </div>
-            </CardContent>
-          </Card>
+                </CardContent>
+              </Card>
 
           {/* WhatsApp Receipt Option */}
           <Card>

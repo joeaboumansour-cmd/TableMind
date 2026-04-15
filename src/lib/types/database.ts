@@ -40,6 +40,7 @@ export interface Database {
           barcode: string | null;
           cost_price: number;
           selling_price: number;
+          currency: string;
           profit_percentage: number;
           stock_quantity: number;
           min_stock_threshold: number;
@@ -51,6 +52,7 @@ export interface Database {
           barcode?: string | null;
           cost_price?: number;
           selling_price?: number;
+          currency?: string;
           profit_percentage?: number;
           stock_quantity?: number;
           min_stock_threshold?: number;
@@ -62,6 +64,7 @@ export interface Database {
           barcode?: string | null;
           cost_price?: number;
           selling_price?: number;
+          currency?: string;
           profit_percentage?: number;
           stock_quantity?: number;
           min_stock_threshold?: number;
@@ -109,6 +112,7 @@ export interface Database {
           quantity: number;
           unit_price: number;
           total_price: number;
+          currency: string;
         };
         Insert: {
           id?: string;
@@ -119,6 +123,7 @@ export interface Database {
           quantity?: number;
           unit_price: number;
           total_price: number;
+          currency?: string;
         };
         Update: {
           id?: string;
@@ -129,6 +134,7 @@ export interface Database {
           quantity?: number;
           unit_price?: number;
           total_price?: number;
+          currency?: string;
         };
       };
     };

@@ -30,10 +30,14 @@ import {
   Scan,
   Info,
   X,
+  Download,
+  Upload,
 } from "lucide-react";
 import { toast } from "sonner";
 import { formatLL, formatUSD, convertUsdToLl, convertLlToUsdForSale, SELL_RATE, RETURN_RATE } from "@/lib/utils/format";
 import BarcodeScanner from "@/components/BarcodeScanner";
+import CSVImportDialog from "@/components/CSVImportDialog";
+import { downloadCSV, productsToCSV } from "@/lib/csv/utils";
 
 const supabase = createClient();
 
@@ -44,6 +48,7 @@ interface Product {
   barcode: string | null;
   cost_price: number;
   selling_price: number;
+  currency: 'LL' | 'USD';
   profit_percentage: number;
   stock_quantity: number;
   min_stock_threshold: number;
@@ -64,20 +69,77 @@ export default function StoreProductsPage() {
   const [showInfoDialog, setShowInfoDialog] = useState(false);
   const [highlightedProductId, setHighlightedProductId] = useState<string | null>(null);
   const [showScanSearch, setShowScanSearch] = useState(false);
+  const [showImportDialog, setShowImportDialog] = useState(false);
 
   // Form state
   const [name, setName] = useState("");
   const [barcode, setBarcode] = useState("");
+  const [currency, setCurrency] = useState<'LL' | 'USD'>("LL");
   const [costPrice, setCostPrice] = useState("");
   const [profitPercentage, setProfitPercentage] = useState("");
+  const [sellingPrice, setSellingPrice] = useState("");
   const [stockQuantity, setStockQuantity] = useState("");
   const [minStockThreshold, setMinStockThreshold] = useState("5");
 
-  // Calculate selling price from cost and profit percentage
-  const calculateSellingPrice = () => {
-    const cost = parseFloat(costPrice) || 0;
-    const profit = parseFloat(profitPercentage) || 0;
+  // Track which field triggered the update to avoid circular updates
+  const [lastUpdated, setLastUpdated] = useState<'cost' | 'profit' | 'selling'>("cost");
+
+  // Tri-directional calculation functions
+  const calculateSellingPrice = (cost: number, profit: number) => {
     return cost * (1 + profit / 100);
+  };
+
+  const calculateProfitPercentage = (cost: number, selling: number) => {
+    if (cost === 0) return 0;
+    return ((selling - cost) / cost) * 100;
+  };
+
+  // Handle cost price change
+  const handleCostPriceChange = (value: string) => {
+    setCostPrice(value);
+    setLastUpdated('cost');
+    
+    const cost = parseFloat(value) || 0;
+    const profit = parseFloat(profitPercentage) || 0;
+    
+    if (cost > 0) {
+      const calculatedSelling = calculateSellingPrice(cost, profit);
+      setSellingPrice(calculatedSelling.toString());
+    } else {
+      setSellingPrice("");
+    }
+  };
+
+  // Handle profit percentage change
+  const handleProfitPercentageChange = (value: string) => {
+    setProfitPercentage(value);
+    setLastUpdated('profit');
+    
+    const cost = parseFloat(costPrice) || 0;
+    const profit = parseFloat(value) || 0;
+    
+    if (cost > 0) {
+      const calculatedSelling = calculateSellingPrice(cost, profit);
+      setSellingPrice(calculatedSelling.toString());
+    } else {
+      setSellingPrice("");
+    }
+  };
+
+  // Handle selling price change
+  const handleSellingPriceChange = (value: string) => {
+    setSellingPrice(value);
+    setLastUpdated('selling');
+    
+    const cost = parseFloat(costPrice) || 0;
+    const selling = parseFloat(value) || 0;
+    
+    if (cost > 0) {
+      const calculatedProfit = calculateProfitPercentage(cost, selling);
+      setProfitPercentage(calculatedProfit.toFixed(2));
+    } else {
+      setProfitPercentage("");
+    }
   };
 
   // Check store auth
@@ -142,8 +204,8 @@ export default function StoreProductsPage() {
 
     try {
       const cost = parseFloat(costPrice);
+      const selling = parseFloat(sellingPrice);
       const profit = parseFloat(profitPercentage) || 0;
-      const selling = cost * (1 + profit / 100);
 
       if (editingProduct) {
         // Update existing product
@@ -154,6 +216,7 @@ export default function StoreProductsPage() {
             barcode: barcode || null,
             cost_price: cost,
             selling_price: selling,
+            currency: currency,
             profit_percentage: profit,
             stock_quantity: parseInt(stockQuantity),
             min_stock_threshold: parseInt(minStockThreshold),
@@ -172,6 +235,7 @@ export default function StoreProductsPage() {
             barcode: barcode || null,
             cost_price: cost,
             selling_price: selling,
+            currency: currency,
             profit_percentage: profit,
             stock_quantity: parseInt(stockQuantity),
             min_stock_threshold: parseInt(minStockThreshold),
@@ -200,8 +264,10 @@ export default function StoreProductsPage() {
     setEditingProduct(product);
     setName(product.name);
     setBarcode(product.barcode || "");
+    setCurrency(product.currency || "LL");
     setCostPrice(product.cost_price.toString());
     setProfitPercentage(product.profit_percentage.toString());
+    setSellingPrice(product.selling_price.toString());
     setStockQuantity(product.stock_quantity.toString());
     setMinStockThreshold(product.min_stock_threshold.toString());
     setIsDialogOpen(true);
@@ -231,16 +297,65 @@ export default function StoreProductsPage() {
   const resetForm = () => {
     setName("");
     setBarcode("");
+    setCurrency("LL");
     setCostPrice("");
     setProfitPercentage("");
+    setSellingPrice("");
     setStockQuantity("");
     setMinStockThreshold("5");
     setEditingProduct(null);
+    setLastUpdated('cost');
   };
 
   const handleLogout = () => {
     localStorage.removeItem("goldensquirrel_auth");
     router.push("/login");
+  };
+
+  const handleExportProducts = () => {
+    if (products.length === 0) {
+      toast.error("No products to export");
+      return;
+    }
+
+    try {
+      // Convert products to CSV format
+      const csvData = products.map(p => ({
+        id: p.id,
+        name: p.name,
+        barcode: p.barcode || '',
+        cost_price: p.cost_price,
+        selling_price: p.selling_price,
+        currency: p.currency,
+        profit_percentage: p.profit_percentage,
+        stock_quantity: p.stock_quantity,
+        min_stock_threshold: p.min_stock_threshold,
+      }));
+
+      const csvContent = productsToCSV(csvData);
+      const filename = `products_export_${new Date().toISOString().slice(0, 10)}`;
+      
+      downloadCSV(csvContent, filename);
+      toast.success(`Exported ${products.length} products to CSV`);
+
+      // Log export operation
+      fetch("/api/products/export", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          storeId,
+          totalRows: products.length,
+          fileName: `${filename}.csv`,
+          fileSize: new Blob([csvContent]).size,
+        }),
+      }).catch(console.error);
+
+    } catch (error) {
+      console.error("Export error:", error);
+      toast.error("Failed to export products");
+    }
   };
 
   const handleBarcodeScanFromCamera = (scannedBarcode: string) => {
@@ -401,6 +516,12 @@ export default function StoreProductsPage() {
           <Button variant="outline" size="sm" onClick={() => setShowScanSearch(true)} className="h-9 px-3">
             <Scan className="h-4 w-4" />
           </Button>
+          <Button variant="outline" size="sm" onClick={handleExportProducts} className="h-9 px-3" disabled={products.length === 0}>
+            <Download className="h-4 w-4" />
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => setShowImportDialog(true)} className="h-9 px-3">
+            <Upload className="h-4 w-4" />
+          </Button>
           <Dialog open={isDialogOpen} onOpenChange={(open) => {
             setIsDialogOpen(open);
             if (!open) resetForm();
@@ -464,19 +585,31 @@ export default function StoreProductsPage() {
                       </p>
                     )}
                   </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="currency" className="text-sm">Currency</Label>
+                    <select
+                      id="currency"
+                      value={currency}
+                      onChange={(e) => setCurrency(e.target.value as 'LL' | 'USD')}
+                      className="h-9 px-3 rounded-md border border-input bg-background text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      <option value="LL">LL (Lebanese Lira)</option>
+                      <option value="USD">USD (US Dollar)</option>
+                    </select>
+                  </div>
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-2">
-                      <Label htmlFor="costPrice" className="text-sm">Cost Price (LL)</Label>
+                      <Label htmlFor="costPrice" className="text-sm">Cost Price ({currency})</Label>
                       <Input
                         id="costPrice"
                         type="number"
-                        step="1"
+                        step="0.01"
                         placeholder="0"
                         value={costPrice}
-                        onChange={(e) => setCostPrice(e.target.value)}
+                        onChange={(e) => handleCostPriceChange(e.target.value)}
                         required
                         className="h-9"
-                        inputMode="numeric"
+                        inputMode="decimal"
                       />
                     </div>
                     <div className="space-y-2">
@@ -487,21 +620,33 @@ export default function StoreProductsPage() {
                         step="0.1"
                         placeholder="0"
                         value={profitPercentage}
-                        onChange={(e) => setProfitPercentage(e.target.value)}
+                        onChange={(e) => handleProfitPercentageChange(e.target.value)}
                         required
                         className="h-9"
-                        inputMode="numeric"
+                        inputMode="decimal"
                       />
                     </div>
                   </div>
                   <div className="space-y-2">
-                    <Label className="text-sm text-muted-foreground">Selling Price (Calculated)</Label>
+                    <Label htmlFor="sellingPrice" className="text-sm">Selling Price ({currency})</Label>
                     <Input
-                      type="text"
-                      value={formatLL(calculateSellingPrice())}
-                      disabled
-                      className="h-9 bg-muted text-muted-foreground"
+                      id="sellingPrice"
+                      type="number"
+                      step="0.01"
+                      placeholder="0"
+                      value={sellingPrice}
+                      onChange={(e) => handleSellingPriceChange(e.target.value)}
+                      required
+                      className="h-9"
+                      inputMode="decimal"
                     />
+                    <p className="text-xs text-muted-foreground">
+                      {currency === 'LL' ? (
+                        <>Calculated: {formatLL(parseFloat(sellingPrice) || 0)} ≈ {formatUSD((parseFloat(sellingPrice) || 0) / SELL_RATE)}</>
+                      ) : (
+                        <>Calculated: {formatUSD(parseFloat(sellingPrice) || 0)} ≈ {formatLL((parseFloat(sellingPrice) || 0) * SELL_RATE)}</>
+                      )}
+                    </p>
                   </div>
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-2">
@@ -582,6 +727,9 @@ export default function StoreProductsPage() {
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-1">
                       <h3 className="font-semibold text-sm truncate">{product.name}</h3>
+                      <Badge variant="outline" className="text-xs px-1 py-0">
+                        {product.currency}
+                      </Badge>
                       {product.stock_quantity <= product.min_stock_threshold && (
                         <Badge variant="destructive" className="text-xs px-1 py-0">
                           Low
@@ -589,16 +737,33 @@ export default function StoreProductsPage() {
                       )}
                     </div>
                     <div className="flex flex-col gap-1 text-xs text-muted-foreground mb-2">
-                      <div className="flex items-center justify-center gap-3">
-                        <span>Cost: {formatLL(product.cost_price)}</span>
-                        <span>•</span>
-                        <span>Sell: {formatLL(product.selling_price)}</span>
-                      </div>
-                      <div className="flex items-center justify-center gap-3 text-[12px]">
-                        <span>Cost: {formatUSD(product.cost_price / SELL_RATE)}</span>
-                        <span>•</span>
-                        <span>Sell: {formatUSD(product.selling_price / SELL_RATE)}</span>
-                      </div>
+                      {product.currency === 'LL' ? (
+                        <>
+                          <div className="flex items-center justify-center gap-3">
+                            <span>Cost: {formatLL(product.cost_price)}</span>
+                            <span>•</span>
+                            <span>Sell: {formatLL(product.selling_price)}</span>
+                          </div>
+                          <div className="flex items-center justify-center gap-3 text-[12px]">
+                            <span>Cost: {formatUSD(product.cost_price / SELL_RATE)}</span>
+                            <span>•</span>
+                            <span>Sell: {formatUSD(product.selling_price / SELL_RATE)}</span>
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <div className="flex items-center justify-center gap-3">
+                            <span>Cost: {formatUSD(product.cost_price)}</span>
+                            <span>•</span>
+                            <span>Sell: {formatUSD(product.selling_price)}</span>
+                          </div>
+                          <div className="flex items-center justify-center gap-3 text-[12px]">
+                            <span>Cost: {formatLL(product.cost_price * SELL_RATE)}</span>
+                            <span>•</span>
+                            <span>Sell: {formatLL(product.selling_price * SELL_RATE)}</span>
+                          </div>
+                        </>
+                      )}
                     </div>
                     <div className="flex items-center gap-2 text-xs">
                       <Badge variant={product.profit_percentage >= 0 ? "default" : "destructive"} className="text-xs">
@@ -766,6 +931,17 @@ export default function StoreProductsPage() {
           </DialogContent>
         </Dialog>
       )}
+
+      {/* CSV Import Dialog */}
+      <CSVImportDialog
+        open={showImportDialog}
+        onOpenChange={setShowImportDialog}
+        storeId={storeId}
+        onImportComplete={() => {
+          fetchProducts(storeId);
+          setShowImportDialog(false);
+        }}
+      />
     </div>
   );
 }

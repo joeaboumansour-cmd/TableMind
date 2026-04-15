@@ -32,6 +32,7 @@ interface TransactionItem {
   quantity: number;
   unit_price: number;
   total_price: number;
+  currency: string;
 }
 
 interface Transaction {
@@ -338,25 +339,38 @@ export default function TransactionHistoryPage() {
                         <h4 className="font-medium text-sm mb-2">Line Items</h4>
                         <div className="space-y-2">
                           {transaction.transaction_items.map((item) => (
-                            <div
-                              key={item.id}
-                              className="flex justify-between text-sm py-2 border-b border-border/50 last:border-0"
-                            >
-                              <div className="flex-1">
-                                <span className="font-medium">{item.product_name}</span>
-                                <span className="text-muted-foreground ml-2">
-                                  ×{item.quantity}
-                                </span>
-                              </div>
-                              <div className="text-right">
-                                <div>{formatLL(item.total_price)}</div>
-                                {item.quantity > 1 && (
-                                  <div className="text-xs text-muted-foreground">
-                                    {formatLL(item.unit_price)} each
-                                  </div>
-                                )}
-                              </div>
-                            </div>
+                      <div
+                        key={item.id}
+                        className="flex justify-between text-sm py-2 border-b border-border/50 last:border-0"
+                      >
+                        <div className="flex-1">
+                          <span className="font-medium">{item.product_name}</span>
+                          <span className="text-muted-foreground ml-2">
+                            ×{item.quantity}
+                          </span>
+                        </div>
+                        <div className="text-right">
+                          {item.currency === 'LL' ? (
+                            <>
+                              <div>{formatLL(item.total_price)}</div>
+                              {item.quantity > 1 && (
+                                <div className="text-xs text-muted-foreground">
+                                  {formatLL(item.unit_price)} each
+                                </div>
+                              )}
+                            </>
+                          ) : (
+                            <>
+                              <div>{formatUSD(item.total_price)}</div>
+                              {item.quantity > 1 && (
+                                <div className="text-xs text-muted-foreground">
+                                  {formatUSD(item.unit_price)} each
+                                </div>
+                              )}
+                            </>
+                          )}
+                        </div>
+                      </div>
                           ))}
                         </div>
                       </div>

@@ -12,6 +12,7 @@ export interface CartItem {
   unit_price_usd: number;
   total_price_usd: number;
   stock_quantity: number;
+  currency: 'LL' | 'USD';
 }
 
 export interface Cart {

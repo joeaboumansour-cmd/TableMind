@@ -4,7 +4,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { CartStore, CartItem } from '@/lib/types/cart';
 import { Product } from '@/lib/types/product';
-import { convertLlToUsdForSale } from '@/lib/utils/format';
+import { convertLlToUsdForSale, SELL_RATE } from '@/lib/utils/format';
 
 export const useCartStore = create<CartStore>()(
   persist(
@@ -18,8 +18,19 @@ export const useCartStore = create<CartStore>()(
         const { items } = get();
         const existingItem = items.find(item => item.product_id === product.id);
 
-        // Calculate USD prices using sell rate (90,000)
-        const unitPriceUsd = product.selling_price_usd || convertLlToUsdForSale(product.selling_price);
+        // Normalize prices based on the currency dropdown value from the DB
+        let unitPriceUsd: number;
+        let unitPriceLl: number;
+
+        if (product.currency === 'USD') {
+          // If base price is USD, calculate LL by multiplying by the SELL_RATE
+          unitPriceUsd = product.selling_price;
+          unitPriceLl = product.selling_price * SELL_RATE;
+        } else {
+          // If base price is LL (default), calculate USD using the utility function
+          unitPriceLl = product.selling_price;
+          unitPriceUsd = convertLlToUsdForSale(product.selling_price);
+        }
 
         if (existingItem) {
           // Update existing item
@@ -43,11 +54,12 @@ export const useCartStore = create<CartStore>()(
             product_name: product.name,
             barcode: product.barcode,
             quantity,
-            unit_price: product.selling_price,
-            total_price: quantity * product.selling_price,
+            unit_price: unitPriceLl,
+            total_price: quantity * unitPriceLl,
             unit_price_usd: unitPriceUsd,
             total_price_usd: quantity * unitPriceUsd,
             stock_quantity: product.stock_quantity,
+            currency: product.currency || 'LL',
           };
           set({ items: [newItem, ...items] });
         }
@@ -95,7 +107,6 @@ export const useCartStore = create<CartStore>()(
       incrementQuantity: (productId: string) => {
         const { items } = get();
         const item = items.find(i => i.product_id === productId);
-        // Use Infinity as default if stock_quantity is undefined (backward compatibility)
         const maxStock = item?.stock_quantity ?? Infinity;
         if (item && item.quantity < maxStock) {
           get().updateQuantity(productId, item.quantity + 1);
@@ -159,11 +170,10 @@ export const useCartStore = create<CartStore>()(
         store_id: state.store_id,
       }),
       migrate: (persistedState: any, version: number) => {
-        // Migrate persisted cart items to include stock_quantity
         if (persistedState && persistedState.items) {
           persistedState.items = persistedState.items.map((item: any) => ({
             ...item,
-            stock_quantity: item.stock_quantity ?? 9999, // Default to large number for old items
+            stock_quantity: item.stock_quantity ?? 9999,
           }));
         }
         return persistedState as any;
