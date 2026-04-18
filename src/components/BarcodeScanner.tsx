@@ -148,7 +148,7 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
             },
           decoder: {
             // Keep only what you use to save CPU cycles
-            readers: ["ean_reader", "code_128_reader", "upc_reader"]
+            readers: ["ean_reader", "ean_8_reader", "code_128_reader", "upc_reader"]
           },
           locate: true, 
         }, (err) => {
