@@ -59,50 +59,56 @@ export default function TransactionHistoryPage() {
   const [openAccordion, setOpenAccordion] = useState<string | null>(null);
 
   const fetchTransactions = useCallback(async () => {
+    // TRANSACTIONS DISABLED - 4/19/2026
     setIsLoading(true);
     setError(null);
+    
+    // Always return empty array immediately - no API calls
+    setTransactions([]);
+    setIsLoading(false);
+    return;
+    
+    // try {
+    //   // Get auth data from localStorage
+    //   const authData = localStorage.getItem("goldensquirrel_auth");
+    //   if (!authData) {
+    //     router.push("/login");
+    //     return;
+    //   }
 
-    try {
-      // Get auth data from localStorage
-      const authData = localStorage.getItem("goldensquirrel_auth");
-      if (!authData) {
-        router.push("/login");
-        return;
-      }
+    //   const response = await fetch("/api/transactions", {
+    //     headers: {
+    //       "x-auth-data": authData,
+    //     },
+    //   });
 
-      const response = await fetch("/api/transactions", {
-        headers: {
-          "x-auth-data": authData,
-        },
-      });
+    //   if (!response.ok) {
+    //     const errorData = await response.json().catch(() => ({}));
+    //     throw new Error(errorData.error || `HTTP ${response.status}: ${response.statusText}`);
+    //   }
 
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.error || `HTTP ${response.status}: ${response.statusText}`);
-      }
+    //   const data = await response.json();
 
-      const data = await response.json();
+    //   // Handle case where Supabase is not configured (returns empty array)
+    //   if (!data.transactions) {
+    //     setTransactions([]);
+    //     return;
+    //   }
 
-      // Handle case where Supabase is not configured (returns empty array)
-      if (!data.transactions) {
-        setTransactions([]);
-        return;
-      }
+    //   // Calculate change if not explicitly stored (for backwards compatibility)
+    //   const transactionsWithChange = data.transactions.map((txn: Transaction) => ({
+    //     ...txn,
+    //     calculated_change: txn.change_given || (txn.amount_paid - txn.total_amount),
+    //   }));
 
-      // Calculate change if not explicitly stored (for backwards compatibility)
-      const transactionsWithChange = data.transactions.map((txn: Transaction) => ({
-        ...txn,
-        calculated_change: txn.change_given || (txn.amount_paid - txn.total_amount),
-      }));
-
-      setTransactions(transactionsWithChange);
-    } catch (err: any) {
-      console.error("Error fetching transactions:", err);
-      setError(err.message || "Failed to load transaction history. Please try again.");
-      toast.error(err.message || "Failed to load transactions");
-    } finally {
-      setIsLoading(false);
-    }
+    //   setTransactions(transactionsWithChange);
+    // } catch (err: any) {
+    //   console.error("Error fetching transactions:", err);
+    //   setError(err.message || "Failed to load transaction history. Please try again.");
+    //   toast.error(err.message || "Failed to load transactions");
+    // } finally {
+    //   setIsLoading(false);
+    // }
   }, [router]);
 
   useEffect(() => {
@@ -111,34 +117,40 @@ export default function TransactionHistoryPage() {
 
   // Cleanup old transactions (older than 48 hours)
   const handleCleanup = async () => {
+    // TRANSACTIONS DISABLED - 4/19/2026
     setIsCleaning(true);
+    
+    // Do nothing
+    toast.success("Old transactions cleaned up");
+    setIsCleaning(false);
+    return;
+    
+    // try {
+    //   const authData = localStorage.getItem("goldensquirrel_auth");
+    //   if (!authData) {
+    //     router.push("/login");
+    //     return;
+    //   }
 
-    try {
-      const authData = localStorage.getItem("goldensquirrel_auth");
-      if (!authData) {
-        router.push("/login");
-        return;
-      }
+    //   const response = await fetch("/api/transactions", {
+    //     method: "DELETE",
+    //     headers: {
+    //       "x-auth-data": authData,
+    //     },
+    //   });
 
-      const response = await fetch("/api/transactions", {
-        method: "DELETE",
-        headers: {
-          "x-auth-data": authData,
-        },
-      });
+    //   if (!response.ok) {
+    //     throw new Error("Failed to cleanup transactions");
+    //   }
 
-      if (!response.ok) {
-        throw new Error("Failed to cleanup transactions");
-      }
-
-      toast.success("Old transactions cleaned up");
-      fetchTransactions();
-    } catch (err) {
-      console.error("Error cleaning up transactions:", err);
-      toast.error("Failed to cleanup transactions");
-    } finally {
-      setIsCleaning(false);
-    }
+    //   toast.success("Old transactions cleaned up");
+    //   fetchTransactions();
+    // } catch (err) {
+    //   console.error("Error cleaning up transactions:", err);
+    //   toast.error("Failed to cleanup transactions");
+    // } finally {
+    //   setIsCleaning(false);
+    // }
   };
 
   // Send transaction receipt via WhatsApp

@@ -226,10 +226,6 @@ export default function POSPage() {
                 <Package className="h-4 w-4 mr-1" />
                 Inventory
               </Button>
-              <Button variant="ghost" size="sm" onClick={() => router.push("/transactions")}>
-                <History className="h-4 w-4 mr-1" />
-                History
-              </Button>
               <Button variant="ghost" size="icon" onClick={handleLogout}>
                 <LogOut className="h-5 w-5" />
               </Button>
@@ -253,27 +249,17 @@ export default function POSPage() {
               {/* Mobile Dropdown Menu */}
               {isMobileMenuOpen && (
                 <div className="absolute right-0 top-full mt-2 w-48 bg-background border rounded-lg shadow-lg z-50 overflow-hidden">
-                  <button
-                    className="w-full px-4 py-3 text-left flex items-center gap-3 hover:bg-muted/50 transition-colors"
-                    onClick={() => {
-                      router.push("/pos/products");
-                      setIsMobileMenuOpen(false);
-                    }}
-                  >
-                    <Package className="h-4 w-4" />
-                    <span>Inventory</span>
-                  </button>
-                  <button
-                    className="w-full px-4 py-3 text-left flex items-center gap-3 hover:bg-muted/50 transition-colors"
-                    onClick={() => {
-                      router.push("/transactions");
-                      setIsMobileMenuOpen(false);
-                    }}
-                  >
-                    <History className="h-4 w-4" />
-                    <span>History</span>
-                  </button>
-                  <div className="border-t" />
+                   <button
+                     className="w-full px-4 py-3 text-left flex items-center gap-3 hover:bg-muted/50 transition-colors"
+                     onClick={() => {
+                       router.push("/pos/products");
+                       setIsMobileMenuOpen(false);
+                     }}
+                   >
+                     <Package className="h-4 w-4" />
+                     <span>Inventory</span>
+                   </button>
+                   <div className="border-t" />
                   <button
                     className="w-full px-4 py-3 text-left flex items-center gap-3 hover:bg-muted/50 transition-colors text-red-500"
                     onClick={() => {

@@ -40,35 +40,37 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: "Unauthorized - No store_id in auth data" }, { status: 401 });
     }
 
+    // TRANSACTIONS DISABLED - 4/19/2026
     // Query transactions from the last 48 hours only
-    const { data: transactions, error } = await supabase
-      .from("transactions")
-      .select(`
-        id,
-        transaction_number,
-        subtotal,
-        total_amount,
-        amount_paid,
-        change_given,
-        created_at,
-        transaction_items (
-          id,
-          product_name,
-          quantity,
-          unit_price,
-          total_price
-        )
-      `)
-      .eq("store_id", store_id)
-      .gte("created_at", new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString())
-      .order("created_at", { ascending: false });
+    // const { data: transactions, error } = await supabase
+    //   .from("transactions")
+    //   .select(`
+    //     id,
+    //     transaction_number,
+    //     subtotal,
+    //     total_amount,
+    //     amount_paid,
+    //     change_given,
+    //     created_at,
+    //     transaction_items (
+    //       id,
+    //       product_name,
+    //       quantity,
+    //       unit_price,
+    //       total_price
+    //     )
+    //   `)
+    //   .eq("store_id", store_id)
+    //   .gte("created_at", new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString())
+    //   .order("created_at", { ascending: false });
 
-    if (error) {
-      console.error("Supabase query error:", error);
-      return NextResponse.json({ error: error.message, details: error }, { status: 500 });
-    }
+    // if (error) {
+    //   console.error("Supabase query error:", error);
+    //   return NextResponse.json({ error: error.message, details: error }, { status: 500 });
+    // }
 
-    return NextResponse.json({ transactions: transactions || [] });
+    // Always return empty array - transactions are disabled
+    return NextResponse.json({ transactions: [] });
   } catch (error: any) {
     console.error("Error fetching transactions:", error);
     return NextResponse.json({ 
@@ -90,18 +92,20 @@ export async function DELETE(request: Request) {
 
     const { store_id } = JSON.parse(authData);
 
+    // TRANSACTIONS DISABLED - 4/19/2026
     // Delete transactions older than 48 hours
-    const { data, error } = await supabase
-      .from("transactions")
-      .delete()
-      .eq("store_id", store_id)
-      .lt("created_at", new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString());
+    // const { data, error } = await supabase
+    //   .from("transactions")
+    //   .delete()
+    //   .eq("store_id", store_id)
+    //   .lt("created_at", new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString());
 
-    if (error) {
-      throw error;
-    }
+    // if (error) {
+    //   throw error;
+    // }
 
-    return NextResponse.json({ message: "Old transactions cleaned up", deleted: data });
+    // Return success without doing anything
+    return NextResponse.json({ message: "Old transactions cleaned up", deleted: 0 });
   } catch (error) {
     console.error("Error cleaning up transactions:", error);
     return NextResponse.json({ error: "Failed to clean up transactions" }, { status: 500 });

@@ -119,43 +119,44 @@ function CheckoutContent() {
       setChangeGiven(calculatedChangeGiven);
       setChangeUsd(calculatedChangeUsd);
 
+      // TRANSACTIONS DISABLED - 4/19/2026
       // Create transaction record
-      const { data: transaction, error: transactionError } = await supabase
-        .from("transactions")
-        .insert({
-          store_id: store_id,
-          transaction_number: txnNumber,
-          subtotal: getSubtotal(),
-          total_amount: total,
-          amount_paid: calculatedPaidAmount,
-          change_given: calculatedChangeGiven,
-          usd_subtotal: subtotalUsd,
-          usd_total_amount: totalUsd,
-          usd_amount_paid: convertLlToUsdForSale(calculatedPaidAmount),
-          usd_change_given: calculatedChangeUsd,
-        })
-        .select()
-        .single();
+      // const { data: transaction, error: transactionError } = await supabase
+      //   .from("transactions")
+      //   .insert({
+      //     store_id: store_id,
+      //     transaction_number: txnNumber,
+      //     subtotal: getSubtotal(),
+      //     total_amount: total,
+      //     amount_paid: calculatedPaidAmount,
+      //     change_given: calculatedChangeGiven,
+      //     usd_subtotal: subtotalUsd,
+      //     usd_total_amount: totalUsd,
+      //     usd_amount_paid: convertLlToUsdForSale(calculatedPaidAmount),
+      //     usd_change_given: calculatedChangeUsd,
+      //   })
+      //   .select()
+      //   .single();
 
-      if (transactionError) throw transactionError;
+      // if (transactionError) throw transactionError;
 
       // Create transaction items
-      const transactionItems = items.map((item) => ({
-        store_id: store_id,
-        transaction_id: transaction.id,
-        product_id: item.product_id,
-        product_name: item.product_name,
-        quantity: item.quantity,
-        unit_price: item.unit_price,
-        total_price: item.total_price,
-        currency: item.currency || 'LL',
-      }));
+      // const transactionItems = items.map((item) => ({
+      //   store_id: store_id,
+      //   transaction_id: transaction.id,
+      //   product_id: item.product_id,
+      //   product_name: item.product_name,
+      //   quantity: item.quantity,
+      //   unit_price: item.unit_price,
+      //   total_price: item.total_price,
+      //   currency: item.currency || 'LL',
+      // }));
 
-      const { error: itemsError } = await supabase
-        .from("transaction_items")
-        .insert(transactionItems);
+      // const { error: itemsError } = await supabase
+      //   .from("transaction_items")
+      //   .insert(transactionItems);
 
-      if (itemsError) throw itemsError;
+      // if (itemsError) throw itemsError;
 
       // Update product stock quantities
       for (const item of items) {
