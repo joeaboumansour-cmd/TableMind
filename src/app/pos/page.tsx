@@ -25,7 +25,7 @@ import { useCartStore } from "@/lib/stores/cartStore";
 import { Product } from "@/lib/types/product";
 import { toast } from "sonner";
 import { formatCurrency, formatLL, convertUsdToLl, formatUSD, convertLlToUsd, convertLlToUsdForSale, convertLlToUsdForReturn, SELL_RATE, RETURN_RATE } from "@/lib/utils/format";
-import BarcodeScanner from "@/components/BarcodeScanner";
+import BarcodeScanner, { playSuccessSound } from "@/components/BarcodeScanner";
 
 const supabase = createClient();
 
@@ -145,6 +145,8 @@ export default function POSPage() {
       } else {
         // Item doesn't exist - add it
         addItem(product);
+        // Play success sound ONLY after product has been successfully identified AND added to cart
+        playSuccessSound();
         toast.success(`Added ${product.name}`);
       }
     } else {

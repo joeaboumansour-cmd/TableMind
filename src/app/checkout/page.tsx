@@ -174,41 +174,42 @@ function CheckoutContent() {
       
       // Handle WhatsApp receipt
       if (whatsappNumber && whatsappNumber.trim()) {
-        // Format the WhatsApp number - ensure it's 8 digits (Lebanese local format)
-        const cleanNumber = whatsappNumber.replace(/\D/g, '');
-        if (cleanNumber.length === 8) {
-          // Always add 00961 before the number as specified in requirements
-          const phoneNumber = `${cleanNumber}`;
+        try {
+          // Format the WhatsApp number - ensure it's 8 digits (Lebanese local format)
+          const cleanNumber = whatsappNumber.replace(/\D/g, '');
+          if (cleanNumber.length === 8) {
+            // Always add 961 country code prefix for Lebanon
+            const phoneNumber = `961${cleanNumber}`;
           
-          // Parse auth data to get username for store name
-          let storeName = "TableMind Store";
-          try {
-            const authData = JSON.parse(localStorage.getItem("goldensquirrel_auth") || "{}");
-            if (authData.username) {
-              storeName = authData.username;
+            // Parse auth data to get username for store name
+            let storeName = "TableMind Store";
+            try {
+              const authData = JSON.parse(localStorage.getItem("goldensquirrel_auth") || "{}");
+              if (authData.username) {
+                storeName = authData.username;
+              }
+            } catch (e) {
+              // Use default store name if auth data parsing fails
             }
-          } catch (e) {
-            // Use default store name if auth data parsing fails
-          }
           
-           // Build receipt lines array
-           const receiptLines: string[] = [];
-           receiptLines.push(`*${storeName}*`);
-           receiptLines.push("");
-           receiptLines.push(`Transaction: #${txnNumber}`);
-           receiptLines.push(`Date: ${formatDateTime(new Date().toISOString())}`);
-           receiptLines.push("");
-           receiptLines.push("*Items:*");
+            // Build receipt lines array
+            const receiptLines: string[] = [];
+            receiptLines.push(`*${storeName}*`);
+            receiptLines.push("");
+            receiptLines.push(`Transaction: #${txnNumber}`);
+            receiptLines.push(`Date: ${formatDateTime(new Date().toISOString())}`);
+            receiptLines.push("");
+            receiptLines.push("*Items:*");
 
-           // Add each item with price
-           items.forEach((item) => {
-             receiptLines.push(`${item.product_name} x${item.quantity} - ${formatLL(item.total_price)}`);
-           });
+            // Add each item with price
+            items.forEach((item) => {
+              receiptLines.push(`${item.product_name} x${item.quantity} - ${formatLL(item.total_price)}`);
+            });
 
-           receiptLines.push("");
-           receiptLines.push(`*Total:* ${formatLL(total)}`);
+            receiptLines.push("");
+            receiptLines.push(`*Total:* ${formatLL(total)}`);
            
-           // Add paid and change based on payment method
+            // Add paid and change based on payment method
             if (paymentMethodUsed === "cash") {
               receiptLines.push(`*Paid:* ${formatLL(calculatedPaidAmount)}`);
               receiptLines.push(`*Change:* ${formatLL(calculatedChangeGiven)}`);
@@ -217,21 +218,30 @@ function CheckoutContent() {
               receiptLines.push(`*Change:* $${formatUSD(calculatedChangeUsd)}`);
             }
 
-           receiptLines.push("");
-           receiptLines.push("Status: ✓ Paid");
-           receiptLines.push("Thank you for your purchase!");
+            receiptLines.push("");
+            receiptLines.push("Status: ✓ Paid");
+            receiptLines.push("Thank you for your purchase!");
           
-          // Join with URL-encoded line breaks
-          const receiptText = encodeURIComponent(receiptLines.join("\n"));
+            // Join with URL-encoded line breaks
+            const receiptText = encodeURIComponent(receiptLines.join("\n"));
           
-          // Construct WhatsApp URL
-          const whatsappUrl = `https://wa.me/${phoneNumber}?text=${receiptText}`;
-          setWhatsappRedirectUrl(whatsappUrl);
+            // Construct WhatsApp URL
+            const whatsappUrl = `https://wa.me/${phoneNumber}?text=${receiptText}`;
+            setWhatsappRedirectUrl(whatsappUrl);
           
-          // Redirect to WhatsApp after a short delay
-          setTimeout(() => {
-            window.open(whatsappUrl, '_blank');
-          }, 1000);
+            // Redirect to WhatsApp after a short delay
+            setTimeout(() => {
+              try {
+                window.open(whatsappUrl, '_blank');
+              } catch (waError) {
+                console.warn("Could not open WhatsApp:", waError);
+                // Silent fail for WhatsApp - transaction already completed
+              }
+            }, 1000);
+          }
+        } catch (whatsappError) {
+          // NEVER fail the whole transaction just because WhatsApp receipt fails
+          console.warn("WhatsApp receipt generation failed, continuing anyway:", whatsappError);
         }
       }
     } catch (error) {

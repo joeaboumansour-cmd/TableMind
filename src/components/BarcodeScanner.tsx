@@ -15,6 +15,35 @@ interface BarcodeScannerProps {
 
 let cachedTargetCameraId: string | null = null;
 
+/**
+ * Play success sound effect with vibration feedback
+ * Exported so it can be called externally after successful product validation
+ */
+export const playSuccessSound = () => {
+  try {
+    const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    const oscillator = audioCtx.createOscillator();
+    const gainNode = audioCtx.createGain();
+
+    oscillator.connect(gainNode);
+    gainNode.connect(audioCtx.destination);
+
+    oscillator.type = "square"; 
+    oscillator.frequency.setValueAtTime(1500, audioCtx.currentTime); 
+    gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime);
+    gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.07);
+
+    oscillator.start();
+    oscillator.stop(audioCtx.currentTime + 0.07);
+
+    if (typeof navigator !== "undefined" && navigator.vibrate) {
+      navigator.vibrate(60);
+    }
+  } catch (e) {
+    console.warn("Audio feedback failed:", e);
+  }
+};
+
 export default function BarcodeScanner({ onScan, onClose, isActive = true }: BarcodeScannerProps) {
   const scannerRef = useRef<HTMLDivElement>(null);
   const activeStreamRef = useRef<MediaStream | null>(null);
@@ -23,31 +52,6 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
   const [isScanning, setIsScanning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [manualBarcode, setManualBarcode] = useState<string>("");
-
-  const playSuccessSound = useCallback(() => {
-    try {
-      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
-      const oscillator = audioCtx.createOscillator();
-      const gainNode = audioCtx.createGain();
-
-      oscillator.connect(gainNode);
-      gainNode.connect(audioCtx.destination);
-
-      oscillator.type = "square"; 
-      oscillator.frequency.setValueAtTime(1500, audioCtx.currentTime); 
-      gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime);
-      gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.07);
-
-      oscillator.start();
-      oscillator.stop(audioCtx.currentTime + 0.07);
-
-      if (typeof navigator !== "undefined" && navigator.vibrate) {
-        navigator.vibrate(60);
-      }
-    } catch (e) {
-      console.warn("Audio feedback failed:", e);
-    }
-  }, []);
 
   const stopTracks = useCallback(() => {
     if (activeStreamRef.current) {
@@ -60,13 +64,12 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
     if (isProcessingRef.current || !barcode) return;
     isProcessingRef.current = true;
     
-    playSuccessSound();
     onScan(barcode);
     
     setTimeout(() => { 
       isProcessingRef.current = false; 
     }, 2000);
-  }, [onScan, playSuccessSound]);
+  }, [onScan]);
 
   useEffect(() => {
     if (!isActive || !scannerRef.current) return;
