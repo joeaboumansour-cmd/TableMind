@@ -11,6 +11,8 @@ export interface Product {
   profit_percentage: number;
   stock_quantity: number;
   min_stock_threshold: number;
+  parent_id?: string;
+  variant_name?: string;
 }
 
 export interface ProductInput {

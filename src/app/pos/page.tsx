@@ -124,6 +124,24 @@ export default function POSPage() {
   const handleBarcodeScan = (barcode: string) => {
     const product = products.find((p) => p.barcode === barcode);
     if (product) {
+      // Handle product variants with price inheritance
+      let resolvedProduct = {...product};
+      
+      // If this is a variant child product, inherit values from parent
+      if (product.parent_id) {
+        const parent = products.find(p => p.id === product.parent_id);
+        if (parent) {
+          resolvedProduct = {
+            ...resolvedProduct,
+            name: product.variant_name ? `${parent.name} - ${product.variant_name}` : parent.name,
+            cost_price: parent.cost_price,
+            selling_price: parent.selling_price,
+            profit_percentage: parent.profit_percentage,
+            currency: parent.currency,
+          };
+        }
+      }
+
       // Check if item already exists in cart
       const existingItem = items.find(item => item.product_id === product.id);
 
@@ -141,13 +159,13 @@ export default function POSPage() {
           setHighlightedItemId(null);
         }, 2000);
 
-        toast.info(`${product.name} is already in cart`);
+        toast.info(`${resolvedProduct.name} is already in cart`);
       } else {
         // Item doesn't exist - add it
-        addItem(product);
+        addItem(resolvedProduct);
         // Play success sound ONLY after product has been successfully identified AND added to cart
         playSuccessSound();
-        toast.success(`Added ${product.name}`);
+        toast.success(`Added ${resolvedProduct.name}`);
       }
     } else {
       toast.error("Product not found");

@@ -80,6 +80,23 @@ export default function StoreProductsPage() {
   const [sellingPrice, setSellingPrice] = useState("");
   const [stockQuantity, setStockQuantity] = useState("");
   const [minStockThreshold, setMinStockThreshold] = useState("5");
+  
+  // Product Variants
+  const [variants, setVariants] = useState<Array<{ barcode: string; variantName: string }>>([]);
+  
+  const addVariant = () => {
+    setVariants([...variants, { barcode: "", variantName: "" }]);
+  };
+  
+  const removeVariant = (index: number) => {
+    setVariants(variants.filter((_, i) => i !== index));
+  };
+  
+  const updateVariant = (index: number, field: 'barcode' | 'variantName', value: string) => {
+    const newVariants = [...variants];
+    newVariants[index][field] = value;
+    setVariants(newVariants);
+  };
 
   // Track which field triggered the update to avoid circular updates
   const [lastUpdated, setLastUpdated] = useState<'cost' | 'profit' | 'selling'>("cost");
@@ -207,9 +224,11 @@ export default function StoreProductsPage() {
       const selling = parseFloat(sellingPrice);
       const profit = parseFloat(profitPercentage) || 0;
 
+      let parentProductId;
+
       if (editingProduct) {
         // Update existing product
-        const { error } = await supabase
+        const { data, error } = await supabase
           .from("products")
           .update({
             name: name,
@@ -221,13 +240,16 @@ export default function StoreProductsPage() {
             stock_quantity: parseInt(stockQuantity),
             min_stock_threshold: parseInt(minStockThreshold),
           })
-          .eq("id", editingProduct.id);
+          .eq("id", editingProduct.id)
+          .select()
+          .single();
 
         if (error) throw error;
+        parentProductId = data.id;
         toast.success(`Product "${name}" updated successfully!`);
       } else {
         // Create new product
-        const { error } = await supabase
+        const { data, error } = await supabase
           .from("products")
           .insert({
             store_id: storeId,
@@ -239,10 +261,41 @@ export default function StoreProductsPage() {
             profit_percentage: profit,
             stock_quantity: parseInt(stockQuantity),
             min_stock_threshold: parseInt(minStockThreshold),
-          });
+          })
+          .select()
+          .single();
 
         if (error) throw error;
+        parentProductId = data.id;
         toast.success(`Product "${name}" created successfully!`);
+      }
+
+      // Create all product variants
+      if (variants.length > 0) {
+        const variantRows = variants.filter(v => v.barcode.trim()).map(variant => ({
+          store_id: storeId,
+          name: name,
+          parent_id: parentProductId,
+          barcode: variant.barcode.trim() || null,
+          variant_name: variant.variantName.trim() || null,
+          cost_price: 0,
+          selling_price: 0,
+          currency: currency,
+          profit_percentage: 0,
+          stock_quantity: 0,
+          min_stock_threshold: parseInt(minStockThreshold),
+        }));
+
+        if (variantRows.length > 0) {
+          const { error: variantError } = await supabase
+            .from("products")
+            .insert(variantRows);
+
+          if (variantError) {
+            console.error("Variant save error:", variantError);
+            toast.warning("Product saved but some variants may have failed");
+          }
+        }
       }
 
       setIsDialogOpen(false);
@@ -320,7 +373,7 @@ export default function StoreProductsPage() {
 
     try {
       // Convert products to CSV format
-      const csvData = products.map(p => ({
+      const csvData = products.map((p: any) => ({
         id: p.id,
         name: p.name,
         barcode: p.barcode || '',
@@ -368,7 +421,7 @@ export default function StoreProductsPage() {
     const trimmedBarcode = scannedBarcode.trim();
     
     // Check barcode length (typical barcodes are 8-13 characters)
-    if (trimmedBarcode.length < 4 || trimmedBarcode.length > 20) {
+    if (trimmedBarcode.length < 2 || trimmedBarcode.length > 30) {
       toast.error("Barcode length is invalid. Please try again.");
       return;
     }
@@ -379,10 +432,19 @@ export default function StoreProductsPage() {
       toast.error("Barcode contains invalid characters. Please try again.");
       return;
     }
-    
-    setBarcode(trimmedBarcode);
+
+    // Check if we are scanning for a variant
+    if (typeof (window as any).currentScanningVariantIndex !== 'undefined') {
+      const variantIndex = (window as any).currentScanningVariantIndex;
+      updateVariant(variantIndex, 'barcode', trimmedBarcode);
+      delete (window as any).currentScanningVariantIndex;
+      toast.success(`Variant ${variantIndex + 1} barcode scanned successfully!`);
+    } else {
+      setBarcode(trimmedBarcode);
+      toast.success("Barcode scanned successfully! If this is the wrong barcode, you can clear it and scan again.");
+    }
+
     setShowBarcodeScanner(false);
-    toast.success("Barcode scanned successfully! If this is the wrong barcode, you can clear it and scan again.");
   };
 
   const handleBarcodeScan = async () => {
@@ -394,8 +456,8 @@ export default function StoreProductsPage() {
     const trimmedBarcode = barcode.trim();
     
     // Validate barcode length
-    if (trimmedBarcode.length < 4 || trimmedBarcode.length > 20) {
-      toast.error("Barcode must be between 4 and 20 characters");
+    if (trimmedBarcode.length < 2 || trimmedBarcode.length > 30) {
+      toast.error("Barcode must be between 2 and 30 characters");
       return;
     }
 
@@ -409,11 +471,28 @@ export default function StoreProductsPage() {
     toast.success("Barcode is available");
   };
 
-  const filteredProducts = products.filter(
-    (product) =>
-      product.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      product.barcode?.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+const filteredProducts = products.filter(
+  (product) =>
+    product.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    product.barcode?.toLowerCase().includes(searchQuery.toLowerCase())
+).map((product: any) => {
+  // Enhance variant products with their full name
+  if (product.parent_id && product.variant_name) {
+    return {
+      ...product,
+      _displayName: `${product.name} - ${product.variant_name}`,
+      _isVariant: true,
+      _parentId: product.parent_id
+    };
+  }
+  return {
+    ...product,
+    _displayName: product.name,
+    _isVariant: false,
+    _parentId: null
+  };
+});
+
 
   // Stats calculations
   const totalProducts = products.length;
@@ -584,6 +663,65 @@ export default function StoreProductsPage() {
                         Scanned: {barcode}
                       </p>
                     )}
+                    
+                    {/* Product Variants */}
+                    <div className="mt-2">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={addVariant}
+                        className="w-full h-7 text-xs border border-dashed border-muted-foreground/30 hover:border-amber-500 hover:text-amber-600"
+                      >
+                        <Plus className="h-3 w-3 mr-1" />
+                        Add Variant Barcode
+                      </Button>
+                      
+                      {variants.map((variant, index) => (
+                        <div key={index} className="flex gap-2 mt-2 items-end">
+                          <div className="flex-1 space-y-1">
+                            <Label className="text-xs text-muted-foreground">Variant {index + 1}</Label>
+                            <div className="flex gap-1">
+                              <Input
+                                placeholder="Barcode"
+                                value={variant.barcode}
+                                onChange={(e) => updateVariant(index, 'barcode', e.target.value)}
+                                className="h-8 text-sm flex-1"
+                                inputMode="numeric"
+                              />
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={() => {
+                                  // Store which variant we are scanning for
+                                  (window as any).currentScanningVariantIndex = index;
+                                  setShowBarcodeScanner(true);
+                                }}
+                                className="h-8 w-8 p-0"
+                              >
+                                <Scan className="h-3.5 w-3.5" />
+                              </Button>
+                              <Input
+                                placeholder="Flavor Name"
+                                value={variant.variantName}
+                                onChange={(e) => updateVariant(index, 'variantName', e.target.value)}
+                                className="h-8 text-sm flex-1"
+                              />
+                            </div>
+                          </div>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => removeVariant(index)}
+                            className="h-8 w-8 p-0 text-red-500 hover:text-red-700"
+                          >
+                            <X className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="currency" className="text-sm">Currency</Label>
@@ -724,9 +862,9 @@ export default function StoreProductsPage() {
                 }`}
               >
                 <div className="flex items-start justify-between gap-3">
-                  <div className="flex-1 min-w-0">
+                    <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-1">
-                      <h3 className="font-semibold text-sm truncate">{product.name}</h3>
+                      <h3 className="font-semibold text-sm truncate">{product._displayName}</h3>
                       <Badge variant="outline" className="text-xs px-1 py-0">
                         {product.currency}
                       </Badge>

@@ -24,8 +24,8 @@ export interface ParsedCSVResult {
 const REQUIRED_HEADERS = ['name', 'cost_price', 'selling_price', 'currency', 'stock_quantity', 'min_stock_threshold'];
 const VALID_CURRENCIES = ['LL', 'USD'];
 const MAX_NAME_LENGTH = 255;
-const MIN_BARCODE_LENGTH = 4;
-const MAX_BARCODE_LENGTH = 20;
+const MIN_BARCODE_LENGTH = 2;
+const MAX_BARCODE_LENGTH = 30;
 const BARCODE_REGEX = /^[A-Za-z0-9\-_]+$/;
 
 /**
@@ -119,17 +119,24 @@ export function parseCSV(csvString: string): ParsedCSVResult {
       rowErrors.push({ row: rowNum, field: 'name', message: `Name exceeds ${MAX_NAME_LENGTH} characters` });
     }
 
+    // Helper to clean numeric values
+    const cleanNumber = (value: string): string => {
+      return value.replace(/[^\d.\-]/g, '').trim();
+    };
+
     // Validate cost_price
-    const costPrice = parseFloat(getValue(colIndex.cost_price));
-    if (isNaN(costPrice)) {
+    const costPriceRaw = cleanNumber(getValue(colIndex.cost_price));
+    const costPrice = parseFloat(costPriceRaw);
+    if (isNaN(costPrice) || costPriceRaw === '') {
       rowErrors.push({ row: rowNum, field: 'cost_price', message: 'Cost price must be a valid number' });
     } else if (costPrice < 0) {
       rowErrors.push({ row: rowNum, field: 'cost_price', message: 'Cost price must be non-negative' });
     }
 
     // Validate selling_price
-    const sellingPrice = parseFloat(getValue(colIndex.selling_price));
-    if (isNaN(sellingPrice)) {
+    const sellingPriceRaw = cleanNumber(getValue(colIndex.selling_price));
+    const sellingPrice = parseFloat(sellingPriceRaw);
+    if (isNaN(sellingPrice) || sellingPriceRaw === '') {
       rowErrors.push({ row: rowNum, field: 'selling_price', message: 'Selling price must be a valid number' });
     } else if (sellingPrice < 0) {
       rowErrors.push({ row: rowNum, field: 'selling_price', message: 'Selling price must be non-negative' });
@@ -142,16 +149,18 @@ export function parseCSV(csvString: string): ParsedCSVResult {
     }
 
     // Validate stock_quantity
-    const stockQuantity = parseInt(getValue(colIndex.stock_quantity));
-    if (isNaN(stockQuantity)) {
+    const stockQuantityRaw = cleanNumber(getValue(colIndex.stock_quantity));
+    const stockQuantity = parseInt(stockQuantityRaw, 10); // ALWAYS use base 10 radix!
+    if (isNaN(stockQuantity) || stockQuantityRaw === '') {
       rowErrors.push({ row: rowNum, field: 'stock_quantity', message: 'Stock quantity must be a valid integer' });
     } else if (stockQuantity < 0) {
       rowErrors.push({ row: rowNum, field: 'stock_quantity', message: 'Stock quantity must be non-negative' });
     }
 
     // Validate min_stock_threshold
-    const minStockThreshold = parseInt(getValue(colIndex.min_stock_threshold));
-    if (isNaN(minStockThreshold)) {
+    const minStockThresholdRaw = cleanNumber(getValue(colIndex.min_stock_threshold));
+    const minStockThreshold = parseInt(minStockThresholdRaw, 10); // ALWAYS use base 10 radix!
+    if (isNaN(minStockThreshold) || minStockThresholdRaw === '') {
       rowErrors.push({ row: rowNum, field: 'min_stock_threshold', message: 'Min stock threshold must be a valid integer' });
     } else if (minStockThreshold < 0) {
       rowErrors.push({ row: rowNum, field: 'min_stock_threshold', message: 'Min stock threshold must be non-negative' });
