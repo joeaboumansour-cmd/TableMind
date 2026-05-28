@@ -372,17 +372,19 @@ export default function StoreProductsPage() {
     }
 
     try {
-      // Convert products to CSV format
+      // Convert products to CSV format (includes variant fields for variants)
       const csvData = products.map((p: any) => ({
         id: p.id,
         name: p.name,
         barcode: p.barcode || '',
-        cost_price: p.cost_price,
-        selling_price: p.selling_price,
+        cost_price: p.parent_id ? 0 : p.cost_price,
+        selling_price: p.parent_id ? 0 : p.selling_price,
         currency: p.currency,
-        profit_percentage: p.profit_percentage,
+        profit_percentage: p.parent_id ? 0 : p.profit_percentage,
         stock_quantity: p.stock_quantity,
         min_stock_threshold: p.min_stock_threshold,
+        parent_id: p.parent_id || '',
+        variant_name: p.variant_name || '',
       }));
 
       const csvContent = productsToCSV(csvData);

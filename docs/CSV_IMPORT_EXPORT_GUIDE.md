@@ -30,14 +30,49 @@ The CSV Import/Export feature allows you to bulk manage your products by importi
 | `id` | UUID | Product ID (for updates) | "550e8400-e29b-41d4-a716-446655440000" |
 | `barcode` | Text | Barcode (4-20 alphanumeric chars) | "1234567890123" |
 | `profit_percentage` | Number | Profit margin % (auto-calculated if empty) | 50.00 |
+| `parent_id` | UUID | Parent product ID (for variants) | "550e8400-e29b-41d4-a716-446655440000" |
+| `variant_name` | Text | Variant/flavor name (for variants) | "Strawberry" |
+
+### Product Variants Support
+
+Products can have **variants** (e.g., same coffee product in different flavors). The system uses a parent-child structure:
+
+- **Parent product**: Holds the product name, prices (cost & selling), and currency
+- **Variant (child)**: References parent via `parent_id`, has its own barcode, variant name, and stock. **Pricing is inherited from the parent** — edit prices on the parent once, and all variants automatically get the new price.
+
+#### Importing Variants
+
+When importing variants via CSV:
+
+| Field | Value |
+|-------|-------|
+| `name` | Same as parent product name |
+| `parent_id` | UUID of the parent product (from export) |
+| `variant_name` | Flavor/variant name (e.g., "Strawberry", "Chocolate") |
+| `cost_price` | Leave **empty** to inherit from parent |
+| `selling_price` | Leave **empty** to inherit from parent |
+| `profit_percentage` | Leave **empty** to inherit from parent |
+| `stock_quantity` | Set per-variant stock count |
+| `barcode` | Unique barcode for this variant |
+
+#### Exporting Variants
+
+When you export products, variants are included in the same CSV with:
+- `parent_id` set to the parent product's UUID
+- `variant_name` showing the flavor/variant name
+- `cost_price`, `selling_price`, `profit_percentage` set to **0** (to indicate inheritance)
+
+To get the effective prices for variants, look up the parent product by its UUID.
 
 ### Example CSV
 
 ```csv
-id,name,barcode,cost_price,selling_price,currency,profit_percentage,stock_quantity,min_stock_threshold
-,Espresso Coffee,12345,1000.00,1500.00,LL,50.00,100,10
-,Cappuccino,12346,1200.00,2000.00,LL,66.67,50,5
-550e8400-e29b-41d4-a716-446655440000,Green Tea,12347,800.00,1200.00,LL,50.00,200,20
+id,name,barcode,cost_price,selling_price,profit_percentage,currency,stock_quantity,min_stock_threshold,parent_id,variant_name
+,Espresso Coffee,12345,1000.00,1500.00,50.00,LL,100,10,,
+,Cappuccino,12346,1200.00,2000.00,66.67,LL,50,5,,
+550e8400-e29b-41d4-a716-446655440000,Green Tea,12347,800.00,1200.00,50.00,LL,200,20,,
+,Espresso Coffee,67890,,,,LL,30,5,550e8400-e29b-41d4-a716-446655440000,Strawberry
+,Espresso Coffee,67891,,,,LL,25,5,550e8400-e29b-41d4-a716-446655440000,Chocolate
 ```
 
 ## Excel Formula Support

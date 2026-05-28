@@ -11,6 +11,8 @@ interface ProductImportData {
   profit_percentage: number;
   stock_quantity: number;
   min_stock_threshold: number;
+  parent_id?: string;
+  variant_name?: string;
 }
 
 interface ImportError {
@@ -156,16 +158,29 @@ export async function POST(request: NextRequest) {
             existingProductId = existingBarcodes.get(product.barcode) || null;
           }
 
-          const productData = {
+          const isVariant = !!product.parent_id;
+
+          const productData: Record<string, any> = {
             name: product.name,
             barcode: product.barcode || null,
-            cost_price: product.cost_price,
-            selling_price: product.selling_price,
             currency: product.currency,
-            profit_percentage: product.profit_percentage,
             stock_quantity: product.stock_quantity,
             min_stock_threshold: product.min_stock_threshold,
           };
+
+          if (isVariant) {
+            // Variant: inherit prices from parent (store 0), set parent_id and variant_name
+            productData.parent_id = product.parent_id;
+            productData.variant_name = product.variant_name || null;
+            productData.cost_price = 0;
+            productData.selling_price = 0;
+            productData.profit_percentage = 0;
+          } else {
+            // Parent product: store prices directly
+            productData.cost_price = product.cost_price;
+            productData.selling_price = product.selling_price;
+            productData.profit_percentage = product.profit_percentage;
+          }
 
           if (existingProductId && mode !== 'create_only') {
             // Update existing product

@@ -400,6 +400,8 @@ export default function CSVImportDialog({
                           <th className="p-2 text-right">Sell</th>
                           <th className="p-2 text-left">Curr</th>
                           <th className="p-2 text-right">Stock</th>
+                          <th className="p-2 text-left">Variant</th>
+                          <th className="p-2 text-left">Parent ID</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -424,6 +426,12 @@ export default function CSVImportDialog({
                             </td>
                             <td className="p-2 text-right">
                               {row.stock_quantity}
+                            </td>
+                            <td className="p-2 truncate max-w-[80px]">
+                              {row.variant_name || "-"}
+                            </td>
+                            <td className="p-2 font-mono truncate max-w-[80px]">
+                              {row.parent_id ? row.parent_id.substring(0, 8) + '...' : "-"}
                             </td>
                           </tr>
                         ))}
