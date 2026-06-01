@@ -20,6 +20,7 @@ import {
   Squirrel,
   History,
   Menu,
+  Trash2,
 } from "lucide-react";
 import { useCartStore } from "@/lib/stores/cartStore";
 import { Product } from "@/lib/types/product";
@@ -403,10 +404,23 @@ export default function POSPage() {
           {/* Cart Footer */}
           {!isEmpty() && (
             <div className="flex-shrink-0 p-4 pt-3 border-t">
-              {/* Total */}
-              <div className="space-y-1">
+              {/* Clear All + Total */}
+              <div className="space-y-3">
                 <div className="flex justify-between items-center">
-                  <span className="text-xl font-semibold">Total</span>
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    className="flex items-center gap-2"
+                    onClick={() => {
+                      if (window.confirm("Are you sure you want to clear all items from the cart?")) {
+                        clearCart();
+                        toast.success("Cart cleared");
+                      }
+                    }}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                    Clear All
+                  </Button>
                   <span className="text-right">
                     <div className="text-2xl font-bold text-amber-500">
                       {formatLL(getTotal())}
