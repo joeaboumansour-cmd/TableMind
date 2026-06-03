@@ -32,6 +32,7 @@ import {
   X,
   Download,
   Upload,
+  Layers,
 } from "lucide-react";
 import { toast } from "sonner";
 import { formatLL, formatUSD, convertUsdToLl, convertLlToUsdForSale, SELL_RATE, RETURN_RATE } from "@/lib/utils/format";
@@ -53,6 +54,8 @@ interface Product {
   stock_quantity: number;
   min_stock_threshold: number;
   created_at: string;
+  parent_id?: string | null;
+  variant_name?: string | null;
 }
 
 export default function StoreProductsPage() {
@@ -372,7 +375,14 @@ export default function StoreProductsPage() {
     }
 
     try {
+      // Build a lookup map: parent UUID -> parent barcode
+      const parentBarcodeMap = new Map<string, string>();
+      products.forEach(p => {
+        parentBarcodeMap.set(p.id, p.barcode || p.id);
+      });
+
       // Convert products to CSV format (includes variant fields for variants)
+      // parent_id column uses parent's barcode for easy re-import
       const csvData = products.map((p: any) => ({
         id: p.id,
         name: p.name,
@@ -383,7 +393,7 @@ export default function StoreProductsPage() {
         profit_percentage: p.parent_id ? 0 : p.profit_percentage,
         stock_quantity: p.stock_quantity,
         min_stock_threshold: p.min_stock_threshold,
-        parent_id: p.parent_id || '',
+        parent_id: p.parent_id ? (parentBarcodeMap.get(p.parent_id) || p.parent_id) : '',
         variant_name: p.variant_name || '',
       }));
 
@@ -473,25 +483,51 @@ export default function StoreProductsPage() {
     toast.success("Barcode is available");
   };
 
+// Build a set of product IDs that are parents (referenced by other products' parent_id)
+const parentIds = new Set<string>();
+products.forEach(p => {
+  if (p.parent_id) parentIds.add(p.parent_id);
+});
+
 const filteredProducts = products.filter(
   (product) =>
     product.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
     product.barcode?.toLowerCase().includes(searchQuery.toLowerCase())
 ).map((product: any) => {
+  const isParent = parentIds.has(product.id);
+  const isVariant = !!product.parent_id;
+
+  // Determine product type badge
+  let _typeLabel: string | null = null;
+  let _typeColor: string = '';
+  if (isVariant) {
+    _typeLabel = 'Variant';
+    _typeColor = 'bg-purple-100 text-purple-700 border-purple-300';
+  } else if (isParent) {
+    _typeLabel = 'Parent';
+    _typeColor = 'bg-amber-100 text-amber-700 border-amber-300';
+  }
+
   // Enhance variant products with their full name
-  if (product.parent_id && product.variant_name) {
+  if (isVariant && product.variant_name) {
     return {
       ...product,
       _displayName: `${product.name} - ${product.variant_name}`,
       _isVariant: true,
-      _parentId: product.parent_id
+      _isParent: false,
+      _parentId: product.parent_id,
+      _typeLabel,
+      _typeColor,
     };
   }
   return {
     ...product,
     _displayName: product.name,
     _isVariant: false,
-    _parentId: null
+    _isParent: isParent,
+    _parentId: null,
+    _typeLabel,
+    _typeColor,
   };
 });
 
@@ -867,6 +903,11 @@ const filteredProducts = products.filter(
                     <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-1">
                       <h3 className="font-semibold text-sm truncate">{product._displayName}</h3>
+                      {product._typeLabel && (
+                        <Badge variant="outline" className={`text-xs px-1 py-0 ${product._typeColor}`}>
+                          {product._typeLabel}
+                        </Badge>
+                      )}
                       <Badge variant="outline" className="text-xs px-1 py-0">
                         {product.currency}
                       </Badge>

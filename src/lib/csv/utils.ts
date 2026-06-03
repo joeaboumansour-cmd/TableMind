@@ -272,9 +272,9 @@ export function downloadCSV(csvContent: string, filename: string): void {
  */
 export function generateCSVTemplate(): string {
   const headers = ['id', 'name', 'barcode', 'cost_price', 'selling_price', 'profit_percentage', 'currency', 'stock_quantity', 'min_stock_threshold', 'parent_id', 'variant_name'];
-  const headerNote = ['(leave empty for new)', 'Product Name', 'Barcode', 'Cost Price', 'Selling Price', 'Profit %', 'Currency', 'Stock', 'Min Stock', 'Parent UUID (for variants)', 'Variant Name'];
+  const headerNote = ['(leave empty for new)', 'Product Name', 'Barcode', 'Cost Price', 'Selling Price', 'Profit %', 'Currency', 'Stock', 'Min Stock', "Parent's Barcode (for variants, leave empty for parent)", 'Variant Name'];
   const parentExample = ['', 'Coffee', '12345', '1000.00', '1500.00', '50.00', 'LL', '50', '10', '', ''];
-  const variantExample = ['', 'Coffee', '67890', '0.00', '0.00', '0.00', 'LL', '20', '5', '(use actual UUID)', 'Strawberry'];
+  const variantExample = ['', 'Coffee - Strawberry Flavor', '67890', '', '', '', 'LL', '20', '5', '12345', 'Strawberry'];
 
   return [
     headers.join(','),
