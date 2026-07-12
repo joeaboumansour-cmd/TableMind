@@ -73,6 +73,21 @@ export default function StoreProductsPage() {
   const [highlightedProductId, setHighlightedProductId] = useState<string | null>(null);
   const [showScanSearch, setShowScanSearch] = useState(false);
   const [showImportDialog, setShowImportDialog] = useState(false);
+  const [isOffline, setIsOffline] = useState(
+    typeof navigator !== "undefined" ? !navigator.onLine : false
+  );
+
+  // Track online/offline status for UI
+  useEffect(() => {
+    const handleOnline = () => setIsOffline(false);
+    const handleOffline = () => setIsOffline(true);
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
+    return () => {
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
+    };
+  }, []);
 
   // Form state
   const [name, setName] = useState("");
@@ -606,6 +621,15 @@ const filteredProducts = products.filter(
         </div>
       </header>
 
+      {/* Offline Notice */}
+      {isOffline && (
+        <div className="flex-shrink-0 bg-amber-500/10 border-b border-amber-500/30 px-3 py-2">
+          <p className="text-sm text-amber-600 text-center font-medium">
+            You're offline. Inventory viewing is available, but adding, editing, deleting, or importing products requires an internet connection.
+          </p>
+        </div>
+      )}
+
       {/* Main Content */}
       <div className="flex-1 flex flex-col overflow-hidden p-3 gap-3">
         {/* Stats Row */}
@@ -645,10 +669,10 @@ const filteredProducts = products.filter(
           <Button variant="outline" size="sm" onClick={() => setShowScanSearch(true)} className="h-9 px-3">
             <Scan className="h-4 w-4" />
           </Button>
-          <Button variant="outline" size="sm" onClick={handleExportProducts} className="h-9 px-3" disabled={products.length === 0}>
+          <Button variant="outline" size="sm" onClick={handleExportProducts} className="h-9 px-3" disabled={products.length === 0 || isOffline}>
             <Download className="h-4 w-4" />
           </Button>
-          <Button variant="outline" size="sm" onClick={() => setShowImportDialog(true)} className="h-9 px-3">
+          <Button variant="outline" size="sm" onClick={() => setShowImportDialog(true)} className="h-9 px-3" disabled={isOffline}>
             <Upload className="h-4 w-4" />
           </Button>
           <Dialog open={isDialogOpen} onOpenChange={(open) => {
@@ -656,7 +680,7 @@ const filteredProducts = products.filter(
             if (!open) resetForm();
           }}>
             <DialogTrigger asChild>
-              <Button size="sm" className="h-9 px-3">
+              <Button size="sm" className="h-9 px-3" disabled={isOffline}>
                 <Plus className="h-4 w-4 mr-1" />
                 Add
               </Button>
@@ -986,6 +1010,7 @@ const filteredProducts = products.filter(
                       size="sm"
                       onClick={() => handleEditProduct(product)}
                       className="h-8 w-8 p-0"
+                      disabled={isOffline}
                     >
                       <Edit className="h-4 w-4 text-amber-500" />
                     </Button>
@@ -994,6 +1019,7 @@ const filteredProducts = products.filter(
                       size="sm"
                       onClick={() => handleDeleteProduct(product.id, product.name)}
                       className="h-8 w-8 p-0"
+                      disabled={isOffline}
                     >
                       <Trash2 className="h-4 w-4 text-red-500" />
                     </Button>

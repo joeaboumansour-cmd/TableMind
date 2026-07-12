@@ -8,6 +8,11 @@ const withPWA = withPWAInit({
   cacheOnFrontEndNav: true,
   aggressiveFrontEndNavCaching: true,
   reloadOnOnline: true,
+  // Show a friendly offline page instead of a browser error when a
+  // route is not cached and the device is offline
+  fallbacks: {
+    document: "/offline.html",
+  },
 });
 
 const nextConfig: NextConfig = {

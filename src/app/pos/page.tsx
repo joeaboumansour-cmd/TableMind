@@ -299,6 +299,17 @@ export default function POSPage() {
     };
   }, []);
 
+  // Prefetch critical routes while online so they are available offline
+  useEffect(() => {
+    if (navigator.onLine) {
+      router.prefetch("/checkout");
+      router.prefetch("/pos/products");
+      // Also warm the service worker cache by fetching the documents
+      fetch("/checkout", { method: "HEAD", cache: "force-cache" }).catch(() => {});
+      fetch("/pos/products", { method: "HEAD", cache: "force-cache" }).catch(() => {});
+    }
+  }, [router]);
+
   if (isLoading) {
     return (
       <div className="h-screen flex items-center justify-center bg-background">
