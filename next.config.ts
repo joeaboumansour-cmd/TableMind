@@ -13,6 +13,14 @@ const withPWA = withPWAInit({
   fallbacks: {
     document: "/offline.html",
   },
+  // Precache critical POS documents at build time so they are available
+  // even on a cold offline start (no prior online visit needed)
+  workboxOptions: {
+    additionalManifestEntries: [
+      { url: "/checkout", revision: "tablemind-checkout" },
+      { url: "/pos/products", revision: "tablemind-products" },
+    ],
+  },
 });
 
 const nextConfig: NextConfig = {
