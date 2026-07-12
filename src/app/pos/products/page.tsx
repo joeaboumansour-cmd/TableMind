@@ -625,7 +625,7 @@ const filteredProducts = products.filter(
       {isOffline && (
         <div className="flex-shrink-0 bg-amber-500/10 border-b border-amber-500/30 px-3 py-2">
           <p className="text-sm text-amber-600 text-center font-medium">
-            You're offline. Inventory viewing is available, but adding, editing, deleting, or importing products requires an internet connection.
+            You're offline. Inventory viewing, adding, editing, deleting, or importing products requires an internet connection.
           </p>
         </div>
       )}
