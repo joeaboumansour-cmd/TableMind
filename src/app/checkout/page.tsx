@@ -11,24 +11,20 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import {
   ArrowLeft,
-  Banknote,
-  CreditCard,
-  Receipt,
   Check,
   Loader2,
   Calculator,
-  DollarSign,
+  WifiOff,
 } from "lucide-react";
 import { useCartStore } from "@/lib/stores/cartStore";
 import { toast } from "sonner";
-import { formatCurrency, formatLL, convertUsdToLl, formatUSD, formatDateTime, convertLlToUsdForReturn, convertLlToUsdForSale, SELL_RATE, RETURN_RATE } from "@/lib/utils/format";
+import { formatLL, formatUSD, formatDateTime, SELL_RATE } from "@/lib/utils/format";
 
 const supabase = createClient();
 
 function CheckoutContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const [paymentMethod, setPaymentMethod] = useState(searchParams.get("method") || "cash");
 
   const [amountPaidLL, setAmountPaidLL] = useState<string>("");
   const [amountPaidUSD, setAmountPaidUSD] = useState<string>("");
@@ -36,14 +32,12 @@ function CheckoutContent() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [transactionComplete, setTransactionComplete] = useState(false);
   const [transactionNumber, setTransactionNumber] = useState<string>("");
-  const [whatsappRedirectUrl, setWhatsappRedirectUrl] = useState<string>("");
   const [paidAmount, setPaidAmount] = useState<number>(0);
   const [changeGiven, setChangeGiven] = useState<number>(0);
   const [changeUsd, setChangeUsd] = useState<number>(0);
 
   const {
     items,
-    store_id,
     getSubtotal,
     getSubtotalUsd,
     getTotal,
@@ -63,10 +57,7 @@ function CheckoutContent() {
   const difference = totalPaid - total;
   
   const isChangeDue = difference > 0;
-  const isExactMatch = difference === 0;
   const displayAmount = Math.abs(difference);
-
-  // No auto-sync effects - user controls both fields manually
 
   // Generate transaction number
   const generateTransactionNumber = () => {
@@ -75,25 +66,22 @@ function CheckoutContent() {
     return `TXN-${timestamp}-${random}`;
   };
 
-  // Handle payment processing
+  // Handle payment processing — local only, no database writes
   const handleProcessPayment = async () => {
     if (items.length === 0) {
       toast.error("Cart is empty");
       return;
     }
 
-  if (totalPaid <= 0) {
-    toast.error("Please enter payment amount");
-    return;
-  }
+    if (totalPaid <= 0) {
+      toast.error("Please enter payment amount");
+      return;
+    }
 
-  if (totalPaid < total) {
-    toast.error("Insufficient payment amount");
-    return;
-  }
-
-  const paymentMethodUsed = "cash";
-  const calculatedPaidAmount = totalPaid;
+    if (totalPaid < total) {
+      toast.error("Insufficient payment amount");
+      return;
+    }
 
     setIsProcessing(true);
 
@@ -101,88 +89,35 @@ function CheckoutContent() {
       const txnNumber = generateTransactionNumber();
       setTransactionNumber(txnNumber);
 
-      // Get auth data
-      const authData = localStorage.getItem("goldensquirrel_auth");
-      if (!authData) {
-        router.push("/login");
-        return;
-      }
-
-      const { store_id } = JSON.parse(authData);
-
-      // Calculate USD amounts
-      const subtotalUsd = getSubtotalUsd();
-      const calculatedChangeGiven = calculatedPaidAmount - total;
+      const calculatedChangeGiven = totalPaid - total;
       const calculatedChangeUsd = calculatedChangeGiven / SELL_RATE;
 
-      setPaidAmount(calculatedPaidAmount);
+      setPaidAmount(totalPaid);
       setChangeGiven(calculatedChangeGiven);
       setChangeUsd(calculatedChangeUsd);
 
-      // TRANSACTIONS DISABLED - 4/19/2026
-      // Create transaction record
-      // const { data: transaction, error: transactionError } = await supabase
-      //   .from("transactions")
-      //   .insert({
-      //     store_id: store_id,
-      //     transaction_number: txnNumber,
-      //     subtotal: getSubtotal(),
-      //     total_amount: total,
-      //     amount_paid: calculatedPaidAmount,
-      //     change_given: calculatedChangeGiven,
-      //     usd_subtotal: subtotalUsd,
-      //     usd_total_amount: totalUsd,
-      //     usd_amount_paid: convertLlToUsdForSale(calculatedPaidAmount),
-      //     usd_change_given: calculatedChangeUsd,
-      //   })
-      //   .select()
-      //   .single();
-
-      // if (transactionError) throw transactionError;
-
-      // Create transaction items
-      // const transactionItems = items.map((item) => ({
-      //   store_id: store_id,
-      //   transaction_id: transaction.id,
-      //   product_id: item.product_id,
-      //   product_name: item.product_name,
-      //   quantity: item.quantity,
-      //   unit_price: item.unit_price,
-      //   total_price: item.total_price,
-      //   currency: item.currency || 'LL',
-      // }));
-
-      // const { error: itemsError } = await supabase
-      //   .from("transaction_items")
-      //   .insert(transactionItems);
-
-      // if (itemsError) throw itemsError;
-
-      // Update product stock quantities
-      for (const item of items) {
-        const { error: stockError } = await supabase.rpc("decrement_stock", {
-          product_id: item.product_id,
-          quantity: item.quantity,
-        });
-
-        if (stockError) {
-          console.error("Error updating stock:", stockError);
-        }
+      // Sync inventory: decrement stock if online
+      if (navigator.onLine) {
+        const stockDecrements = items.map((item) =>
+          supabase.rpc("decrement_stock", {
+            product_id: item.product_id,
+            quantity: item.quantity,
+          })
+        );
+        await Promise.allSettled(stockDecrements);
       }
 
+      // Transaction complete — just show receipt
       setTransactionComplete(true);
       toast.success("Payment processed successfully!");
-      
+
       // Handle WhatsApp receipt
       if (whatsappNumber && whatsappNumber.trim()) {
         try {
-          // Format the WhatsApp number - ensure it's 8 digits (Lebanese local format)
           const cleanNumber = whatsappNumber.replace(/\D/g, '');
           if (cleanNumber.length === 8) {
-            // Always add 961 country code prefix for Lebanon
             const phoneNumber = `961${cleanNumber}`;
           
-            // Parse auth data to get username for store name
             let storeName = "TableMind Store";
             try {
               const authData = JSON.parse(localStorage.getItem("goldensquirrel_auth") || "{}");
@@ -190,10 +125,9 @@ function CheckoutContent() {
                 storeName = authData.username;
               }
             } catch (e) {
-              // Use default store name if auth data parsing fails
+              // Use default store name
             }
           
-            // Build receipt lines array
             const receiptLines: string[] = [];
             receiptLines.push(`*${storeName}*`);
             receiptLines.push("");
@@ -202,55 +136,36 @@ function CheckoutContent() {
             receiptLines.push("");
             receiptLines.push("*Items:*");
 
-            // Add each item with price
             items.forEach((item) => {
               receiptLines.push(`${item.product_name} x${item.quantity} - ${formatLL(item.total_price)}`);
             });
 
             receiptLines.push("");
             receiptLines.push(`*Total:* ${formatLL(total)}`);
-           
-            // Add paid and change based on payment method
-            if (paymentMethodUsed === "cash") {
-              receiptLines.push(`*Paid:* ${formatLL(calculatedPaidAmount)}`);
-              receiptLines.push(`*Change:* ${formatLL(calculatedChangeGiven)}`);
-            } else if (paymentMethodUsed === "usd") {
-              receiptLines.push(`*Paid:* $${formatUSD(calculatedPaidAmount / SELL_RATE)}`);
-              receiptLines.push(`*Change:* $${formatUSD(calculatedChangeUsd)}`);
-            }
-
+            receiptLines.push(`*Paid:* ${formatLL(totalPaid)}`);
+            receiptLines.push(`*Change:* ${formatLL(calculatedChangeGiven)}`);
             receiptLines.push("");
             receiptLines.push("Status: ✓ Paid");
             receiptLines.push("Thank you for your purchase!");
           
-            // Join with URL-encoded line breaks
             const receiptText = encodeURIComponent(receiptLines.join("\n"));
-          
-            // Construct WhatsApp URL
             const whatsappUrl = `https://wa.me/${phoneNumber}?text=${receiptText}`;
-            setWhatsappRedirectUrl(whatsappUrl);
-          
-            // Redirect to WhatsApp after a short delay
+            
             setTimeout(() => {
               try {
                 window.open(whatsappUrl, '_blank');
               } catch (waError) {
                 console.warn("Could not open WhatsApp:", waError);
-                // Silent fail for WhatsApp - transaction already completed
               }
             }, 1000);
           }
         } catch (whatsappError) {
-          // NEVER fail the whole transaction just because WhatsApp receipt fails
-          console.warn("WhatsApp receipt generation failed, continuing anyway:", whatsappError);
+          console.warn("WhatsApp receipt failed, continuing anyway:", whatsappError);
         }
       }
     } catch (error) {
-      console.error("Error processing payment:", JSON.stringify(error, null, 2));
-      const errorMessage = error instanceof Error 
-        ? error.message 
-        : "Failed to process payment";
-      toast.error(errorMessage);
+      console.error("Error processing payment:", error);
+      toast.error("Failed to process payment");
     } finally {
       setIsProcessing(false);
     }
@@ -261,9 +176,6 @@ function CheckoutContent() {
     clearCart();
     router.push("/pos");
   };
-
-  // Quick cash amounts
-  const quickCashAmounts = [5, 10, 20, 50, 100];
 
   if (transactionComplete) {
     return (

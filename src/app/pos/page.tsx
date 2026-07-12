@@ -27,6 +27,14 @@ import { Product } from "@/lib/types/product";
 import { toast } from "sonner";
 import { formatCurrency, formatLL, convertUsdToLl, formatUSD, convertLlToUsd, convertLlToUsdForSale, convertLlToUsdForReturn, SELL_RATE, RETURN_RATE } from "@/lib/utils/format";
 import BarcodeScanner, { playSuccessSound } from "@/components/BarcodeScanner";
+import { SyncIndicator } from "@/components/SyncIndicator";
+import { syncEngine } from "@/lib/sync/engine";
+import {
+  getCachedProducts,
+  getCachedProductByBarcode,
+  getCachedProductsCount,
+} from "@/lib/db";
+import type { CachedProduct } from "@/lib/db";
 
 const supabase = createClient();
 
@@ -64,6 +72,8 @@ export default function POSPage() {
 
   // Load store and products data
   useEffect(() => {
+    let isMounted = true;
+
     const loadData = async () => {
       try {
         // Get auth data from localStorage
@@ -89,36 +99,113 @@ export default function POSPage() {
 
           setMerchant({ id: store_id });
           setStoreId(store_id);
+          syncEngine.setStoreId(store_id);
 
-          // Fetch products for this store
-          const { data: productsData, error } = await supabase
-            .from("products")
-            .select("*")
-            .eq("store_id", store_id)
-            .order("name");
+          // Check if we're online
+          const isOnline = navigator.onLine;
 
-          if (error) throw error;
-          setProducts(productsData || []);
+          // Helper to map cached products to Product type
+          const mapCachedToProducts = (cached: CachedProduct[]): Product[] =>
+            cached.map((p) => ({
+              id: p.id,
+              store_id: p.store_id,
+              name: p.name,
+              barcode: p.barcode,
+              cost_price: p.cost_price,
+              selling_price: p.selling_price,
+              currency: (p.currency === "USD" ? "USD" : "LL") as "LL" | "USD",
+              profit_percentage: p.profit_percentage,
+              stock_quantity: p.stock_quantity,
+              min_stock_threshold: p.min_stock_threshold,
+              parent_id: p.parent_id || undefined,
+              variant_name: p.variant_name || undefined,
+            }));
+
+          if (isOnline) {
+            // ONLINE: Fetch from Supabase and sync to local cache
+            const { data: productsData, error } = await supabase
+              .from("products")
+              .select("*")
+              .eq("store_id", store_id)
+              .order("name");
+
+            if (error) {
+              // If Supabase fails, fall back to local cache
+              console.warn("[POS] Supabase fetch failed, using local cache:", error.message);
+              const cached = await getCachedProducts(store_id);
+              if (isMounted) {
+                setProducts(cached ? mapCachedToProducts(cached) : []);
+              }
+            } else {
+              if (isMounted) {
+                setProducts(productsData || []);
+              }
+              // Initialize/refresh local cache in background
+              syncEngine.initialize(store_id);
+            }
+          } else {
+            // OFFLINE: Read from local IndexedDB cache
+            console.log("[POS] Offline mode - reading from local cache");
+            const cached = await getCachedProducts(store_id);
+            if (cached && cached.length > 0) {
+              if (isMounted) {
+                setProducts(mapCachedToProducts(cached));
+                toast.info("Offline mode - showing cached products");
+              }
+            } else {
+              if (isMounted) {
+                setProducts([]);
+                toast.error("No cached products available offline. Please connect to the internet to sync.");
+              }
+            }
+          }
         }
       } catch (error) {
         console.error("Error loading data:", error);
+        // Try local cache as fallback
+        try {
+          const cached = await getCachedProducts("");
+          const mapCachedToProducts = (cached: CachedProduct[]): Product[] =>
+            cached.map((p) => ({
+              id: p.id,
+              store_id: p.store_id,
+              name: p.name,
+              barcode: p.barcode,
+              cost_price: p.cost_price,
+              selling_price: p.selling_price,
+              currency: (p.currency === "USD" ? "USD" : "LL") as "LL" | "USD",
+              profit_percentage: p.profit_percentage,
+              stock_quantity: p.stock_quantity,
+              min_stock_threshold: p.min_stock_threshold,
+              parent_id: p.parent_id || undefined,
+              variant_name: p.variant_name || undefined,
+            }));
+          if (cached && cached.length > 0 && isMounted) {
+            setProducts(mapCachedToProducts(cached));
+          }
+        } catch {}
         toast.error("Failed to load products");
       } finally {
-        setIsLoading(false);
+        if (isMounted) {
+          setIsLoading(false);
+        }
       }
     };
 
     loadData();
 
-    // Refresh products when window gains focus
+    // Refresh products when window gains focus (only if online)
     const handleFocus = () => {
-      if (merchant?.id) {
+      if (merchant?.id && navigator.onLine) {
         loadData();
       }
     };
 
     window.addEventListener('focus', handleFocus);
-    return () => window.removeEventListener('focus', handleFocus);
+    return () => {
+      isMounted = false;
+      window.removeEventListener('focus', handleFocus);
+    };
   }, [router, setStoreId, merchant?.id]);
 
   // Handle barcode scan from camera
@@ -241,6 +328,7 @@ export default function POSPage() {
 
             {/* Desktop Buttons */}
             <div className="hidden md:flex items-center gap-2">
+              <SyncIndicator />
               <Button variant="ghost" size="sm" onClick={() => router.push("/pos/products")}>
                 <Package className="h-4 w-4 mr-1" />
                 Inventory
@@ -268,6 +356,9 @@ export default function POSPage() {
               {/* Mobile Dropdown Menu */}
               {isMobileMenuOpen && (
                 <div className="absolute right-0 top-full mt-2 w-48 bg-background border rounded-lg shadow-lg z-50 overflow-hidden">
+                   <div className="px-4 py-2 border-b">
+                     <SyncIndicator compact />
+                   </div>
                    <button
                      className="w-full px-4 py-3 text-left flex items-center gap-3 hover:bg-muted/50 transition-colors"
                      onClick={() => {

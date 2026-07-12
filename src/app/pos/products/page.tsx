@@ -189,6 +189,13 @@ export default function StoreProductsPage() {
 
   const fetchProducts = async (storeId: string) => {
     try {
+      // Check if online before attempting the query
+      if (!navigator.onLine) {
+        toast.error("No internet connection. Please connect to refresh products.");
+        setIsLoading(false);
+        return;
+      }
+
       const { data, error } = await supabase
         .from("products")
         .select("*")
@@ -205,9 +212,14 @@ export default function StoreProductsPage() {
           setSelectedProduct(updatedProduct);
         }
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error fetching products:", error);
-      toast.error("Failed to load products");
+      // Show a more helpful error message
+      if (error?.message?.includes("Failed to fetch") || error?.message?.includes("NetworkError")) {
+        toast.error("Network error. Please check your internet connection.");
+      } else {
+        toast.error("Failed to load products");
+      }
     } finally {
       setIsLoading(false);
     }
