@@ -54,6 +54,9 @@ export default function POSPage() {
   const [highlightedItemId, setHighlightedItemId] = useState<string | null>(null);
   const highlightTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  // O(1) barcode lookup — rebuilt whenever products change
+  const [barcodeIndex, setBarcodeIndex] = useState<Map<string, Product>>(new Map());
+  const barcodeIndexRef = useRef<Map<string, Product>>(new Map());
 
   const {
     items,
@@ -208,16 +211,30 @@ export default function POSPage() {
     };
   }, [router, setStoreId, merchant?.id]);
 
+  // ---- Build O(1) barcode index whenever products change ----
+  useEffect(() => {
+    const index = new Map<string, Product>();
+    const idIndex = new Map<string, Product>();
+    for (const p of products) {
+      if (p.barcode) {
+        index.set(p.barcode, p);
+      }
+      idIndex.set(p.id, p);
+    }
+    setBarcodeIndex(index);
+    barcodeIndexRef.current = idIndex;
+  }, [products]);
+
   // Handle barcode scan from camera
   const handleBarcodeScan = (barcode: string) => {
-    const product = products.find((p) => p.barcode === barcode);
+    const product = barcodeIndex.get(barcode);
     if (product) {
       // Handle product variants with price inheritance
       let resolvedProduct = {...product};
       
-      // If this is a variant child product, inherit values from parent
+      // If this is a variant child product, inherit values from parent (O(1) lookup)
       if (product.parent_id) {
-        const parent = products.find(p => p.id === product.parent_id);
+        const parent = barcodeIndexRef.current.get(product.parent_id);
         if (parent) {
           resolvedProduct = {
             ...resolvedProduct,
@@ -266,8 +283,7 @@ export default function POSPage() {
     if (typeof window !== 'undefined' && 'localStorage' in window) {
       localStorage.setItem("scanner_active", String(newState));
     }
-    // Refresh the page for the scanner toggle effect to take effect
-    window.location.reload();
+    // No page reload needed — BarcodeScanner's isActive prop change triggers stop/start automatically
   };
 
   // Handle logout

@@ -6,6 +6,65 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Camera, X } from "lucide-react";
 import Quagga from "@ericblade/quagga2";
+import { BrowserMultiFormatReader } from "@zxing/library";
+
+// ============================================================
+// BARCODE VALIDATION (Check-digit verification)
+// ============================================================
+
+/**
+ * EAN-13 / UPC-A check digit validation (Mod 10)
+ * UPC-A has 12 digits, EAN-13 has 13 digits
+ * EAN-8 has 8 digits
+ */
+function isValidEAN(barcode: string): boolean {
+  const digits = barcode.replace(/\D/g, "");
+  let sum = 0;
+  let even = digits.length % 2 === 0;
+
+  for (let i = 0; i < digits.length - 1; i++) {
+    sum += parseInt(digits[i], 10) * (even ? 3 : 1);
+    even = !even;
+  }
+
+  const checkDigit = (10 - (sum % 10)) % 10;
+  return checkDigit === parseInt(digits[digits.length - 1], 10);
+}
+
+/**
+ * Validate check digit for supported barcode formats
+ */
+function hasValidCheckDigit(raw: string): boolean {
+  const cleaned = raw.replace(/\s/g, "");
+  return isValidEAN(cleaned);
+}
+
+/**
+ * Normalize a raw barcode string:
+ * - Strip whitespace
+ * - Pad UPC-A (12 digits) to EAN-13 by adding leading 0
+ * - Strip leading 0 from EAN-13 that was UPC-A padded
+ */
+function normalizeBarcode(raw: string): string {
+  let code = raw.trim();
+
+  // Strip non-alphanumeric except hyphens (some Code 128 barcodes use them)
+  code = code.replace(/[^A-Za-z0-9\-]/g, "");
+
+  return code;
+}
+
+// ============================================================
+// AGGREGATION CONFIG
+// ============================================================
+
+const AGGREGATION_WINDOW_MS = 150; // collect votes for 150ms before flushing
+const MIN_VOTES_TO_REPORT = 2; // need at least 2 detections to trust a barcode
+const DEDUP_MS = 500; // skip reporting same exact barcode within this window (avoids double-adds)
+
+// ============================================================
+// INTERFACES
+// ============================================================
 
 interface BarcodeScannerProps {
   onScan: (barcode: string) => void;
@@ -13,12 +72,18 @@ interface BarcodeScannerProps {
   isActive?: boolean;
 }
 
+interface BarcodeVote {
+  code: string;
+  votes: number;
+  lastSeen: number;
+}
+
+// ============================================================
+// SUCCESS SOUND
+// ============================================================
+
 let cachedTargetCameraId: string | null = null;
 
-/**
- * Play success sound effect with vibration feedback
- * Exported so it can be called externally after successful product validation
- */
 export const playSuccessSound = () => {
   try {
     const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
@@ -28,8 +93,8 @@ export const playSuccessSound = () => {
     oscillator.connect(gainNode);
     gainNode.connect(audioCtx.destination);
 
-    oscillator.type = "square"; 
-    oscillator.frequency.setValueAtTime(1500, audioCtx.currentTime); 
+    oscillator.type = "square";
+    oscillator.frequency.setValueAtTime(1500, audioCtx.currentTime);
     gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime);
     gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.07);
 
@@ -44,11 +109,24 @@ export const playSuccessSound = () => {
   }
 };
 
+// ============================================================
+// MAIN COMPONENT
+// ============================================================
+
 export default function BarcodeScanner({ onScan, onClose, isActive = true }: BarcodeScannerProps) {
   const scannerRef = useRef<HTMLDivElement>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
   const activeStreamRef = useRef<MediaStream | null>(null);
-  const isProcessingRef = useRef(false);
-  
+  const zxingReaderRef = useRef<BrowserMultiFormatReader | null>(null);
+  const zxingRunningRef = useRef(false);
+
+  // Aggregation buffer
+  const votesRef = useRef<Map<string, BarcodeVote>>(new Map());
+  const aggregationTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Dedup map: prevents same barcode being firehosed
+  const recentScansRef = useRef<Map<string, number>>(new Map());
+
   const [isScanning, setIsScanning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [manualBarcode, setManualBarcode] = useState<string>("");
@@ -60,26 +138,124 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
     }
   }, []);
 
-  const handleBarcodeDetected = useCallback((barcode: string) => {
-    if (isProcessingRef.current || !barcode) return;
-    isProcessingRef.current = true;
-    
-    onScan(barcode);
-    
-    setTimeout(() => { 
-      isProcessingRef.current = false; 
-    }, 2000);
-  }, [onScan]);
+  const handleBarcodeDetected = useCallback(
+    (barcode: string) => {
+      onScan(barcode);
+    },
+    [onScan]
+  );
 
+  // ---- Flush aggregation buffer ----
+  const flushBuffer = useCallback(() => {
+    const votes = votesRef.current;
+    if (votes.size === 0) return;
+
+    // Find barcode with most votes
+    let bestCode = "";
+    let bestVotes = 0;
+    const now = Date.now();
+
+    for (const [code, vote] of votes) {
+      // Discard votes older than 500ms (stale)
+      if (now - vote.lastSeen > 500) continue;
+      if (vote.votes > bestVotes) {
+        bestVotes = vote.votes;
+        bestCode = code;
+      }
+    }
+
+    votes.clear();
+
+    if (!bestCode || bestVotes < MIN_VOTES_TO_REPORT) return;
+
+    // Normalize
+    const normalized = normalizeBarcode(bestCode);
+
+    // Validate check digit (skip for non-EAN formats like Code 128)
+    // Only validate if it looks like EAN/UPC (all digits, 8-13 chars)
+    if (/^\d{8,13}$/.test(normalized)) {
+      if (!hasValidCheckDigit(normalized)) {
+        return; // invalid barcode, discard
+      }
+    }
+
+    // Dedup check: skip if we just reported this barcode
+    const dedupMap = recentScansRef.current;
+    if (dedupMap.has(normalized)) {
+      const lastReported = dedupMap.get(normalized)!;
+      if (now - lastReported < DEDUP_MS) {
+        return;
+      }
+    }
+    dedupMap.set(normalized, now);
+
+    // Report the barcode
+    handleBarcodeDetected(normalized);
+  }, [handleBarcodeDetected]);
+
+  // ---- Add vote to buffer ----
+  const addVote = useCallback((code: string) => {
+    const votes = votesRef.current;
+    const existing = votes.get(code);
+    if (existing) {
+      existing.votes++;
+      existing.lastSeen = Date.now();
+    } else {
+      votes.set(code, { code, votes: 1, lastSeen: Date.now() });
+    }
+  }, []);
+
+  // ---- Stop ZXing ----
+  const stopZxing = useCallback(() => {
+    zxingRunningRef.current = false;
+    if (zxingReaderRef.current) {
+      try {
+        zxingReaderRef.current.reset();
+      } catch (e) {
+        // ignore
+      }
+      zxingReaderRef.current = null;
+    }
+  }, []);
+
+  // ---- Start ZXing on the same video element ----
+  const startZxing = useCallback(
+    (videoElement: HTMLVideoElement) => {
+      if (zxingRunningRef.current) return;
+      zxingRunningRef.current = true;
+
+      const reader = new BrowserMultiFormatReader();
+      zxingReaderRef.current = reader;
+
+      // Start continuous decode from the existing video element
+      reader.decodeFromVideoElementContinuously(videoElement, (result: any, err?: Error) => {
+        if (!zxingRunningRef.current) return;
+        if (result) {
+          const code = result.getText();
+          if (code) {
+            addVote(code);
+          }
+        }
+      });
+    },
+    [addVote]
+  );
+
+  // ---- Main lifecycle ----
   useEffect(() => {
     if (!isActive || !scannerRef.current) return;
     let isMounted = true;
+
+    // Start the aggregation timer
+    aggregationTimerRef.current = setInterval(() => {
+      flushBuffer();
+    }, AGGREGATION_WINDOW_MS);
 
     const initScanner = async () => {
       try {
         setError(null);
 
-        // Check if MediaDevices API is available (requires HTTPS)
+        // Check MediaDevices API
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
           const errorMessage = !window.isSecureContext
             ? "Camera access requires a secure connection (HTTPS). Please use HTTPS or localhost."
@@ -89,32 +265,35 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
           return;
         }
 
+        // Get camera ID
         if (!cachedTargetCameraId) {
           let stream: MediaStream | null = null;
           try {
-            stream = await navigator.mediaDevices.getUserMedia({ 
-              video: { 
-                facingMode: "environment" 
-              } 
+            stream = await navigator.mediaDevices.getUserMedia({
+              video: { facingMode: "environment" },
             });
             const devices = await navigator.mediaDevices.enumerateDevices();
-            stream.getTracks().forEach(t => t.stop());
-            const videoDevices = devices.filter(d => d.kind === 'videoinput');
-            const backCameras = videoDevices.filter(d => {
+            stream.getTracks().forEach((t) => t.stop());
+            const videoDevices = devices.filter((d) => d.kind === "videoinput");
+            const backCameras = videoDevices.filter((d) => {
               const label = d.label.toLowerCase();
-              return label.includes('back') || label.includes('rear') || label.includes('environment');
+              return (
+                label.includes("back") ||
+                label.includes("rear") ||
+                label.includes("environment")
+              );
             });
-            cachedTargetCameraId = backCameras.length > 0 
-              ? backCameras[backCameras.length - 1].deviceId 
-              : videoDevices[0]?.deviceId || null;
+            cachedTargetCameraId =
+              backCameras.length > 0
+                ? backCameras[backCameras.length - 1].deviceId
+                : videoDevices[0]?.deviceId || null;
           } catch (streamErr: any) {
-            console.error("Failed to get camera stream for device enumeration:", streamErr);
-            // If we can't access the camera at all, provide a helpful error
-            if (streamErr.name === 'NotAllowedError' || streamErr.name === 'PermissionDeniedError') {
+            console.error("Failed to enumerate camera:", streamErr);
+            if (streamErr.name === "NotAllowedError" || streamErr.name === "PermissionDeniedError") {
               if (isMounted) setError("Camera permission denied. Please allow camera access in your browser settings.");
-            } else if (streamErr.name === 'NotFoundError' || streamErr.name === 'DevicesNotFoundError') {
+            } else if (streamErr.name === "NotFoundError" || streamErr.name === "DevicesNotFoundError") {
               if (isMounted) setError("No camera device found. Please connect a camera and try again.");
-            } else if (streamErr.name === 'NotReadableError' || streamErr.name === 'TrackStartError') {
+            } else if (streamErr.name === "NotReadableError" || streamErr.name === "TrackStartError") {
               if (isMounted) setError("Camera is already in use by another application. Please close other apps using the camera.");
             } else {
               if (isMounted) setError("Unable to access camera. Please check your device and try again.");
@@ -125,48 +304,100 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
 
         if (!isMounted) return;
 
-        await Quagga.init({
-          inputStream: {
-            type: "LiveStream",
-            target: scannerRef.current!,
-            constraints: {
-              width: { ideal: 1920 },
-              height: { ideal: 1080 },
-              deviceId: cachedTargetCameraId ? { exact: cachedTargetCameraId } : undefined,
-              facingMode: "environment",
-              aspectRatio: {ideal: 1.7777777778}
+        // ---- Start Quagga (UI + primary decoder) ----
+        await Quagga.init(
+          {
+            inputStream: {
+              type: "LiveStream",
+              target: scannerRef.current!,
+              constraints: {
+                width: { ideal: 1920 },
+                height: { ideal: 1080 },
+                deviceId: cachedTargetCameraId
+                  ? { exact: cachedTargetCameraId }
+                  : undefined,
+                facingMode: "environment",
+                aspectRatio: { ideal: 1.7777777778 },
+              },
+              // MAXIMUM COVERAGE: Full frame area
+              area: {
+                top: "0%",
+                right: "0%",
+                left: "0%",
+                bottom: "0%",
+              },
             },
-            // OPTIMIZATION 2: Target Area (The Patch)
-            // This restricts scanning to the middle rectangle only
-            area: {
-              top: "10%",    // start 30% from top
-              right: "10%",  // leave 20% margin on right
-              left: "10%",   // leave 20% margin on left
-              bottom: "40%"  // end 30% from bottom
+            locator: {
+              halfSample: true, // faster processing
+              patchSize: "small", // faster than medium
             },
+            decoder: {
+              // MAXIMUM READERS: Support all common retail barcodes
+              readers: [
+                "ean_reader",
+                "ean_8_reader",
+                "upc_reader",
+                "code_128_reader",
+                "code_39_reader",
+                "code_39_vin_reader",
+                "codabar_reader",
+                "i2of5_reader",
+                "2of5_reader",
+                "code_93_reader",
+              ],
+            },
+            locate: false, // faster: don't locate, just decode
+            numOfWorkers: navigator.hardwareConcurrency || 2, // use all available CPU cores
           },
-          locator: {
-              halfSample: false,
-              patchSize: "medium"
-            },
-          decoder: {
-            // Keep only what you use to save CPU cycles
-            readers: ["ean_reader", "ean_8_reader", "code_128_reader", "upc_reader"]
-          },
-          locate: true, 
-        }, (err) => {
-          if (err) throw err;
-          if (!isMounted) return;
-          Quagga.start();
-          setIsScanning(true);
-          const video = scannerRef.current?.querySelector('video');
-          if (video?.srcObject) activeStreamRef.current = video.srcObject as MediaStream;
+          (err) => {
+            if (err) throw err;
+            if (!isMounted) return;
+
+            Quagga.start();
+            setIsScanning(true);
+
+            // Grab the video element Quagga created
+            const video = scannerRef.current?.querySelector("video");
+            if (video) {
+              videoRef.current = video;
+              if (video.srcObject) {
+                activeStreamRef.current = video.srcObject as MediaStream;
+              }
+
+              // ---- Start ZXing on the SAME video element (parallel decoder) ----
+              // Wait a tiny beat for the stream to be ready
+              setTimeout(() => {
+                if (isMounted && video.readyState >= 2) {
+                  startZxing(video);
+                } else if (isMounted) {
+                  video.addEventListener("canplay", () => startZxing(video), { once: true });
+                }
+              }, 100);
+            }
+          }
+        );
+
+        // ---- Quagga detection handler: feed votes to aggregation buffer ----
+        Quagga.onProcessed((result) => {
+          if (!result || !result.codeResult || !result.codeResult.code) return;
+          addVote(result.codeResult.code);
         });
 
-        Quagga.onDetected((data) => {
-          if (data?.codeResult?.code) handleBarcodeDetected(data.codeResult.code);
+        // Also keep onDetected for extra accuracy (fires less often but more reliable)
+        Quagga.onDetected((result) => {
+          if (result?.codeResult?.code) {
+            // Give it extra votes so it wins in the aggregation
+            const code = result.codeResult.code;
+            const votes = votesRef.current;
+            const existing = votes.get(code);
+            if (existing) {
+              existing.votes += 3; // detected events are more reliable, give bonus votes
+              existing.lastSeen = Date.now();
+            } else {
+              votes.set(code, { code, votes: 3, lastSeen: Date.now() });
+            }
+          }
         });
-
       } catch (err: any) {
         console.error("Scanner Error:", err);
         if (isMounted) setError("Camera error. Please check permissions.");
@@ -174,14 +405,33 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
     };
 
     const startTimer = setTimeout(initScanner, 200);
+
     return () => {
       isMounted = false;
       clearTimeout(startTimer);
+
+      // Stop aggregation timer
+      if (aggregationTimerRef.current) {
+        clearInterval(aggregationTimerRef.current);
+        aggregationTimerRef.current = null;
+      }
+
+      // Stop ZXing
+      stopZxing();
+
+      // Stop Quagga
       Quagga.stop();
+      Quagga.offProcessed();
       Quagga.offDetected();
+
+      // Stop camera tracks
       stopTracks();
+
+      // Clear vote buffer
+      votesRef.current.clear();
+      recentScansRef.current.clear();
     };
-  }, [isActive, handleBarcodeDetected, stopTracks]);
+  }, [isActive, stopTracks, addVote, flushBuffer, startZxing, stopZxing]);
 
   if (!isActive) return null;
 
@@ -191,54 +441,63 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
         <div className="relative group">
           <div className="relative bg-zinc-950 aspect-[4/3] sm:h-[280px] w-full overflow-hidden [&_video]:object-cover">
             <div ref={scannerRef} className="w-full h-full" />
-            
-            {/* HUD Overlay - Adjusted to match the "Patch" area */}
+
+            {/* HUD Overlay - Full frame scan indicator */}
             {isScanning && !error && (
               <div className="absolute inset-0 pointer-events-none">
-                {/* Dimm the non-scanned areas */}
-                <div className="absolute inset-0 bg-black/40" style={{ clipPath: 'polygon(0% 0%, 0% 100%, 20% 100%, 20% 30%, 80% 30%, 80% 70%, 20% 70%, 20% 100%, 100% 100%, 100% 0%)' }} />
-                
-                {/* The Target Box */}
-                <div className="absolute top-[30%] left-[20%] right-[20%] bottom-[30%] border-2 border-amber-500/50 rounded-lg">
-                  <div className="absolute top-0 left-0 w-4 h-4 border-t-4 border-l-4 border-amber-500" />
-                  <div className="absolute top-0 right-0 w-4 h-4 border-t-4 border-r-4 border-amber-500" />
-                  <div className="absolute bottom-0 left-0 w-4 h-4 border-b-4 border-l-4 border-amber-500" />
-                  <div className="absolute bottom-0 right-0 w-4 h-4 border-b-4 border-r-4 border-amber-500" />
-                  
-                  {/* Laser Line */}
-                  <div className="absolute inset-x-0 top-1/2 h-[1px] bg-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.8)] animate-pulse" />
-                </div>
-                
-                <p className="absolute bottom-4 left-0 right-0 text-center text-[10px] text-amber-500 uppercase tracking-widest font-bold">
-                  Align Barcode in Box
+                {/* Corner brackets - Full Scan */}
+                <div className="absolute top-2 left-2 w-8 h-8 border-t-4 border-l-4 border-amber-500/60 rounded-tl" />
+                <div className="absolute top-2 right-2 w-8 h-8 border-t-4 border-r-4 border-amber-500/60 rounded-tr" />
+                <div className="absolute bottom-2 left-2 w-8 h-8 border-b-4 border-l-4 border-amber-500/60 rounded-bl" />
+                <div className="absolute bottom-2 right-2 w-8 h-8 border-b-4 border-r-4 border-amber-500/60 rounded-br" />
+
+                {/* Scanning grid animation */}
+                <div className="absolute inset-x-0 top-0 h-[2px] bg-gradient-to-r from-transparent via-amber-500 to-transparent animate-scanTop" />
+                <div className="absolute inset-x-0 bottom-0 h-[2px] bg-gradient-to-r from-transparent via-amber-500 to-transparent animate-scanBottom" />
+                <div className="absolute inset-y-0 left-0 w-[2px] bg-gradient-to-b from-transparent via-amber-500 to-transparent animate-scanLeft" />
+                <div className="absolute inset-y-0 right-0 w-[2px] bg-gradient-to-b from-transparent via-amber-500 to-transparent animate-scanRight" />
+
+                <p className="absolute bottom-3 left-0 right-0 text-center text-[10px] text-amber-500/70 uppercase tracking-widest font-bold">
+                  Scanning full frame
                 </p>
               </div>
             )}
-            
+
             {error && (
-               <div className="absolute inset-0 flex flex-col items-center justify-center bg-zinc-900/95 p-6 text-center">
-                 <Camera className="h-10 w-10 text-zinc-700 mb-4" />
-                 <p className="text-zinc-200 text-sm">{error}</p>
-                 <Button onClick={() => window.location.reload()}>Restart</Button>
-               </div>
+              <div className="absolute inset-0 flex flex-col items-center justify-center bg-zinc-900/95 p-6 text-center">
+                <Camera className="h-10 w-10 text-zinc-700 mb-4" />
+                <p className="text-zinc-200 text-sm">{error}</p>
+                <Button onClick={() => window.location.reload()}>Restart</Button>
+              </div>
             )}
           </div>
-          
+
           <div className="p-4 dark:bg-zinc-900 flex flex-col gap-3">
             <div className="flex gap-2">
-                <Input
-                  placeholder="Manual barcode..."
-                  value={manualBarcode}
-                  onChange={(e) => setManualBarcode(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && handleBarcodeDetected(manualBarcode.trim())}
-                  className="h-10"
-                  inputMode="numeric"
-                  pattern="[0-9]*"
-                />
-              <Button onClick={() => handleBarcodeDetected(manualBarcode.trim())}>Add</Button>
+              <Input
+                placeholder="Manual barcode..."
+                value={manualBarcode}
+                onChange={(e) => setManualBarcode(e.target.value)}
+                onKeyDown={(e) =>
+                  e.key === "Enter" && handleBarcodeDetected(manualBarcode.trim())
+                }
+                className="h-10"
+                inputMode="numeric"
+                pattern="[0-9]*"
+              />
+              <Button onClick={() => handleBarcodeDetected(manualBarcode.trim())}>
+                Add
+              </Button>
             </div>
             {onClose && (
-              <Button variant="ghost" size="sm" onClick={onClose} className="text-zinc-500">Cancel</Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={onClose}
+                className="text-zinc-500"
+              >
+                Cancel
+              </Button>
             )}
           </div>
         </div>

@@ -76,6 +76,8 @@ export default function StoreProductsPage() {
   const [isOffline, setIsOffline] = useState(
     typeof navigator !== "undefined" ? !navigator.onLine : false
   );
+  // O(1) barcode product index
+  const [barcodeIndex, setBarcodeIndex] = useState<Map<string, Product>>(new Map());
 
   // Track online/offline status for UI
   useEffect(() => {
@@ -201,6 +203,17 @@ export default function StoreProductsPage() {
     setStoreId(store_id);
     fetchProducts(store_id);
   }, [router]);
+
+  // ---- Build O(1) barcode index whenever products change ----
+  useEffect(() => {
+    const index = new Map<string, Product>();
+    for (const p of products) {
+      if (p.barcode) {
+        index.set(p.barcode, p);
+      }
+    }
+    setBarcodeIndex(index);
+  }, [products]);
 
   const fetchProducts = async (storeId: string) => {
     try {
@@ -500,8 +513,8 @@ export default function StoreProductsPage() {
       return;
     }
 
-    // Check if product with this barcode already exists
-    const existingProduct = products.find(p => p.barcode === trimmedBarcode);
+    // Check if product with this barcode already exists (O(1) lookup)
+    const existingProduct = barcodeIndex.get(trimmedBarcode);
     if (existingProduct) {
       toast.error("Product with this barcode already exists");
       return;
@@ -1101,7 +1114,7 @@ const filteredProducts = products.filter(
             </DialogHeader>
             <BarcodeScanner
               onScan={(scannedBarcode: string) => {
-                const product = products.find(p => p.barcode === scannedBarcode.trim());
+                const product = barcodeIndex.get(scannedBarcode.trim());
                 if (product) {
                   setHighlightedProductId(product.id);
                   setSearchQuery("");

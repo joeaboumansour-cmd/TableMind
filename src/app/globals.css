@@ -148,6 +148,45 @@ html {
   }
 }
 
+/* ============================================
+   Barcode Scanner Animations
+   ============================================ */
+
+@keyframes scanTop {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(40px); }
+}
+
+@keyframes scanBottom {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-40px); }
+}
+
+@keyframes scanLeft {
+  0%, 100% { transform: translateX(0); }
+  50% { transform: translateX(40px); }
+}
+
+@keyframes scanRight {
+  0%, 100% { transform: translateX(0); }
+  50% { transform: translateX(-40px); }
+}
+
+@layer utilities {
+  .animate-scanTop {
+    animation: scanTop 2s ease-in-out infinite;
+  }
+  .animate-scanBottom {
+    animation: scanBottom 2s ease-in-out infinite;
+  }
+  .animate-scanLeft {
+    animation: scanLeft 2s ease-in-out infinite;
+  }
+  .animate-scanRight {
+    animation: scanRight 2s ease-in-out infinite;
+  }
+}
+
 /* Hide Turbopack DevTools overlay */
 .turbo-check {
   display: none !important;
