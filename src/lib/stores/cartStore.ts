@@ -18,6 +18,13 @@ export const useCartStore = create<CartStore>()(
         const { items } = get();
         const existingItem = items.find(item => item.product_id === product.id);
 
+        // Idempotent: scanning the same product must NOT increment quantity.
+        // Quantity is only ever increased via the manual "+" button (incrementQuantity).
+        // This also makes rapid multi-emission bursts from the scanner safe.
+        if (existingItem) {
+          return;
+        }
+
         // Normalize prices based on the currency dropdown value from the DB
         let unitPriceUsd: number;
         let unitPriceLl: number;
@@ -32,37 +39,20 @@ export const useCartStore = create<CartStore>()(
           unitPriceUsd = convertLlToUsdForSale(product.selling_price);
         }
 
-        if (existingItem) {
-          // Update existing item
-          const newQuantity = existingItem.quantity + quantity;
-          set({
-            items: items.map(item =>
-              item.product_id === product.id
-                ? {
-                    ...item,
-                    quantity: newQuantity,
-                    total_price: newQuantity * item.unit_price,
-                    total_price_usd: newQuantity * item.unit_price_usd,
-                  }
-                : item
-            ),
-          });
-        } else {
-          // Add new item at the top of the cart
-          const newItem: CartItem = {
-            product_id: product.id,
-            product_name: product.name,
-            barcode: product.barcode,
-            quantity,
-            unit_price: unitPriceLl,
-            total_price: quantity * unitPriceLl,
-            unit_price_usd: unitPriceUsd,
-            total_price_usd: quantity * unitPriceUsd,
-            stock_quantity: product.stock_quantity,
-            currency: product.currency || 'LL',
-          };
-          set({ items: [newItem, ...items] });
-        }
+        // Add new item at the top of the cart
+        const newItem: CartItem = {
+          product_id: product.id,
+          product_name: product.name,
+          barcode: product.barcode,
+          quantity,
+          unit_price: unitPriceLl,
+          total_price: quantity * unitPriceLl,
+          unit_price_usd: unitPriceUsd,
+          total_price_usd: quantity * unitPriceUsd,
+          stock_quantity: product.stock_quantity,
+          currency: product.currency || 'LL',
+        };
+        set({ items: [newItem, ...items] });
 
         // Play beep sound if enabled
         if (typeof window !== 'undefined') {
