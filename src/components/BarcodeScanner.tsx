@@ -20,8 +20,8 @@ const ZXING_INTERVAL_MS = 800;
 /** Fixed canvas size for captures — 640×480 is fast and enough for barcodes */
 const CANVAS_SIZE = 640;
 
-/** Dedup window: skip reporting same barcode within this many ms */
-const DEDUP_WINDOW_MS = 3000;
+/** Dedup window: short anti-firehose only — resume reporting quickly so POS can highlight duplicates */
+const DEDUP_WINDOW_MS = 500;
 
 /** Retail barcode formats for BarcodeDetector */
 const BARCODE_FORMATS = [
