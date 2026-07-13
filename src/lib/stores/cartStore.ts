@@ -53,19 +53,6 @@ export const useCartStore = create<CartStore>()(
           currency: product.currency || 'LL',
         };
         set({ items: [newItem, ...items] });
-
-        // Play beep sound if enabled
-        if (typeof window !== 'undefined') {
-          try {
-            const audio = new Audio('/sounds/beep.mp3');
-            audio.volume = 0.5;
-            audio.play().catch(() => {
-              // Ignore audio play errors (user hasn't interacted yet)
-            });
-          } catch (error) {
-            // Ignore audio errors
-          }
-        }
       },
 
       removeItem: (productId: string) => {
