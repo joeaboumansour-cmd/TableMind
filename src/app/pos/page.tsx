@@ -424,16 +424,19 @@ export default function POSPage() {
       <div className="flex-1 flex flex-col overflow-hidden p-4 gap-3">
         {/* Barcode Scanner - Always Open - Compact */}
         <div className="flex-shrink-0">
-          <div className="flex items-center justify-end mb-1">
+          <div className="flex items-center justify-between mb-2">
             <Button
-              variant="ghost"
+              variant={isScannerActive ? "default" : "outline"}
               size="sm"
               onClick={toggleScanner}
-              className="h-7 px-2 text-xs gap-1"
+              className="flex items-center gap-1"
             >
-              <Scan className="h-3.5 w-3.5" />
-              {isScannerActive ? "Hide" : "Show"}
+              <Scan className="h-4 w-4" />
+              {isScannerActive ? "Turn Off Scanner" : "Turn On Scanner"}
             </Button>
+            <Badge variant={isScannerActive ? "default" : "secondary"}>
+              {isScannerActive ? "ON" : "OFF"}
+            </Badge>
           </div>
           <BarcodeScanner
             onScan={handleBarcodeScan}
