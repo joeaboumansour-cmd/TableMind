@@ -11,20 +11,27 @@ import { BrowserMultiFormatReader } from "@zxing/library";
 // CONFIG
 // ============================================================
 
-/** Interval between snapshot captures (ms) */
-const CAPTURE_INTERVAL_MS = 400;
+/** Min interval between decode attempts (prevents CPU saturation) */
+const MIN_DECODE_INTERVAL_MS = 120;
 
-/** Resolution for capture canvas (kept relatively low for performance) */
+/** Resolution for capture canvas */
 const CAPTURE_WIDTH = 1280;
 const CAPTURE_HEIGHT = 720;
 
-/** Grid tile configuration for fallback ZXing mode */
-const GRID_COLS = 3;
-const GRID_ROWS = 3;
-const TILE_OVERLAP = 100; // px overlap between tiles to catch split barcodes
-
 /** Dedup window: skip reporting same barcode within this many ms */
 const DEDUP_WINDOW_MS = 3000;
+
+/** Only these retail barcode formats — reduces BarcodeDetector latency */
+const BARCODE_FORMATS = [
+  "ean_13",
+  "ean_8",
+  "upc_a",
+  "upc_e",
+  "code_128",
+  "code_39",
+  "codabar",
+  "itf",
+] as const;
 
 // ============================================================
 // INTERFACES
@@ -32,7 +39,6 @@ const DEDUP_WINDOW_MS = 3000;
 
 interface BarcodeScannerProps {
   onScan: (barcode: string) => void;
-  onBatchScan?: (barcodes: string[]) => void;
   onClose?: () => void;
   isActive?: boolean;
 }
@@ -88,11 +94,21 @@ function isValidEAN(barcode: string): boolean {
 function normalizeBarcode(raw: string): string {
   let code = raw.trim();
   code = code.replace(/[^A-Za-z0-9\-]/g, "");
-  // Strip leading zeros from EAN-13 that was originally UPC-A padded
   if (code.length === 13 && code.startsWith("0") && /^\d+$/.test(code)) {
-    code = code.slice(1); // treat as UPC-A
+    code = code.slice(1);
   }
   return code;
+}
+
+// ============================================================
+// IS VALID BARCODE
+// ============================================================
+
+function isValidBarcode(raw: string): boolean {
+  const normalized = normalizeBarcode(raw);
+  if (!normalized) return false;
+  if (!/^\d{8,13}$/.test(normalized)) return true; // non-EAN passes through
+  return isValidEAN(normalized);
 }
 
 // ============================================================
@@ -101,7 +117,6 @@ function normalizeBarcode(raw: string): string {
 
 export default function BarcodeScanner({
   onScan,
-  onBatchScan,
   onClose,
   isActive = true,
 }: BarcodeScannerProps) {
@@ -109,159 +124,191 @@ export default function BarcodeScanner({
   const videoContainerRef = useRef<HTMLDivElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const captureTimerRef = useRef<NodeJS.Timeout | null>(null);
   const dedupRef = useRef<Map<string, number>>(new Map());
   const zxingReaderRef = useRef<BrowserMultiFormatReader | null>(null);
-  const barcodeDetectorRef = useRef<any>(null); // native BarcodeDetector
+  const barcodeDetectorRef = useRef<any>(null);
   const supportsBarcodeDetector = useRef(false);
   const isMountedRef = useRef(false);
+  const lastDecodeTimeRef = useRef(0);
+  const zxingBusyRef = useRef(false);
+  const animFrameIdRef = useRef<number>(0);
+  const decodedBarcodesRef = useRef<string[]>([]);
 
   const [isScanning, setIsScanning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [manualBarcode, setManualBarcode] = useState<string>("");
   const [barcodesFound, setBarcodesFound] = useState<string[]>([]);
 
-  // ---- Cleanup old dedup entries ----
-  const cleanDedup = useCallback(() => {
+  // ---- Dedup check ----
+  const isDuplicate = useCallback((normalized: string): boolean => {
     const now = Date.now();
-    for (const [code, ts] of dedupRef.current) {
-      if (now - ts > DEDUP_WINDOW_MS) {
-        dedupRef.current.delete(code);
-      }
+    const lastReported = dedupRef.current.get(normalized);
+    if (lastReported && now - lastReported < DEDUP_WINDOW_MS) {
+      return true;
     }
+    dedupRef.current.set(normalized, now);
+    return false;
   }, []);
 
-  // ---- Report a batch of barcodes ----
-  const reportBarcodes = useCallback(
-    (codes: string[]) => {
-      if (codes.length === 0) return;
-
-      // Filter by check-digit and dedup
-      const now = Date.now();
-      const valid: string[] = [];
-
-      for (const raw of codes) {
-        const normalized = normalizeBarcode(raw);
-        if (!normalized) continue;
-
-        // Validate check digit for EAN/UPC formats
-        if (/^\d{8,13}$/.test(normalized)) {
-          if (!isValidEAN(normalized)) continue;
-        }
-
-        // Dedup
-        if (dedupRef.current.has(normalized)) {
-          const lastReported = dedupRef.current.get(normalized)!;
-          if (now - lastReported < DEDUP_WINDOW_MS) continue;
-        }
-        dedupRef.current.set(normalized, now);
-        valid.push(normalized);
-      }
-
-      if (valid.length === 0) return;
-
-      // Report individual barcodes for immediate add
-      for (const b of valid) {
-        onScan(b);
-      }
-
-      // Report batch if handler exists
-      if (onBatchScan) {
-        onBatchScan(valid);
-      }
-
-      // Update found count
+  // ---- Report barcode ----
+  const reportBarcode = useCallback(
+    (barcode: string) => {
+      if (isDuplicate(barcode)) return;
+      onScan(barcode);
       setBarcodesFound((prev) => {
-        const unique = new Set([...prev, ...valid]);
-        return Array.from(unique).slice(-20); // keep last 20
+        const unique = new Set([...prev, barcode]);
+        return Array.from(unique).slice(-20);
       });
-
-      // Clean dedup periodically
-      cleanDedup();
     },
-    [onScan, onBatchScan, cleanDedup]
+    [onScan, isDuplicate]
   );
 
-  // ---- Capture snapshot and detect barcodes ----
-  const captureAndDetect = useCallback(async () => {
+  // ---- Clean dedup ----
+  useEffect(() => {
+    const cleanup = setInterval(() => {
+      const now = Date.now();
+      for (const [code, ts] of dedupRef.current) {
+        if (now - ts > DEDUP_WINDOW_MS * 2) {
+          dedupRef.current.delete(code);
+        }
+      }
+    }, 10000);
+    return () => clearInterval(cleanup);
+  }, []);
+
+  // ============================================================
+  // THE CORE LOOP — runs per video frame via requestAnimationFrame
+  // ============================================================
+  const decodeLoop = useCallback(() => {
+    if (!isMountedRef.current) return;
+
     const video = videoRef.current;
     const canvas = canvasRef.current;
-    if (!video || !canvas) return;
+    if (!video || !canvas) {
+      animFrameIdRef.current = requestAnimationFrame(decodeLoop);
+      return;
+    }
 
-    // Ensure video has data
-    if (video.readyState < 2) return;
+    // Wait for video to have a frame
+    if (video.readyState < 2 || video.videoWidth === 0) {
+      animFrameIdRef.current = requestAnimationFrame(decodeLoop);
+      return;
+    }
 
+    // Throttle: don't decode too often
+    const now = Date.now();
+    if (now - lastDecodeTimeRef.current < MIN_DECODE_INTERVAL_MS) {
+      animFrameIdRef.current = requestAnimationFrame(decodeLoop);
+      return;
+    }
+
+    // If ZXing is still busy, skip this frame
+    if (zxingBusyRef.current) {
+      animFrameIdRef.current = requestAnimationFrame(decodeLoop);
+      return;
+    }
+
+    lastDecodeTimeRef.current = now;
+
+    // ---- Draw frame to canvas (sharp, no smoothing) ----
     const ctx = canvas.getContext("2d");
-    if (!ctx) return;
+    if (!ctx) {
+      animFrameIdRef.current = requestAnimationFrame(decodeLoop);
+      return;
+    }
 
-    // Draw current frame to canvas
-    canvas.width = CAPTURE_WIDTH;
-    canvas.height = CAPTURE_HEIGHT;
-    ctx.drawImage(video, 0, 0, CAPTURE_WIDTH, CAPTURE_HEIGHT);
+    canvas.width = video.videoWidth || CAPTURE_WIDTH;
+    canvas.height = video.videoHeight || CAPTURE_HEIGHT;
+    ctx.imageSmoothingEnabled = false; // SHARP pixels — critical for distance
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-    // ---- Try native BarcodeDetector ----
+    // ---- Try BarcodeDetector (near-zero CPU, hardware accelerated) ----
     if (supportsBarcodeDetector.current && barcodeDetectorRef.current) {
-      try {
-        const results = await barcodeDetectorRef.current.detect(canvas);
-        const codes: string[] = [];
-        for (const r of results) {
-          if (r.rawValue) codes.push(r.rawValue);
-        }
-        if (codes.length > 0) {
-          reportBarcodes(codes);
-          return; // Success with native API
-        }
-      } catch (e) {
-        // Native API failed, fall through to ZXing
-        console.debug("[Scanner] BarcodeDetector failed, falling back to ZXing:", e);
-      }
-    }
-
-    // ---- Fallback: ZXing grid scan ----
-    const reader = zxingReaderRef.current;
-    if (!reader) return;
-
-    const tileCodes: string[] = [];
-    const tileW = Math.floor((CAPTURE_WIDTH - TILE_OVERLAP * (GRID_COLS - 1)) / GRID_COLS);
-    const tileH = Math.floor((CAPTURE_HEIGHT - TILE_OVERLAP * (GRID_ROWS - 1)) / GRID_ROWS);
-
-    for (let row = 0; row < GRID_ROWS; row++) {
-      for (let col = 0; col < GRID_COLS; col++) {
-        // Skip if component unmounted
-        if (!isMountedRef.current) return;
-
-        const sx = Math.floor(col * (tileW + TILE_OVERLAP));
-        const sy = Math.floor(row * (tileH + TILE_OVERLAP));
-
-        // Extract tile
-        const tileCanvas = document.createElement("canvas");
-        tileCanvas.width = tileW;
-        tileCanvas.height = tileH;
-        const tileCtx = tileCanvas.getContext("2d");
-        if (!tileCtx) continue;
-
-        tileCtx.drawImage(canvas, sx, sy, tileW + TILE_OVERLAP, tileH + TILE_OVERLAP, 0, 0, tileW, tileH);
-
-        try {
-          // Decode from tile: create a temporary image from the canvas
-          const img = new Image();
-          img.src = tileCanvas.toDataURL("image/png");
-          // Wait for image to load then decode
-          await new Promise((resolve) => { img.onload = resolve; });
-          const result = await reader.decode(img);
-          if (result && result.getText()) {
-            tileCodes.push(result.getText());
+      barcodeDetectorRef.current
+        .detect(canvas)
+        .then((results: any[]) => {
+          if (!isMountedRef.current) return;
+          let foundOne = false;
+          for (const r of results) {
+            if (r.rawValue && isValidBarcode(r.rawValue)) {
+              const normalized = normalizeBarcode(r.rawValue);
+              if (normalized && !isDuplicate(normalized)) {
+                foundOne = true;
+                reportBarcode(normalized);
+              }
+            }
           }
-        } catch {
-          // No barcode in this tile, skip
-        }
-      }
+          // If BarcodeDetector found something, skip ZXing fallback this frame
+          if (!foundOne && zxingReaderRef.current) {
+            tryZxingDecode(canvas, ctx);
+          }
+        })
+        .catch(() => {
+          if (zxingReaderRef.current) {
+            tryZxingDecode(canvas, ctx);
+          }
+        })
+        .finally(() => {
+          animFrameIdRef.current = requestAnimationFrame(decodeLoop);
+        });
+      return;
     }
 
-    if (tileCodes.length > 0) {
-      reportBarcodes(tileCodes);
+    // ---- No BarcodeDetector: use ZXing directly ----
+    if (zxingReaderRef.current) {
+      tryZxingDecode(canvas, ctx);
     }
-  }, [reportBarcodes]);
+
+    animFrameIdRef.current = requestAnimationFrame(decodeLoop);
+  }, [reportBarcode, isDuplicate]);
+
+  // ---- ZXing single-frame decode ----
+  const tryZxingDecode = useCallback(
+    (canvas: HTMLCanvasElement, _ctx: CanvasRenderingContext2D) => {
+      if (zxingBusyRef.current || !zxingReaderRef.current) return;
+      zxingBusyRef.current = true;
+
+      const reader = zxingReaderRef.current;
+
+      // Use toBlob (async, no PNG compression) instead of toDataURL
+      canvas.toBlob((blob) => {
+        if (!blob || !isMountedRef.current) {
+          zxingBusyRef.current = false;
+          return;
+        }
+
+        const img = new Image();
+        img.onload = () => {
+          if (!isMountedRef.current) {
+            zxingBusyRef.current = false;
+            return;
+          }
+          try {
+            const result = reader.decode(img);
+            if (result && result.getText()) {
+              const raw = result.getText();
+              if (isValidBarcode(raw)) {
+                const normalized = normalizeBarcode(raw);
+                if (normalized) {
+                  reportBarcode(normalized);
+                }
+              }
+            }
+          } catch {
+            // No barcode found — normal
+          } finally {
+            zxingBusyRef.current = false;
+            URL.revokeObjectURL(img.src);
+          }
+        };
+        img.onerror = () => {
+          zxingBusyRef.current = false;
+        };
+        img.src = URL.createObjectURL(blob);
+      }, "image/jpeg"); // JPEG is much faster than PNG for canvas-to-blob
+    },
+    [reportBarcode]
+  );
 
   // ---- Start camera ----
   const startCamera = useCallback(async () => {
@@ -270,16 +317,16 @@ export default function BarcodeScanner({
     try {
       setError(null);
 
-      // Check MediaDevices API
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        const errorMessage = !window.isSecureContext
-          ? "Camera access requires a secure connection (HTTPS). Please use HTTPS or localhost."
-          : "Your browser does not support camera access.";
-        setError(errorMessage);
+        setError(
+          !window.isSecureContext
+            ? "Camera requires HTTPS."
+            : "Camera not supported in this browser."
+        );
         return;
       }
 
-      // Get or detect camera
+      // Get camera ID
       if (!cachedTargetCameraId) {
         try {
           const tempStream = await navigator.mediaDevices.getUserMedia({
@@ -290,23 +337,28 @@ export default function BarcodeScanner({
           const videoDevices = devices.filter((d) => d.kind === "videoinput");
           const backCameras = videoDevices.filter((d) => {
             const label = d.label.toLowerCase();
-            return label.includes("back") || label.includes("rear") || label.includes("environment");
+            return (
+              label.includes("back") ||
+              label.includes("rear") ||
+              label.includes("environment")
+            );
           });
           cachedTargetCameraId =
             backCameras.length > 0
               ? backCameras[backCameras.length - 1].deviceId
               : videoDevices[0]?.deviceId || null;
         } catch {
-          // Will try without specific camera ID
+          // Continue without specific ID
         }
       }
 
-      // Start stream
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
           width: { ideal: 1280 },
           height: { ideal: 720 },
-          deviceId: cachedTargetCameraId ? { exact: cachedTargetCameraId } : undefined,
+          deviceId: cachedTargetCameraId
+            ? { exact: cachedTargetCameraId }
+            : undefined,
           facingMode: "environment",
           frameRate: { ideal: 30 },
         },
@@ -319,15 +371,12 @@ export default function BarcodeScanner({
 
       streamRef.current = stream;
 
-      // Attach to video element
+      // Create video element
       const video = document.createElement("video");
       video.setAttribute("playsinline", "");
       video.setAttribute("autoplay", "");
       video.setAttribute("muted", "");
       video.srcObject = stream;
-      video.onloadedmetadata = () => {
-        video.play().catch(() => {});
-      };
 
       videoRef.current = video;
 
@@ -337,93 +386,82 @@ export default function BarcodeScanner({
         videoContainerRef.current.appendChild(video);
       }
 
-      setIsScanning(true);
-
-      // ---- Initialize decoders ----
-
-      // 1. Native BarcodeDetector (Chrome/Edge built-in)
+      // Initialize decoders
       if ("BarcodeDetector" in window) {
         try {
           const detector = new (window as any).BarcodeDetector({
-            formats: [
-              "ean_13",
-              "ean_8",
-              "upc_a",
-              "upc_e",
-              "code_128",
-              "code_39",
-              "codabar",
-              "itf",
-              "qr_code",
-              "data_matrix",
-              "aztec",
-              "pdf417",
-            ],
+            formats: BARCODE_FORMATS,
           });
           barcodeDetectorRef.current = detector;
           supportsBarcodeDetector.current = true;
-          console.log("[Scanner] Using native BarcodeDetector API");
         } catch {
           supportsBarcodeDetector.current = false;
         }
       }
 
-      // 2. ZXing fallback reader
       const zxing = new BrowserMultiFormatReader();
       zxingReaderRef.current = zxing;
 
-      // Create canvas for snapshots
-      canvasRef.current = document.createElement("canvas");
+      // Create canvas
+      const canvas = document.createElement("canvas");
+      canvasRef.current = canvas;
 
-      // Wait for video to be ready
-      video.oncanplay = () => {
-        // Start capture interval
-        captureTimerRef.current = setInterval(() => {
-          captureAndDetect();
-        }, CAPTURE_INTERVAL_MS);
+      // Wait for video to be ready then start loop
+      video.onloadedmetadata = () => {
+        video.play().catch(() => {});
       };
+
+      video.oncanplay = () => {
+        setIsScanning(true);
+        // Start the main decode loop
+        animFrameIdRef.current = requestAnimationFrame(decodeLoop);
+      };
+
+      // Fallback if oncanplay doesn't fire
+      setTimeout(() => {
+        if (!isMountedRef.current) return;
+        if (video.readyState >= 2 && !isScanning) {
+          setIsScanning(true);
+          animFrameIdRef.current = requestAnimationFrame(decodeLoop);
+        }
+      }, 1000);
     } catch (err: any) {
       console.error("[Scanner] Camera error:", err);
       if (!isMountedRef.current) return;
 
       if (err.name === "NotAllowedError" || err.name === "PermissionDeniedError") {
-        setError("Camera permission denied. Please allow camera access.");
+        setError("Camera permission denied.");
       } else if (err.name === "NotFoundError") {
         setError("No camera found.");
       } else if (err.name === "NotReadableError") {
-        setError("Camera is in use by another app.");
+        setError("Camera in use by another app.");
       } else {
         setError("Unable to access camera.");
       }
     }
-  }, [captureAndDetect]);
+  }, [decodeLoop]);
 
   // ---- Stop everything ----
   const stopEverything = useCallback(() => {
-    // Stop capture timer
-    if (captureTimerRef.current) {
-      clearInterval(captureTimerRef.current);
-      captureTimerRef.current = null;
+    if (animFrameIdRef.current) {
+      cancelAnimationFrame(animFrameIdRef.current);
+      animFrameIdRef.current = 0;
     }
 
-    // Stop camera stream
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
     }
 
-    // Clean up video
     if (videoRef.current) {
       videoRef.current.srcObject = null;
       videoRef.current = null;
     }
 
-    // Clean up container
     if (videoContainerRef.current) {
       videoContainerRef.current.innerHTML = "";
     }
 
-    // Clean up ZXing
     if (zxingReaderRef.current) {
       zxingReaderRef.current.reset();
       zxingReaderRef.current = null;
@@ -431,6 +469,7 @@ export default function BarcodeScanner({
 
     barcodeDetectorRef.current = null;
     canvasRef.current = null;
+    zxingBusyRef.current = false;
     setIsScanning(false);
     setBarcodesFound([]);
   }, []);
@@ -451,7 +490,7 @@ export default function BarcodeScanner({
     };
   }, [isActive, startCamera, stopEverything]);
 
-  // ---- Handle manual barcode ----
+  // ---- Manual barcode ----
   const handleManualSubmit = useCallback(
     (value: string) => {
       const trimmed = value.trim();
@@ -461,12 +500,6 @@ export default function BarcodeScanner({
     [onScan]
   );
 
-  // ---- Cleanup dedup periodically (outside capture cycle) ----
-  useEffect(() => {
-    const cleanup = setInterval(() => cleanDedup(), 10000);
-    return () => clearInterval(cleanup);
-  }, [cleanDedup]);
-
   if (!isActive) return null;
 
   return (
@@ -474,30 +507,27 @@ export default function BarcodeScanner({
       <CardContent className="p-0">
         <div className="relative group">
           <div className="relative bg-zinc-950 aspect-[4/3] sm:h-[280px] w-full overflow-hidden">
-            {/* Video container — camera preview, no processing */}
             <div ref={videoContainerRef} className="w-full h-full" />
 
-            {/* Scanning HUD */}
             {isScanning && !error && (
               <div className="absolute inset-0 pointer-events-none">
-                {/* Corner brackets */}
                 <div className="absolute top-2 left-2 w-8 h-8 border-t-4 border-l-4 border-amber-500/60 rounded-tl" />
                 <div className="absolute top-2 right-2 w-8 h-8 border-t-4 border-r-4 border-amber-500/60 rounded-tr" />
                 <div className="absolute bottom-2 left-2 w-8 h-8 border-b-4 border-l-4 border-amber-500/60 rounded-bl" />
                 <div className="absolute bottom-2 right-2 w-8 h-8 border-b-4 border-r-4 border-amber-500/60 rounded-br" />
 
-                {/* Scanning indicator dots */}
                 <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2">
                   <div className="flex items-center gap-2">
                     <span className="w-2 h-2 bg-amber-500 rounded-full animate-ping" />
                     <span className="text-amber-500 text-xs uppercase tracking-widest font-bold">
-                      {supportsBarcodeDetector.current ? "Burst Scan" : "Grid Scan"}
+                      {supportsBarcodeDetector.current
+                        ? "Scanning"
+                        : "Scanning"}
                     </span>
                     <span className="w-2 h-2 bg-amber-500 rounded-full animate-ping" />
                   </div>
                 </div>
 
-                {/* Barcodes found counter */}
                 {barcodesFound.length > 0 && (
                   <div className="absolute top-2 right-2 bg-amber-500/80 text-white text-xs px-2 py-0.5 rounded-full pointer-events-auto">
                     {barcodesFound.length} found
@@ -528,7 +558,9 @@ export default function BarcodeScanner({
                 inputMode="numeric"
                 pattern="[0-9]*"
               />
-              <Button onClick={() => handleManualSubmit(manualBarcode)}>Add</Button>
+              <Button onClick={() => handleManualSubmit(manualBarcode)}>
+                Add
+              </Button>
             </div>
             {onClose && (
               <Button
