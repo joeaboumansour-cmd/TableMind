@@ -20,9 +20,9 @@ export const useCartStore = create<CartStore>()(
 
         // Idempotent: scanning the same product must NOT increment quantity.
         // Quantity is only ever increased via the manual "+" button (incrementQuantity).
-        // This also makes rapid multi-emission bursts from the scanner safe.
+        // Returns true only if the item was actually added (not already present).
         if (existingItem) {
-          return;
+          return false;
         }
 
         // Normalize prices based on the currency dropdown value from the DB
@@ -53,6 +53,7 @@ export const useCartStore = create<CartStore>()(
           currency: product.currency || 'LL',
         };
         set({ items: [newItem, ...items] });
+        return true;
       },
 
       removeItem: (productId: string) => {

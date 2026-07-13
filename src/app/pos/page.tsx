@@ -272,11 +272,23 @@ export default function POSPage() {
           if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
         }, 50);
       } else {
-        // Item doesn't exist - add it
-        addItem(resolvedProduct);
-        // Play success sound ONLY after product has been successfully identified AND added to cart
-        playSuccessSound();
-        toast.success(`Added ${resolvedProduct.name}`);
+        // Item doesn't exist - add it (idempotent: returns true only if actually added)
+        const added = addItem(resolvedProduct);
+        if (added) {
+          // Play success sound ONLY after product has been successfully identified AND added to cart
+          playSuccessSound();
+          toast.success(`Added ${resolvedProduct.name}`);
+        } else {
+          // Lost the race to a duplicate emission — highlight instead
+          setHighlightedItemId(product.id);
+          if (highlightTimeoutRef.current) clearTimeout(highlightTimeoutRef.current);
+          highlightTimeoutRef.current = setTimeout(() => setHighlightedItemId(null), 2000);
+          toast.info(`${resolvedProduct.name} is already in cart`);
+          setTimeout(() => {
+            const el = document.getElementById(`cart-item-${product.id}`);
+            if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+          }, 50);
+        }
       }
     } else {
       toast.error("Product not found");
