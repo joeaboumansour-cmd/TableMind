@@ -335,7 +335,7 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
     <Card className="w-full border-amber-200/50 shadow-lg overflow-hidden">
       <CardContent className="p-0">
         <div className="relative group">
-          <div className="relative bg-zinc-950 aspect-[4/3] sm:h-[280px] w-full overflow-hidden">
+          <div className="relative bg-zinc-950 h-[200px] w-full overflow-hidden">
             <div ref={videoContainerRef} className="w-full h-full" />
 
             {isScanning && !error && (
@@ -364,18 +364,18 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
             )}
           </div>
 
-          <div className="p-4 dark:bg-zinc-900 flex flex-col gap-3">
+          <div className="p-2 dark:bg-zinc-900 flex flex-col gap-2">
             <div className="flex gap-2">
               <Input
                 placeholder="Manual barcode..."
                 value={manualBarcode}
                 onChange={e => setManualBarcode(e.target.value)}
                 onKeyDown={e => e.key === "Enter" && handleManualSubmit(manualBarcode)}
-                className="h-10"
+                className="h-8"
                 inputMode="numeric"
                 pattern="[0-9]*"
               />
-              <Button onClick={() => handleManualSubmit(manualBarcode)}>Add</Button>
+              <Button size="sm" onClick={() => handleManualSubmit(manualBarcode)}>Add</Button>
             </div>
             {onClose && <Button variant="ghost" size="sm" onClick={onClose} className="text-zinc-500">Cancel</Button>}
           </div>

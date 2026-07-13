@@ -265,6 +265,12 @@ export default function POSPage() {
         }, 2000);
 
         toast.info(`${resolvedProduct.name} is already in cart`);
+
+        // Scroll the existing cart item into view
+        setTimeout(() => {
+          const el = document.getElementById(`cart-item-${product.id}`);
+          if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+        }, 50);
       } else {
         // Item doesn't exist - add it
         addItem(resolvedProduct);
@@ -418,19 +424,16 @@ export default function POSPage() {
       <div className="flex-1 flex flex-col overflow-hidden p-4 gap-3">
         {/* Barcode Scanner - Always Open - Compact */}
         <div className="flex-shrink-0">
-          <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center justify-end mb-1">
             <Button
-              variant={isScannerActive ? "default" : "outline"}
+              variant="ghost"
               size="sm"
               onClick={toggleScanner}
-              className="flex items-center gap-1"
+              className="h-7 px-2 text-xs gap-1"
             >
-              <Scan className="h-4 w-4" />
-              {isScannerActive ? "Turn Off Scanner" : "Turn On Scanner"}
+              <Scan className="h-3.5 w-3.5" />
+              {isScannerActive ? "Hide" : "Show"}
             </Button>
-            <Badge variant={isScannerActive ? "default" : "secondary"}>
-              {isScannerActive ? "ON" : "OFF"}
-            </Badge>
           </div>
           <BarcodeScanner
             onScan={handleBarcodeScan}
@@ -453,6 +456,7 @@ export default function POSPage() {
                 {items.map((item) => (
 <div
   key={item.product_id}
+  id={`cart-item-${item.product_id}`}
   className={`p-1 rounded-lg transition-all duration-300 ${
     highlightedItemId === item.product_id
       ? "bg-amber-100 border-2 border-amber-500 shadow-lg scale-[1.02]"
