@@ -18,7 +18,7 @@ import {
 } from "lucide-react";
 import { useCartStore } from "@/lib/stores/cartStore";
 import { toast } from "sonner";
-import { formatLL, formatUSD, formatDateTime, SELL_RATE } from "@/lib/utils/format";
+import { formatLL, formatUSD, formatDateTime, SELL_RATE, RETURN_RATE } from "@/lib/utils/format";
 
 const supabase = createClient();
 
@@ -51,7 +51,7 @@ function CheckoutContent() {
   // Calculate total paid - simple direct calculation
   const paidLL = parseFloat(amountPaidLL) || 0;
   const paidUSD = parseFloat(amountPaidUSD) || 0;
-  const totalPaid = paidLL + (paidUSD * SELL_RATE);
+  const totalPaid = paidLL + (paidUSD * RETURN_RATE);
   
   // Simple balance calculation: whatever was entered minus total
   const difference = totalPaid - total;
@@ -370,17 +370,17 @@ function CheckoutContent() {
              {/* Balance Display - always calculate live */}
              {totalPaid > 0 && (
                isChangeDue ? (
-                 <div className="p-4 bg-green-500/10 rounded-lg">
-                   <div className="text-green-600 font-medium mb-1">Change Due</div>
-                   <div className="flex justify-between items-center">
-                     <span className="text-2xl font-bold text-green-600">
-                       {formatLL(displayAmount)}
-                     </span>
-                     <span className="text-green-600 font-medium">
-                       {formatUSD(displayAmount / SELL_RATE)}
-                     </span>
-                   </div>
-                 </div>
+                  <div className="p-4 bg-green-500/10 rounded-lg">
+                    <div className="text-green-600 font-medium mb-1">Change Due</div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-2xl font-bold text-green-600">
+                        {formatLL(displayAmount)}
+                      </span>
+                      <span className="text-green-600 font-medium">
+                        {formatUSD(displayAmount / SELL_RATE)}
+                      </span>
+                    </div>
+                  </div>
                ) : (
                  <div className="p-4 bg-amber-500/10 rounded-lg">
                    <div className="text-amber-600 font-medium mb-1">Remaining Due</div>

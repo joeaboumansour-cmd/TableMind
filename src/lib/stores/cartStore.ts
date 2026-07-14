@@ -4,7 +4,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { CartStore, CartItem } from '@/lib/types/cart';
 import { Product } from '@/lib/types/product';
-import { convertLlToUsdForSale, SELL_RATE } from '@/lib/utils/format';
+import { convertLlToUsdForReturn, SELL_RATE } from '@/lib/utils/format';
 
 export const useCartStore = create<CartStore>()(
   persist(
@@ -36,7 +36,7 @@ export const useCartStore = create<CartStore>()(
         } else {
           // If base price is LL (default), calculate USD using the utility function
           unitPriceLl = product.selling_price;
-          unitPriceUsd = convertLlToUsdForSale(product.selling_price);
+          unitPriceUsd = convertLlToUsdForReturn(product.selling_price);
         }
 
         // Add new item at the top of the cart

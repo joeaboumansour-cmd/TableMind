@@ -35,7 +35,7 @@ import {
   Layers,
 } from "lucide-react";
 import { toast } from "sonner";
-import { formatLL, formatUSD, convertUsdToLl, convertLlToUsdForSale, SELL_RATE, RETURN_RATE } from "@/lib/utils/format";
+import { formatLL, formatUSD, convertUsdToLl, convertLlToUsdForSale, SELL_RATE, RETURN_RATE, convertLlToUsdForReturn } from "@/lib/utils/format";
 import BarcodeScanner from "@/components/BarcodeScanner";
 import CSVImportDialog from "@/components/CSVImportDialog";
 import { downloadCSV, productsToCSV } from "@/lib/csv/utils";
@@ -867,7 +867,7 @@ const filteredProducts = products.filter(
                     />
                     <p className="text-xs text-muted-foreground">
                       {currency === 'LL' ? (
-                        <>Calculated: {formatLL(parseFloat(sellingPrice) || 0)} ≈ {formatUSD((parseFloat(sellingPrice) || 0) / SELL_RATE)}</>
+                        <>Calculated: {formatLL(parseFloat(sellingPrice) || 0)} ≈ {formatUSD((parseFloat(sellingPrice) || 0) / RETURN_RATE)}</>
                       ) : (
                         <>Calculated: {formatUSD(parseFloat(sellingPrice) || 0)} ≈ {formatLL((parseFloat(sellingPrice) || 0) * SELL_RATE)}</>
                       )}
@@ -975,9 +975,9 @@ const filteredProducts = products.filter(
                             <span>Sell: {formatLL(product.selling_price)}</span>
                           </div>
                           <div className="flex items-center justify-center gap-3 text-[12px]">
-                            <span>Cost: {formatUSD(product.cost_price / SELL_RATE)}</span>
+                            <span>Cost: {formatUSD(product.cost_price / RETURN_RATE)}</span>
                             <span>•</span>
-                            <span>Sell: {formatUSD(product.selling_price / SELL_RATE)}</span>
+                            <span>Sell: {formatUSD(product.selling_price / RETURN_RATE)}</span>
                           </div>
                         </>
                       ) : (
