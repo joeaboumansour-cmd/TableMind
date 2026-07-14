@@ -14,7 +14,6 @@ import {
   Check,
   Loader2,
   Calculator,
-  WifiOff,
 } from "lucide-react";
 import { useCartStore } from "@/lib/stores/cartStore";
 import { toast } from "sonner";
@@ -48,16 +47,38 @@ function CheckoutContent() {
   const total = getTotal();
   const totalUsd = getTotalUsd();
 
-  // Calculate total paid - simple direct calculation
+  // Calculate total paid - combine both currencies
+  // USD is valued at RETURN_RATE (89,000) so the store wins on incoming USD
   const paidLL = parseFloat(amountPaidLL) || 0;
   const paidUSD = parseFloat(amountPaidUSD) || 0;
   const totalPaid = paidLL + (paidUSD * RETURN_RATE);
-  
-  // Simple balance calculation: whatever was entered minus total
+
+  // Balance calculation
   const difference = totalPaid - total;
-  
   const isChangeDue = difference > 0;
-  const displayAmount = Math.abs(difference);
+  const displayChangeLL = Math.abs(difference);
+
+  // Determine the rate to use for showing USD equivalent of change
+  // - Paid only USD → RETURN_RATE (89,000) — customer already dealing in USD
+  // - Paid only LL  → SELL_RATE (90,000) — store sells USD back at higher rate
+  // - Paid both     → blended rate weighted by each currency's contribution
+  function getChangeRate(): number {
+    if (paidUSD > 0 && paidLL === 0) return RETURN_RATE;
+    if (paidLL > 0 && paidUSD === 0) return SELL_RATE;
+    // Both: weighted average of rates by contribution to total
+    const llWeight = paidLL / totalPaid;
+    const usdWeight = (paidUSD * RETURN_RATE) / totalPaid;
+    return (llWeight * SELL_RATE) + (usdWeight * RETURN_RATE);
+  }
+
+  function getChangeRateLabel(): string {
+    if (paidUSD > 0 && paidLL === 0) return `$1 = ${formatLL(RETURN_RATE)}`;
+    if (paidLL > 0 && paidUSD === 0) return `$1 = ${formatLL(SELL_RATE)}`;
+    return `blended $1 ≈ ${formatLL(Math.round(getChangeRate()))}`;
+  }
+
+  const changeRate = getChangeRate();
+  const displayChangeUSD = displayChangeLL / changeRate;
 
   // Generate transaction number
   const generateTransactionNumber = () => {
@@ -90,11 +111,11 @@ function CheckoutContent() {
       setTransactionNumber(txnNumber);
 
       const calculatedChangeGiven = totalPaid - total;
-      const calculatedChangeUsd = calculatedChangeGiven / SELL_RATE;
+      const calcChangeUsd = calculatedChangeGiven / changeRate;
 
       setPaidAmount(totalPaid);
       setChangeGiven(calculatedChangeGiven);
-      setChangeUsd(calculatedChangeUsd);
+      setChangeUsd(calcChangeUsd);
 
       // Sync inventory: decrement stock if online
       if (navigator.onLine) {
@@ -117,7 +138,7 @@ function CheckoutContent() {
           const cleanNumber = whatsappNumber.replace(/\D/g, '');
           if (cleanNumber.length === 8) {
             const phoneNumber = `961${cleanNumber}`;
-          
+
             let storeName = "TableMind Store";
             try {
               const authData = JSON.parse(localStorage.getItem("goldensquirrel_auth") || "{}");
@@ -127,7 +148,7 @@ function CheckoutContent() {
             } catch (e) {
               // Use default store name
             }
-          
+
             const receiptLines: string[] = [];
             receiptLines.push(`*${storeName}*`);
             receiptLines.push("");
@@ -142,15 +163,21 @@ function CheckoutContent() {
 
             receiptLines.push("");
             receiptLines.push(`*Total:* ${formatLL(total)}`);
-            receiptLines.push(`*Paid:* ${formatLL(totalPaid)}`);
-            receiptLines.push(`*Change:* ${formatLL(calculatedChangeGiven)}`);
+            if (paidUSD > 0) {
+              receiptLines.push(`*Paid in USD:* ${formatUSD(paidUSD)}`);
+            }
+            if (paidLL > 0) {
+              receiptLines.push(`*Paid in LL:* ${formatLL(paidLL)}`);
+            }
+            receiptLines.push(`*Total Paid:* ${formatLL(totalPaid)}`);
+            receiptLines.push(`*Change:* ${formatLL(calculatedChangeGiven)} (${formatUSD(calcChangeUsd)})`);
             receiptLines.push("");
             receiptLines.push("Status: ✓ Paid");
             receiptLines.push("Thank you for your purchase!");
-          
+
             const receiptText = encodeURIComponent(receiptLines.join("\n"));
             const whatsappUrl = `https://wa.me/${phoneNumber}?text=${receiptText}`;
-            
+
             setTimeout(() => {
               try {
                 window.open(whatsappUrl, '_blank');
@@ -199,11 +226,17 @@ function CheckoutContent() {
                  <span>Amount Paid</span>
                  <span className="font-bold">{formatLL(paidAmount)}</span>
                </div>
+               {paidUSD > 0 && (
+                 <div className="flex justify-between text-xs text-muted-foreground">
+                   <span>of which USD</span>
+                   <span>{formatUSD(paidUSD)} @ {formatLL(RETURN_RATE)}/USD</span>
+                 </div>
+               )}
                {changeGiven > 0 && (
                  <div className="flex justify-between text-green-500">
                    <span>Change</span>
                    <span className="font-bold">{formatLL(changeGiven)}</span>
-                   <span className="text-sm">(${formatUSD(changeUsd)})</span>
+                   <span className="text-sm">({formatUSD(changeUsd)})</span>
                  </div>
                )}
              </div>
@@ -314,7 +347,6 @@ function CheckoutContent() {
                 <Input
                   id="whatsapp"
                   type="tel"
-                  placeholder="70123456"
                   value={whatsappNumber}
                   onChange={(e) => setWhatsappNumber(e.target.value)}
                   className="text-lg"
@@ -336,60 +368,88 @@ function CheckoutContent() {
              <div className="grid grid-cols-2 gap-4">
                <div>
                  <Label htmlFor="amountLL">Amount Received (LL)</Label>
-                 <Input
-                   id="amountLL"
-                   type="number"
-                   step="1"
-                   placeholder={total.toString()}
-                   value={amountPaidLL}
-                   onChange={(e) => {
-                     setAmountPaidLL(e.target.value);
-                     setAmountPaidUSD("");
-                   }}
-                   className="text-lg mt-1"
-                 />
+                <Input
+                  id="amountLL"
+                  type="number"
+                  step="1"
+                  value={amountPaidLL}
+                  onChange={(e) => setAmountPaidLL(e.target.value)}
+                  className="text-lg mt-1"
+                />
                </div>
 
                <div>
                  <Label htmlFor="amountUSD">Amount Received (USD)</Label>
-                 <Input
-                   id="amountUSD"
-                   type="number"
-                   step="0.01"
-                   placeholder={totalUsd.toString()}
-                   value={amountPaidUSD}
-                   onChange={(e) => {
-                     setAmountPaidUSD(e.target.value);
-                     setAmountPaidLL("");
-                   }}
-                   className="text-lg mt-1"
-                 />
+                <Input
+                  id="amountUSD"
+                  type="number"
+                  step="0.01"
+                  value={amountPaidUSD}
+                  onChange={(e) => setAmountPaidUSD(e.target.value)}
+                  className="text-lg mt-1"
+                />
                </div>
              </div>
+
+             {/* Payment Breakdown */}
+             {(paidLL > 0 || paidUSD > 0) && (
+               <div className="text-sm text-muted-foreground space-y-1 px-1">
+                 {paidLL > 0 && (
+                   <div className="flex justify-between">
+                     <span>Paid in LL</span>
+                     <span>{formatLL(paidLL)}</span>
+                   </div>
+                 )}
+                 {paidUSD > 0 && (
+                   <div className="flex justify-between">
+                     <span>Paid in USD</span>
+                     <span>{formatUSD(paidUSD)}</span>
+                   </div>
+                 )}
+                 {paidUSD > 0 && (
+                   <div className="flex justify-between text-xs">
+                     <span>USD rate applied</span>
+                     <span>$1 = {formatLL(RETURN_RATE)}</span>
+                   </div>
+                 )}
+                 <div className="flex justify-between border-t border-border/50 pt-1 font-medium">
+                   <span>Total Paid (LL equivalent)</span>
+                   <span>{formatLL(totalPaid)}</span>
+                 </div>
+               </div>
+             )}
 
              {/* Balance Display - always calculate live */}
              {totalPaid > 0 && (
                isChangeDue ? (
-                  <div className="p-4 bg-green-500/10 rounded-lg">
-                    <div className="text-green-600 font-medium mb-1">Change Due</div>
-                    <div className="flex justify-between items-center">
-                      <span className="text-2xl font-bold text-green-600">
-                        {formatLL(displayAmount)}
-                      </span>
-                      <span className="text-green-600 font-medium">
-                        {formatUSD(displayAmount / SELL_RATE)}
-                      </span>
-                    </div>
-                  </div>
+                 <div className="p-4 bg-green-500/10 rounded-lg">
+                   <div className="text-green-600 font-medium mb-2">Change Due</div>
+                   <div className="flex justify-between items-center">
+                     <span className="text-green-600">in LL</span>
+                     <span className="text-2xl font-bold text-green-600">
+                       {formatLL(displayChangeLL)}
+                     </span>
+                   </div>
+                   <div className="flex justify-between items-center mt-1">
+                     <span className="text-green-600">in USD</span>
+                     <span className="text-xl font-bold text-green-600">
+                       {formatUSD(displayChangeUSD)}
+                     </span>
+                   </div>
+                   <div className="flex justify-between text-xs text-green-600/70 mt-2 pt-1 border-t border-green-600/20">
+                     <span>Rate applied for this transaction</span>
+                     <span>{getChangeRateLabel()}</span>
+                   </div>
+                 </div>
                ) : (
                  <div className="p-4 bg-amber-500/10 rounded-lg">
                    <div className="text-amber-600 font-medium mb-1">Remaining Due</div>
                    <div className="flex justify-between items-center">
                      <span className="text-2xl font-bold text-amber-600">
-                       {formatLL(displayAmount)}
+                       {formatLL(displayChangeLL)}
                      </span>
                      <span className="text-amber-600 font-medium">
-                       {formatUSD(displayAmount / SELL_RATE)}
+                       {formatUSD(displayChangeLL / SELL_RATE)}
                      </span>
                    </div>
                  </div>
