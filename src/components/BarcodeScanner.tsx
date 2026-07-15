@@ -8,13 +8,13 @@ import { Camera, X } from "lucide-react";
 import { BrowserMultiFormatReader } from "@zxing/library";
 
 // ============================================================
-// CONFIG — shared (both platforms)
+// CONFIG
 // ============================================================
 
 /** Interval between BarcodeDetector captures (ms) — Android only */
 const CAPTURE_INTERVAL_MS = 150;
 
-/** Fixed canvas size for captures — 640×480 is fast and enough for barcodes */
+/** Fixed canvas size for captures — 640×480 */
 const CANVAS_SIZE = 640;
 
 /** Dedup window: short anti-firehose only */
@@ -43,10 +43,7 @@ function isIOS(): boolean {
 // PLATFORM-SPECIFIC VIDEO CONSTRAINTS
 // ============================================================
 
-/**
- * iOS: clean 1080p from main wide camera (1×) — no zoom, no advanced.
- * The key is just getting the right camera with autofocus.
- */
+/** iOS: 1080p from main wide camera (1×) to get autofocus */
 const IOS_VIDEO_CONSTRAINTS: MediaTrackConstraints = {
   width: { min: 1280, ideal: 1920 },
   height: { min: 720, ideal: 1080 },
@@ -54,7 +51,7 @@ const IOS_VIDEO_CONSTRAINTS: MediaTrackConstraints = {
   frameRate: { ideal: 30 },
 };
 
-/** Android: proven 640×480 config — don't touch. */
+/** Android: proven 640×480 config */
 const DEFAULT_VIDEO_CONSTRAINTS: MediaTrackConstraints = {
   width: { ideal: 640 },
   height: { ideal: 480 },
@@ -147,8 +144,8 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
   const supportsBarcodeDetector = useRef(false);
   const isMountedRef = useRef(false);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  /** Track whether iOS ZXing continuous decode has been started */
-  const iosZxingStartedRef = useRef(false);
+  const quaggaRef = useRef<any>(null);
+  const quaggaInitRef = useRef(false);
 
   const [isScanning, setIsScanning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -174,7 +171,7 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
     });
   }, [onScan, isDuplicate]);
 
-  // ---- Draw video frame to canvas (Android / fallback) ----
+  // ---- Draw video frame to canvas (Android only) ----
   const drawFrame = useCallback((): HTMLCanvasElement | null => {
     const video = videoRef.current;
     if (!video || video.readyState < 2 || video.videoWidth === 0) return null;
@@ -214,6 +211,89 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
       }).catch(() => {});
     }
   }, [drawFrame, reportBarcode]);
+
+  // ---- Start Quagga2 (iOS only) ----
+  const startQuagga = useCallback(async (containerEl: HTMLElement) => {
+    try {
+      const Quagga = (await import("@ericblade/quagga2")).default;
+      quaggaRef.current = Quagga;
+
+      const quaggaConfig: any = {
+        inputStream: {
+          type: "LiveStream",
+          target: containerEl,
+          constraints: {
+            ...(cachedTargetCameraId
+              ? { deviceId: { exact: cachedTargetCameraId } }
+              : { facingMode: "environment" }),
+            width: { min: 1280, ideal: 1920 },
+            height: { min: 720, ideal: 1080 },
+            frameRate: { ideal: 30 },
+          },
+        },
+        locator: {
+          patchSize: "medium",
+          halfSample: true,
+        },
+        numOfWorkers: 0, // 0 = main thread (iOS Chrome has limited Worker support)
+        decoder: {
+          readers: [
+            "ean_reader",
+            "ean_8_reader",
+            "upc_reader",
+            "upc_e_reader",
+            "code_128_reader",
+            "code_39_reader",
+            "codabar_reader",
+            "i2of5_reader",
+          ],
+        },
+        frequency: 10, // try to decode ~10 frames per second
+      };
+
+      await new Promise<void>((resolve, reject) => {
+        Quagga.init(quaggaConfig, (err: any) => {
+          if (err) reject(err);
+          else resolve();
+        });
+      });
+
+      quaggaInitRef.current = true;
+      Quagga.start();
+
+      Quagga.onDetected((result: any) => {
+        if (!isMountedRef.current) return;
+        if (result && result.codeResult && result.codeResult.code) {
+          const raw = result.codeResult.code;
+          if (isValidBarcode(raw)) {
+            const n = normalizeBarcode(raw);
+            if (n) reportBarcode(n);
+          }
+        }
+      });
+
+      setIsScanning(true);
+    } catch (err: any) {
+      console.error("[Scanner] Quagga error:", err);
+      // If Quagga fails, fall back to the Android-style ZXing canvas pipeline
+      if (isMountedRef.current) {
+        captureTimerRef.current = setInterval(captureLoop, CAPTURE_INTERVAL_MS);
+        setIsScanning(true);
+      }
+    }
+  }, [captureLoop, reportBarcode]);
+
+  // ---- Stop Quagga (iOS only) ----
+  const stopQuagga = useCallback(() => {
+    try {
+      if (quaggaRef.current) {
+        quaggaRef.current.offDetected();
+        quaggaRef.current.stop();
+        quaggaRef.current = null;
+      }
+    } catch {}
+    quaggaInitRef.current = false;
+  }, []);
 
   // ---- Start camera ----
   const startCamera = useCallback(async () => {
@@ -256,91 +336,74 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
         } catch {}
       }
 
-      const videoConstraints = {
-        ...(isIOS() ? IOS_VIDEO_CONSTRAINTS : DEFAULT_VIDEO_CONSTRAINTS),
-        deviceId: cachedTargetCameraId ? { exact: cachedTargetCameraId } : undefined,
-      };
+      if (isIOS()) {
+        // ================================================================
+        // iOS PATH: Quagga2 — fast native-feel barcode scanning
+        // ================================================================
+        // Quagga handles its own video element, camera, and frame processing.
+        // It uses optimized image processing that works well on WKWebView.
+        // We just give it a container <div> to render into.
+        // ================================================================
 
-      const stream = await navigator.mediaDevices.getUserMedia({ video: videoConstraints });
-
-      if (!isMountedRef.current) { stream.getTracks().forEach(t => t.stop()); return; }
-      streamRef.current = stream;
-
-      const video = document.createElement("video");
-      video.setAttribute("playsinline", "");
-      video.setAttribute("autoplay", "");
-      video.setAttribute("muted", "");
-      video.srcObject = stream;
-      videoRef.current = video;
-
-      if (videoContainerRef.current) {
-        videoContainerRef.current.innerHTML = "";
-        videoContainerRef.current.appendChild(video);
-      }
-
-      // Init decoders
-      if ("BarcodeDetector" in window) {
-        try {
-          barcodeDetectorRef.current = new (window as any).BarcodeDetector({ formats: BARCODE_FORMATS });
-          supportsBarcodeDetector.current = true;
-        } catch { supportsBarcodeDetector.current = false; }
-      }
-
-      const zxing = new BrowserMultiFormatReader();
-      zxingReaderRef.current = zxing;
-
-      video.onloadedmetadata = () => video.play().catch(() => {});
-      video.oncanplay = () => {
-        setIsScanning(true);
-
-        if (isIOS()) {
-          // ================================================================
-          // iOS PATH: ZXing decodeFromVideoElement — continuous, native-speed
-          // ================================================================
-          // ZXing captures frames directly from the <video> element using its
-          // own internal canvas. No toDataURL, no Image()—dramatically faster.
-          // ================================================================
-          iosZxingStartedRef.current = false;
-          const startIOSDecode = () => {
-            if (!isMountedRef.current || iosZxingStartedRef.current) return;
-            iosZxingStartedRef.current = true;
-            zxing.decodeFromVideoElementContinuously(
-              videoRef.current!,
-              (result: any) => {
-                if (!isMountedRef.current) return;
-                if (result && result.getText()) {
-                  const raw = result.getText();
-                  if (isValidBarcode(raw)) {
-                    const n = normalizeBarcode(raw);
-                    if (n) reportBarcode(n);
-                  }
-                }
-              }
-            );
-          };
-
-          // Give video a moment to reach readyState >= 2
-          if (video.readyState >= 2) {
-            startIOSDecode();
-          } else {
-            video.addEventListener("canplay", startIOSDecode, { once: true });
-          }
-        } else {
-          // ================================================================
-          // ANDROID PATH: BarcodeDetector timer + ZXing canvas fallback timer
-          // ================================================================
-          captureTimerRef.current = setInterval(captureLoop, CAPTURE_INTERVAL_MS);
+        if (videoContainerRef.current && isMountedRef.current) {
+          // Clear container — Quagga will add its own video + canvas
+          videoContainerRef.current.innerHTML = "";
+          startQuagga(videoContainerRef.current);
         }
-      };
+      } else {
+        // ================================================================
+        // ANDROID PATH: getUserMedia + BarcodeDetector + ZXing canvas
+        // ================================================================
 
-      // Fallback start after 1s (both platforms)
-      setTimeout(() => {
-        if (!isMountedRef.current) return;
-        if (video.readyState >= 2 && !isScanning) {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            ...DEFAULT_VIDEO_CONSTRAINTS,
+            deviceId: cachedTargetCameraId ? { exact: cachedTargetCameraId } : undefined,
+          },
+        });
+
+        if (!isMountedRef.current) { stream.getTracks().forEach(t => t.stop()); return; }
+        streamRef.current = stream;
+
+        const video = document.createElement("video");
+        video.setAttribute("playsinline", "");
+        video.setAttribute("autoplay", "");
+        video.setAttribute("muted", "");
+        video.srcObject = stream;
+        videoRef.current = video;
+
+        if (videoContainerRef.current) {
+          videoContainerRef.current.innerHTML = "";
+          videoContainerRef.current.appendChild(video);
+        }
+
+        // Init decoders
+        if ("BarcodeDetector" in window) {
+          try {
+            barcodeDetectorRef.current = new (window as any).BarcodeDetector({ formats: BARCODE_FORMATS });
+            supportsBarcodeDetector.current = true;
+          } catch { supportsBarcodeDetector.current = false; }
+        }
+
+        const zxing = new BrowserMultiFormatReader();
+        zxingReaderRef.current = zxing;
+
+        video.onloadedmetadata = () => video.play().catch(() => {});
+        video.oncanplay = () => {
+          if (!isMountedRef.current) return;
           setIsScanning(true);
           captureTimerRef.current = setInterval(captureLoop, CAPTURE_INTERVAL_MS);
-        }
-      }, 1000);
+        };
+
+        // Fallback start after 1s
+        setTimeout(() => {
+          if (!isMountedRef.current) return;
+          if (video.readyState >= 2 && !isScanning) {
+            setIsScanning(true);
+            captureTimerRef.current = setInterval(captureLoop, CAPTURE_INTERVAL_MS);
+          }
+        }, 1000);
+      }
     } catch (err: any) {
       console.error("[Scanner] Camera error:", err);
       if (!isMountedRef.current) return;
@@ -349,10 +412,11 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
       else if (err.name?.includes("NotReadable")) setError("Camera in use by another app.");
       else setError("Unable to access camera.");
     }
-  }, [captureLoop, reportBarcode]);
+  }, [captureLoop, startQuagga]);
 
   // ---- Stop ----
   const stopEverything = useCallback(() => {
+    stopQuagga();
     if (captureTimerRef.current) { clearInterval(captureTimerRef.current); captureTimerRef.current = null; }
     if (zxingReaderRef.current) { zxingReaderRef.current.reset(); zxingReaderRef.current = null; }
     if (streamRef.current) { streamRef.current.getTracks().forEach(t => t.stop()); streamRef.current = null; }
@@ -360,10 +424,9 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
     if (videoContainerRef.current) videoContainerRef.current.innerHTML = "";
     barcodeDetectorRef.current = null;
     canvasRef.current = null;
-    iosZxingStartedRef.current = false;
     setIsScanning(false);
     setBarcodesScanned([]);
-  }, []);
+  }, [stopQuagga]);
 
   // ---- Lifecycle ----
   useEffect(() => {
@@ -386,7 +449,13 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
       <CardContent className="p-0">
         <div className="relative group">
           <div className="relative bg-zinc-950 h-[200px] w-full overflow-hidden">
-            <div ref={videoContainerRef} className="w-full h-full" />
+            {isIOS() ? (
+              // iOS: Quagga manages the video — no extra <video> element needed
+              <div ref={videoContainerRef} className="w-full h-full [&_video]:w-full [&_video]:h-full [&_video]:object-cover" />
+            ) : (
+              // Android: our managed <video> element
+              <div ref={videoContainerRef} className="w-full h-full" />
+            )}
 
             {isScanning && !error && (
               <div className="absolute inset-0 pointer-events-none">
