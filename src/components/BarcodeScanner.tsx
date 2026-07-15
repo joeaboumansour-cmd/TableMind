@@ -44,15 +44,18 @@ function isIOS(): boolean {
 }
 
 /**
- * iOS-only camera constraints: request higher resolution to force the main
- * wide camera (1×) with autofocus, instead of ultra-wide (0.5×, fixed-focus)
- * or telephoto (3-5×). Android keeps using the existing 640×480 config.
+ * iOS-only camera constraints:
+ * - Forces the main wide camera (1×) via higher resolution (excludes ultra-wide/tele)
+ * - Applies 2× digital zoom via `advanced: [{ zoom: 2 }]` (supported on iOS 15+ WKWebView)
+ * - Always uses rear camera (facingMode: "environment")
+ * Android keeps using the existing 640×480 config which works perfectly.
  */
 const IOS_VIDEO_CONSTRAINTS: MediaTrackConstraints = {
   width: { min: 1280, ideal: 1920 },
   height: { min: 720, ideal: 1080 },
   facingMode: "environment",
   frameRate: { ideal: 24 },
+  advanced: [{ zoom: 2 } as any],
 };
 
 /**
