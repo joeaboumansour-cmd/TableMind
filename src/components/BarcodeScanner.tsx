@@ -30,6 +30,42 @@ const BARCODE_FORMATS = [
 ] as const;
 
 // ============================================================
+// IOS DETECTION & CAMERA WORKAROUND
+// ============================================================
+
+/** Detect iOS (iPhone/iPad/iPod) — used solely to apply camera workarounds */
+function isIOS(): boolean {
+  if (typeof navigator === "undefined") return false;
+  const ua = navigator.userAgent;
+  return (
+    /iPhone|iPad|iPod/.test(ua) ||
+    (navigator.maxTouchPoints > 1 && /Mac/.test(ua) && "ontouchend" in document)
+  );
+}
+
+/**
+ * iOS-only camera constraints: request higher resolution to force the main
+ * wide camera (1×) with autofocus, instead of ultra-wide (0.5×, fixed-focus)
+ * or telephoto (3-5×). Android keeps using the existing 640×480 config.
+ */
+const IOS_VIDEO_CONSTRAINTS: MediaTrackConstraints = {
+  width: { min: 1280, ideal: 1920 },
+  height: { min: 720, ideal: 1080 },
+  facingMode: "environment",
+  frameRate: { ideal: 24 },
+};
+
+/**
+ * Default (Android-tested) constraints — unchanged from the proven config.
+ */
+const DEFAULT_VIDEO_CONSTRAINTS: MediaTrackConstraints = {
+  width: { ideal: 640 },
+  height: { ideal: 480 },
+  facingMode: "environment",
+  frameRate: { ideal: 30 },
+};
+
+// ============================================================
 // INTERFACES
 // ============================================================
 
@@ -229,23 +265,37 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
           const devices = await navigator.mediaDevices.enumerateDevices();
           tempStream.getTracks().forEach(t => t.stop());
           const videoDevices = devices.filter(d => d.kind === "videoinput");
-          const backCameras = videoDevices.filter(d => {
-            const l = d.label.toLowerCase();
-            return l.includes("back") || l.includes("rear") || l.includes("environment");
-          });
-          cachedTargetCameraId = backCameras.length > 0 ? backCameras[backCameras.length - 1].deviceId : videoDevices[0]?.deviceId || null;
+
+          // On iOS, prefer the main wide camera (1x) by excluding ultra-wide & telephoto
+          if (isIOS()) {
+            const mainCamera = videoDevices.find(d => {
+              const l = d.label.toLowerCase();
+              return !l.includes("ultra") && !l.includes("tele") &&
+                (l.includes("back") || l.includes("rear") || l.includes("environment"));
+            });
+            // Fallback: try to find any back-facing camera
+            const anyBack = videoDevices.find(d => {
+              const l = d.label.toLowerCase();
+              return l.includes("back") || l.includes("rear") || l.includes("environment");
+            });
+            cachedTargetCameraId = mainCamera?.deviceId || anyBack?.deviceId || videoDevices[0]?.deviceId || null;
+          } else {
+            // Android / desktop: existing logic — pick the last back camera
+            const backCameras = videoDevices.filter(d => {
+              const l = d.label.toLowerCase();
+              return l.includes("back") || l.includes("rear") || l.includes("environment");
+            });
+            cachedTargetCameraId = backCameras.length > 0 ? backCameras[backCameras.length - 1].deviceId : videoDevices[0]?.deviceId || null;
+          }
         } catch {}
       }
 
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          width: { ideal: 640 },
-          height: { ideal: 480 },
-          deviceId: cachedTargetCameraId ? { exact: cachedTargetCameraId } : undefined,
-          facingMode: "environment",
-          frameRate: { ideal: 30 },
-        },
-      });
+      const videoConstraints = {
+        ...(isIOS() ? IOS_VIDEO_CONSTRAINTS : DEFAULT_VIDEO_CONSTRAINTS),
+        deviceId: cachedTargetCameraId ? { exact: cachedTargetCameraId } : undefined,
+      };
+
+      const stream = await navigator.mediaDevices.getUserMedia({ video: videoConstraints });
 
       if (!isMountedRef.current) { stream.getTracks().forEach(t => t.stop()); return; }
       streamRef.current = stream;
