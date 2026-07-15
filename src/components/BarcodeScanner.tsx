@@ -8,19 +8,16 @@ import { Camera, X } from "lucide-react";
 import { BrowserMultiFormatReader } from "@zxing/library";
 
 // ============================================================
-// CONFIG
+// CONFIG — shared (both platforms)
 // ============================================================
 
-/** Interval between BarcodeDetector captures (ms) */
+/** Interval between BarcodeDetector captures (ms) — Android only */
 const CAPTURE_INTERVAL_MS = 150;
-
-/** Interval between ZXing decode attempts (ms) — separate, slower timer */
-const ZXING_INTERVAL_MS = 800;
 
 /** Fixed canvas size for captures — 640×480 is fast and enough for barcodes */
 const CANVAS_SIZE = 640;
 
-/** Dedup window: short anti-firehose only — resume reporting quickly so POS can highlight duplicates */
+/** Dedup window: short anti-firehose only */
 const DEDUP_WINDOW_MS = 500;
 
 /** Retail barcode formats for BarcodeDetector */
@@ -30,10 +27,9 @@ const BARCODE_FORMATS = [
 ] as const;
 
 // ============================================================
-// IOS DETECTION & CAMERA WORKAROUND
+// IOS DETECTION
 // ============================================================
 
-/** Detect iOS (iPhone/iPad/iPod) — used solely to apply camera workarounds */
 function isIOS(): boolean {
   if (typeof navigator === "undefined") return false;
   const ua = navigator.userAgent;
@@ -43,24 +39,22 @@ function isIOS(): boolean {
   );
 }
 
+// ============================================================
+// PLATFORM-SPECIFIC VIDEO CONSTRAINTS
+// ============================================================
+
 /**
- * iOS-only camera constraints:
- * - Forces the main wide camera (1×) via higher resolution (excludes ultra-wide/tele)
- * - Applies 2× digital zoom via `advanced: [{ zoom: 2 }]` (supported on iOS 15+ WKWebView)
- * - Always uses rear camera (facingMode: "environment")
- * Android keeps using the existing 640×480 config which works perfectly.
+ * iOS: clean 1080p from main wide camera (1×) — no zoom, no advanced.
+ * The key is just getting the right camera with autofocus.
  */
 const IOS_VIDEO_CONSTRAINTS: MediaTrackConstraints = {
   width: { min: 1280, ideal: 1920 },
   height: { min: 720, ideal: 1080 },
   facingMode: "environment",
-  frameRate: { ideal: 24 },
-  advanced: [{ zoom: 2 } as any],
+  frameRate: { ideal: 30 },
 };
 
-/**
- * Default (Android-tested) constraints — unchanged from the proven config.
- */
+/** Android: proven 640×480 config — don't touch. */
 const DEFAULT_VIDEO_CONSTRAINTS: MediaTrackConstraints = {
   width: { ideal: 640 },
   height: { ideal: 480 },
@@ -147,13 +141,14 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
   const videoContainerRef = useRef<HTMLDivElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const captureTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const zxingTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const dedupRef = useRef<Map<string, number>>(new Map());
   const zxingReaderRef = useRef<BrowserMultiFormatReader | null>(null);
+  const dedupRef = useRef<Map<string, number>>(new Map());
   const barcodeDetectorRef = useRef<any>(null);
   const supportsBarcodeDetector = useRef(false);
   const isMountedRef = useRef(false);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  /** Track whether iOS ZXing continuous decode has been started */
+  const iosZxingStartedRef = useRef(false);
 
   const [isScanning, setIsScanning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -179,7 +174,7 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
     });
   }, [onScan, isDuplicate]);
 
-  // ---- Draw video frame to canvas (sharp, fixed 640) ----
+  // ---- Draw video frame to canvas (Android / fallback) ----
   const drawFrame = useCallback((): HTMLCanvasElement | null => {
     const video = videoRef.current;
     if (!video || video.readyState < 2 || video.videoWidth === 0) return null;
@@ -195,19 +190,18 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
     const ctx = canvas.getContext("2d");
     if (!ctx) return null;
 
-    ctx.imageSmoothingEnabled = false; // sharp pixels for distance
+    ctx.imageSmoothingEnabled = false;
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     return canvas;
   }, []);
 
-  // ---- Capture + BarcodeDetector (every 150ms) ----
+  // ---- Capture + BarcodeDetector (every 150ms) — Android only ----
   const captureLoop = useCallback(() => {
     if (!isMountedRef.current) return;
 
     const canvas = drawFrame();
     if (!canvas) return;
 
-    // BarcodeDetector: fast, hardware accelerated
     if (supportsBarcodeDetector.current && barcodeDetectorRef.current) {
       barcodeDetectorRef.current.detect(canvas).then((results: any[]) => {
         if (!isMountedRef.current) return;
@@ -219,36 +213,6 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
         }
       }).catch(() => {});
     }
-  }, [drawFrame, reportBarcode]);
-
-  // ---- ZXing decode (every 800ms, independent) ----
-  const zxingLoop = useCallback(() => {
-    if (!isMountedRef.current) return;
-    const reader = zxingReaderRef.current;
-    if (!reader) return;
-
-    const canvas = drawFrame();
-    if (!canvas) return;
-
-    // toDataURL on a 640×480 canvas is fast (small image, no meaningful compression needed)
-    const dataUrl = canvas.toDataURL("image/png");
-    const img = new Image();
-    img.onload = () => {
-      if (!isMountedRef.current) return;
-      try {
-        const result = reader.decode(img);
-        if (result && result.getText()) {
-          const raw = result.getText();
-          if (isValidBarcode(raw)) {
-            const n = normalizeBarcode(raw);
-            if (n) reportBarcode(n);
-          }
-        }
-      } catch {
-        // no barcode
-      }
-    };
-    img.src = dataUrl;
   }, [drawFrame, reportBarcode]);
 
   // ---- Start camera ----
@@ -269,21 +233,20 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
           tempStream.getTracks().forEach(t => t.stop());
           const videoDevices = devices.filter(d => d.kind === "videoinput");
 
-          // On iOS, prefer the main wide camera (1x) by excluding ultra-wide & telephoto
           if (isIOS()) {
+            // iOS: prefer main wide camera, exclude ultra-wide & telephoto
             const mainCamera = videoDevices.find(d => {
               const l = d.label.toLowerCase();
               return !l.includes("ultra") && !l.includes("tele") &&
                 (l.includes("back") || l.includes("rear") || l.includes("environment"));
             });
-            // Fallback: try to find any back-facing camera
             const anyBack = videoDevices.find(d => {
               const l = d.label.toLowerCase();
               return l.includes("back") || l.includes("rear") || l.includes("environment");
             });
             cachedTargetCameraId = mainCamera?.deviceId || anyBack?.deviceId || videoDevices[0]?.deviceId || null;
           } else {
-            // Android / desktop: existing logic — pick the last back camera
+            // Android: existing logic — pick the last back camera
             const backCameras = videoDevices.filter(d => {
               const l = d.label.toLowerCase();
               return l.includes("back") || l.includes("rear") || l.includes("environment");
@@ -329,19 +292,53 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
       video.onloadedmetadata = () => video.play().catch(() => {});
       video.oncanplay = () => {
         setIsScanning(true);
-        // Main BarcodeDetector timer: every 150ms
-        captureTimerRef.current = setInterval(captureLoop, CAPTURE_INTERVAL_MS);
-        // ZXing background timer: every 800ms
-        zxingTimerRef.current = setInterval(zxingLoop, ZXING_INTERVAL_MS);
+
+        if (isIOS()) {
+          // ================================================================
+          // iOS PATH: ZXing decodeFromVideoElement — continuous, native-speed
+          // ================================================================
+          // ZXing captures frames directly from the <video> element using its
+          // own internal canvas. No toDataURL, no Image()—dramatically faster.
+          // ================================================================
+          iosZxingStartedRef.current = false;
+          const startIOSDecode = () => {
+            if (!isMountedRef.current || iosZxingStartedRef.current) return;
+            iosZxingStartedRef.current = true;
+            zxing.decodeFromVideoElementContinuously(
+              videoRef.current!,
+              (result: any) => {
+                if (!isMountedRef.current) return;
+                if (result && result.getText()) {
+                  const raw = result.getText();
+                  if (isValidBarcode(raw)) {
+                    const n = normalizeBarcode(raw);
+                    if (n) reportBarcode(n);
+                  }
+                }
+              }
+            );
+          };
+
+          // Give video a moment to reach readyState >= 2
+          if (video.readyState >= 2) {
+            startIOSDecode();
+          } else {
+            video.addEventListener("canplay", startIOSDecode, { once: true });
+          }
+        } else {
+          // ================================================================
+          // ANDROID PATH: BarcodeDetector timer + ZXing canvas fallback timer
+          // ================================================================
+          captureTimerRef.current = setInterval(captureLoop, CAPTURE_INTERVAL_MS);
+        }
       };
 
-      // Fallback start after 1s
+      // Fallback start after 1s (both platforms)
       setTimeout(() => {
         if (!isMountedRef.current) return;
         if (video.readyState >= 2 && !isScanning) {
           setIsScanning(true);
           captureTimerRef.current = setInterval(captureLoop, CAPTURE_INTERVAL_MS);
-          zxingTimerRef.current = setInterval(zxingLoop, ZXING_INTERVAL_MS);
         }
       }, 1000);
     } catch (err: any) {
@@ -352,18 +349,18 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
       else if (err.name?.includes("NotReadable")) setError("Camera in use by another app.");
       else setError("Unable to access camera.");
     }
-  }, [captureLoop, zxingLoop]);
+  }, [captureLoop, reportBarcode]);
 
   // ---- Stop ----
   const stopEverything = useCallback(() => {
     if (captureTimerRef.current) { clearInterval(captureTimerRef.current); captureTimerRef.current = null; }
-    if (zxingTimerRef.current) { clearInterval(zxingTimerRef.current); zxingTimerRef.current = null; }
+    if (zxingReaderRef.current) { zxingReaderRef.current.reset(); zxingReaderRef.current = null; }
     if (streamRef.current) { streamRef.current.getTracks().forEach(t => t.stop()); streamRef.current = null; }
     if (videoRef.current) { videoRef.current.srcObject = null; videoRef.current = null; }
     if (videoContainerRef.current) videoContainerRef.current.innerHTML = "";
-    if (zxingReaderRef.current) { zxingReaderRef.current.reset(); zxingReaderRef.current = null; }
     barcodeDetectorRef.current = null;
     canvasRef.current = null;
+    iosZxingStartedRef.current = false;
     setIsScanning(false);
     setBarcodesScanned([]);
   }, []);
