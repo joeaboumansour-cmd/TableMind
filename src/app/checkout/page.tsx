@@ -130,8 +130,15 @@ function CheckoutContent() {
       // Get current user info
       const currentUser = JSON.parse(localStorage.getItem("goldensquirrel_user") || "{}");
 
+      // Build user info to include only if user is an employee (not owner)
+      // Owner's ID is from stores table, but user_id references store_users table
+      const userInfo = (!currentUser.isOwner && currentUser.id) ? {
+        user_id: currentUser.id,
+        user_name: currentUser.displayName || currentUser.username,
+      } : {};
+
       // Save transaction to database
-      const transactionData = {
+      const transactionData: any = {
         transaction_number: txnNumber,
         subtotal: getSubtotal(),
         total_amount: total,
@@ -142,8 +149,6 @@ function CheckoutContent() {
         usd_total_amount: totalUsd,
         usd_amount_paid: paidUSD,
         usd_change_given: calcChangeUsd,
-        user_id: currentUser.id || null,
-        user_name: currentUser.displayName || currentUser.username || null,
         whatsapp_sent_to: cleanPhoneNumber,
         items: items.map((item) => ({
           product_id: item.product_id,
@@ -155,6 +160,7 @@ function CheckoutContent() {
           unit_price_usd: item.unit_price_usd,
           total_price_usd: item.total_price_usd,
         })),
+        ...userInfo,
       };
 
       if (navigator.onLine) {
@@ -182,7 +188,7 @@ function CheckoutContent() {
         // Offline: Queue for later sync
         const { queueTransaction } = await import("@/lib/db/localDB");
         const authDataOffline = JSON.parse(localStorage.getItem("goldensquirrel_auth") || "{}");
-        await queueTransaction({
+        const offlineTxnData: any = {
           id: crypto.randomUUID(),
           store_id: authDataOffline.store_id || "",
           transaction_number: txnNumber,
@@ -195,8 +201,6 @@ function CheckoutContent() {
           total_usd: totalUsd,
           amount_paid_usd: paidUSD,
           change_given_usd: calcChangeUsd,
-          user_id: currentUser.id || null,
-          user_name: currentUser.displayName || currentUser.username || null,
           whatsapp_sent_to: cleanPhoneNumber,
           items: items.map((item) => ({
             product_id: item.product_id,
@@ -209,7 +213,13 @@ function CheckoutContent() {
             total_price_usd: item.total_price_usd,
           })),
           created_at: new Date().toISOString(),
-        });
+        };
+        // Only add user fields if user is an employee (not owner)
+        if (!currentUser.isOwner && currentUser.id) {
+          offlineTxnData.user_id = currentUser.id;
+          offlineTxnData.user_name = currentUser.displayName || currentUser.username;
+        }
+        await queueTransaction(offlineTxnData);
         toast.info("Transaction saved offline - will sync when online");
       }
 
