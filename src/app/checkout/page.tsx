@@ -127,6 +127,9 @@ function CheckoutContent() {
         }
       }
 
+      // Get current user info
+      const currentUser = JSON.parse(localStorage.getItem("goldensquirrel_user") || "{}");
+
       // Save transaction to database
       const transactionData = {
         transaction_number: txnNumber,
@@ -139,6 +142,8 @@ function CheckoutContent() {
         usd_total_amount: totalUsd,
         usd_amount_paid: paidUSD,
         usd_change_given: calcChangeUsd,
+        user_id: currentUser.id || null,
+        user_name: currentUser.displayName || currentUser.username || null,
         whatsapp_sent_to: cleanPhoneNumber,
         items: items.map((item) => ({
           product_id: item.product_id,
@@ -190,6 +195,8 @@ function CheckoutContent() {
           total_usd: totalUsd,
           amount_paid_usd: paidUSD,
           change_given_usd: calcChangeUsd,
+          user_id: currentUser.id || null,
+          user_name: currentUser.displayName || currentUser.username || null,
           whatsapp_sent_to: cleanPhoneNumber,
           items: items.map((item) => ({
             product_id: item.product_id,

@@ -166,24 +166,29 @@ class SyncEngine {
         // Step 1: Insert the transaction
         const { data: transaction, error: txnError } = await supabase
           .from("transactions")
-          .insert({
-            store_id: txn.store_id,
-            transaction_number: txn.transaction_number,
-            subtotal: txn.subtotal,
-            total_amount: txn.total_amount,
-            amount_paid: txn.amount_paid,
-            change_given: txn.change_given,
-            payment_method: txn.payment_method,
-            usd_subtotal: txn.subtotal_usd,
-            usd_total_amount: txn.total_usd,
-            usd_amount_paid: txn.amount_paid_usd || txn.amount_paid,
-            usd_change_given: txn.change_given_usd || txn.change_given,
-            // Include WhatsApp phone if provided
-            ...(txn.whatsapp_sent_to && {
-              whatsapp_sent_to: txn.whatsapp_sent_to,
-              whatsapp_sent_at: new Date().toISOString(),
-            }),
-          })
+           .insert({
+             store_id: txn.store_id,
+             transaction_number: txn.transaction_number,
+             subtotal: txn.subtotal,
+             total_amount: txn.total_amount,
+             amount_paid: txn.amount_paid,
+             change_given: txn.change_given,
+             payment_method: txn.payment_method,
+             usd_subtotal: txn.subtotal_usd,
+             usd_total_amount: txn.total_usd,
+             usd_amount_paid: txn.amount_paid_usd || txn.amount_paid,
+             usd_change_given: txn.change_given_usd || txn.change_given,
+             // Include WhatsApp phone if provided
+             ...(txn.whatsapp_sent_to && {
+               whatsapp_sent_to: txn.whatsapp_sent_to,
+               whatsapp_sent_at: new Date().toISOString(),
+             }),
+             // Include user info if provided
+             ...(txn.user_id && {
+               user_id: txn.user_id,
+               user_name: txn.user_name,
+             }),
+           })
           .select()
           .single();
 

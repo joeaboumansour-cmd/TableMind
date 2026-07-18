@@ -65,6 +65,8 @@ export async function GET(request: Request) {
         created_at,
         whatsapp_sent_to,
         whatsapp_sent_at,
+        user_id,
+        user_name,
         transaction_items (
           id,
           product_name,
@@ -131,6 +133,11 @@ export async function POST(request: Request) {
         ...(body.whatsapp_sent_to && {
           whatsapp_sent_to: body.whatsapp_sent_to,
           whatsapp_sent_at: new Date().toISOString(),
+        }),
+        // If user_id provided, save user info
+        ...(body.user_id && {
+          user_id: body.user_id,
+          user_name: body.user_name,
         }),
       })
       .select()

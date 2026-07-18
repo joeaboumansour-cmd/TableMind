@@ -20,6 +20,7 @@ import {
   Loader2,
   Phone,
   Filter,
+  User,
 } from "lucide-react";
 import { formatLL, formatDateTime, formatRelativeTime, formatUSD } from "@/lib/utils/format";
 import { toast } from "sonner";
@@ -48,6 +49,8 @@ interface Transaction {
   change_given: number;
   created_at: string;
   whatsapp_sent_to?: string;
+  user_id?: string;
+  user_name?: string;
   transaction_items: TransactionItem[];
 }
 
@@ -163,6 +166,8 @@ export default function TransactionHistoryPage() {
         // Search by phone number - only match if there are actual digits in the search
         const digitsOnly = searchQuery.replace(/\D/g, "");
         if (t.whatsapp_sent_to && digitsOnly && t.whatsapp_sent_to.includes(digitsOnly)) return true;
+        // Search by user name
+        if (t.user_name && t.user_name.toLowerCase().includes(query)) return true;
         // Search by transaction amount
         if (!isNaN(numericQuery) && t.total_amount === numericQuery) return true;
         // Search by amount paid
@@ -434,7 +439,7 @@ export default function TransactionHistoryPage() {
                         )}
                       </div>
 
-                       <div className="flex gap-2">
+                       <div className="flex flex-col gap-2">
                          {transaction.whatsapp_sent_to ? (
                            <div className="flex-1 flex items-center justify-center text-sm text-green-600 font-medium">
                              <Send className="h-4 w-4 mr-2" />
@@ -445,6 +450,12 @@ export default function TransactionHistoryPage() {
                              <Send className="h-4 w-4 mr-2" />
                              Send to WhatsApp
                            </Button>
+                         )}
+                         {transaction.user_name && (
+                           <div className="flex-1 flex items-center justify-center text-xs text-muted-foreground">
+                             <User className="h-3 w-3 mr-1" />
+                             By: {transaction.user_name}
+                           </div>
                          )}
                        </div>
                      </CardContent>
