@@ -10,7 +10,7 @@ export default function PWAInstallPrompt() {
 
   useEffect(() => {
     // Don't show if already installed
-    if (window.matchMedia('(display-mode: standalone)').matches) {
+    if (typeof window !== 'undefined' && window.matchMedia('(display-mode: standalone)').matches) {
       return;
     }
 
@@ -20,17 +20,24 @@ export default function PWAInstallPrompt() {
       setShowPrompt(true);
     };
 
+    const handleAppInstalled = () => {
+      setShowPrompt(false);
+      setDeferredPrompt(null);
+    };
+
     window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    window.addEventListener('appinstalled', handleAppInstalled);
 
     return () => {
       window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+      window.removeEventListener('appinstalled', handleAppInstalled);
     };
   }, []);
 
   const handleInstall = async () => {
     if (!deferredPrompt) return;
     
-    await deferredPrompt.prompt();
+    deferredPrompt.prompt();
     setShowPrompt(false);
     setDeferredPrompt(null);
   };
