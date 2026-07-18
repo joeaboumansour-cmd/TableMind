@@ -61,7 +61,7 @@ interface Product {
 
 export default function StoreProductsPage() {
   const router = useRouter();
-  const { user, logout: authLogout } = useAuth();
+  const { user, logout: authLogout, isLoading: authLoading } = useAuth();
   const [storeId, setStoreId] = useState<string>("");
   const [products, setProducts] = useState<Product[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -189,32 +189,12 @@ export default function StoreProductsPage() {
     }
   }, [user]);
 
-  // Check license expiration
+  // Redirect if no user (and auth has finished loading)
   useEffect(() => {
-    if (!user) return;
-    
-    const authData = localStorage.getItem("goldensquirrel_auth");
-    if (authData) {
-      const { license_expires_at } = JSON.parse(authData);
-      const licenseExpires = new Date(license_expires_at);
-      const now = new Date();
-      
-      if (licenseExpires < now) {
-        toast.error("Your license has expired. Please contact support.");
-        localStorage.removeItem("goldensquirrel_auth");
-        localStorage.removeItem("goldensquirrel_user");
-        authLogout();
-        router.push("/login");
-      }
-    }
-  }, [user, authLogout, router]);
-
-  // Redirect if no user
-  useEffect(() => {
-    if (!user) {
+    if (!user && !authLoading) {
       router.replace("/login");
     }
-  }, [user, router]);
+  }, [user, authLoading, router]);
 
   // ---- Build O(1) barcode index whenever products change ----
   useEffect(() => {
@@ -590,7 +570,8 @@ const filteredProducts = products.filter(
   const totalCostValue = products.reduce((sum, p) => sum + (p.cost_price * p.stock_quantity), 0);
   const totalSellValue = products.reduce((sum, p) => sum + (p.selling_price * p.stock_quantity), 0);
 
-  if (isLoading) {
+  // Show loading while auth is initializing
+  if (authLoading) {
     return (
       <div className="h-screen flex items-center justify-center bg-background">
         <div className="text-center">

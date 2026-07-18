@@ -41,7 +41,7 @@ const supabase = createClient();
 
 export default function POSPage() {
   const router = useRouter();
-  const { user, logout: authLogout, canAccess } = useAuth();
+  const { user, logout: authLogout, canAccess, isLoading: authLoading } = useAuth();
   const [isScannerActive, setIsScannerActive] = useState(() => {
     if (typeof window !== 'undefined' && 'localStorage' in window) {
       const saved = localStorage.getItem("scanner_active");
@@ -84,19 +84,22 @@ export default function POSPage() {
     }
   }, [user, canAccess]);
 
-  // Redirect if no user
+  // Redirect if no user (and auth has finished loading)
   useEffect(() => {
-    if (!user && !isLoading) {
+    if (!user && !authLoading) {
       router.replace("/login");
     }
-  }, [user, isLoading, router]);
+  }, [user, authLoading, router]);
 
   // Load store and products data
   useEffect(() => {
     let isMounted = true;
 
     const loadData = async () => {
-      if (!user) return;
+      if (!user) {
+        setIsLoading(false);
+        return;
+      }
 
       try {
         // Get auth data from localStorage for legacy compatibility
@@ -324,10 +327,6 @@ export default function POSPage() {
 
   // Handle logout - clear both auth keys
   const handleLogout = () => {
-    if (typeof window !== 'undefined' && 'localStorage' in window) {
-      localStorage.removeItem("goldensquirrel_auth");
-      localStorage.removeItem("goldensquirrel_user");
-    }
     authLogout();
     router.push("/login");
   };
@@ -355,7 +354,7 @@ export default function POSPage() {
 
   // Prefetch critical routes while online so they are available offline
   useEffect(() => {
-    if (navigator.onLine) {
+    if (navigator.onLine && user) {
       router.prefetch("/checkout");
       router.prefetch("/pos/products");
       router.prefetch("/transactions");
@@ -364,9 +363,9 @@ export default function POSPage() {
       fetch("/pos/products", { method: "HEAD", cache: "force-cache" }).catch(() => {});
       fetch("/transactions", { method: "HEAD", cache: "force-cache" }).catch(() => {});
     }
-  }, [router]);
+  }, [router, user]);
 
-  if (isLoading) {
+  if (isLoading || authLoading) {
     return (
       <div className="h-screen flex items-center justify-center bg-background">
         <div className="text-center">

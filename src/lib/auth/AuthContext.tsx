@@ -32,14 +32,37 @@ interface AuthProviderProps {
 
 /**
  * Load user from localStorage (runs synchronously for initial render).
- * Only checks goldensquirrel_user - this is the single source of truth.
+ * Checks goldensquirrel_user first, then goldensquirrel_auth for backward compatibility.
  */
 function loadUserFromStorage(): StoreUser | null {
   if (typeof window === "undefined") return null;
   try {
     const raw = localStorage.getItem("goldensquirrel_user");
-    if (!raw) return null;
-    return JSON.parse(raw) as StoreUser;
+    if (raw) {
+      return JSON.parse(raw) as StoreUser;
+    }
+    
+    // Backward compatibility - check legacy goldensquirrel_auth
+    const legacyAuth = localStorage.getItem("goldensquirrel_auth");
+    if (legacyAuth) {
+      try {
+        const parsed = JSON.parse(legacyAuth);
+        // Create owner user from legacy data
+        const ownerUser: StoreUser = {
+          id: parsed.store_id,
+          storeId: parsed.store_id,
+          username: parsed.username,
+          displayName: parsed.username,
+          isOwner: true,
+          permissions: getFullPermissions(),
+        };
+        return ownerUser;
+      } catch {
+        // ignore
+      }
+    }
+    
+    return null;
   } catch {
     return null;
   }
@@ -55,13 +78,18 @@ function clearUserFromStorage() {
 }
 
 export function AuthProvider({ children }: AuthProviderProps) {
-  const [user, setUser] = useState<StoreUser | null>(loadUserFromStorage);
-  const [isLoading, setIsLoading] = useState(false);
+  const [user, setUser] = useState<StoreUser | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const hasInitialized = useRef(false);
 
-  // On mount, if we have a stored user, we're good to go
+  // On mount, load user from storage
   useEffect(() => {
-    // Initial user state is already loaded from loadUserFromStorage()
-    // No additional migration needed - we use goldensquirrel_user as the single source of truth
+    if (!hasInitialized.current) {
+      hasInitialized.current = true;
+      const storedUser = loadUserFromStorage();
+      setUser(storedUser);
+      setIsLoading(false);
+    }
   }, []);
 
   const login = useCallback(async (storeUsername: string, password: string): Promise<{ success: boolean; error?: string }> => {
