@@ -279,17 +279,17 @@ export default function TransactionHistoryPage() {
             </Button>
           </div>
           
-          {/* Search Bar - search by transaction #, phone, or amount */}
-          <div className="relative mb-2">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-            <Input
-              type="text"
-              placeholder="Search by #, phone, or amount..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-10"
-            />
-          </div>
+           {/* Search Bar - search by transaction #, phone, user, or amount */}
+           <div className="relative mb-2">
+             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+             <Input
+               type="text"
+               placeholder="Search by #, user, phone, or amount..."
+               value={searchQuery}
+               onChange={(e) => setSearchQuery(e.target.value)}
+               className="pl-10"
+             />
+           </div>
           
           {/* Date Filters */}
           <div className="flex items-center gap-1 overflow-x-auto pb-1">
@@ -362,6 +362,12 @@ export default function TransactionHistoryPage() {
                               <span>&bull;</span>
                               <span>{formatDateTime(transaction.created_at)}</span>
                             </div>
+                            {transaction.user_name && (
+                              <div className="flex items-center gap-1 mt-1 text-xs">
+                                <User className="h-3 w-3 text-blue-500" />
+                                <span className="text-blue-600 font-medium">{transaction.user_name}</span>
+                              </div>
+                            )}
                             {transaction.whatsapp_sent_to && (
                               <div className="flex items-center gap-1 mt-1 text-xs text-green-600">
                                 <Phone className="h-3 w-3" />
@@ -402,13 +408,13 @@ export default function TransactionHistoryPage() {
                               <div className="text-right">
                                 {item.currency === 'LL' ? (
                                   <>
-                                    <div>{formatLL(item.total_price)}</div>
-                                    {item.quantity > 1 && <div className="text-xs text-muted-foreground">{formatLL(item.unit_price)} each</div>}
+                                    <div>{formatUSD(item.total_price)}</div>
+                                    {item.quantity > 1 && <div className="text-xs text-muted-foreground">{formatUSD(item.unit_price)} each</div>}
                                   </>
                                 ) : (
                                   <>
-                                    <div>{formatUSD(item.total_price)}</div>
-                                    {item.quantity > 1 && <div className="text-xs text-muted-foreground">{formatUSD(item.unit_price)} each</div>}
+                                    <div>{formatLL(item.total_price)}</div>
+                                    {item.quantity > 1 && <div className="text-xs text-muted-foreground">{formatLL(item.unit_price)} each</div>}
                                   </>
                                 )}
                               </div>

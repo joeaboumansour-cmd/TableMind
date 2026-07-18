@@ -130,12 +130,16 @@ function CheckoutContent() {
       // Get current user info
       const currentUser = JSON.parse(localStorage.getItem("goldensquirrel_user") || "{}");
 
-      // Build user info to include only if user is an employee (not owner)
-      // Owner's ID is from stores table, but user_id references store_users table
-      const userInfo = (!currentUser.isOwner && currentUser.id) ? {
-        user_id: currentUser.id,
-        user_name: currentUser.displayName || currentUser.username,
-      } : {};
+      // Build user info - always include user_name for tracking who processed the transaction
+      // user_id is only for employees (references store_users table)
+      const userInfo: any = {};
+      if (currentUser && currentUser.username) {
+        userInfo.user_name = currentUser.displayName || currentUser.username;
+        // Only set user_id for employees (not owners, whose ID is a store_id)
+        if (!currentUser.isOwner && currentUser.id) {
+          userInfo.user_id = currentUser.id;
+        }
+      }
 
       // Save transaction to database
       const transactionData: any = {
@@ -214,10 +218,13 @@ function CheckoutContent() {
           })),
           created_at: new Date().toISOString(),
         };
-        // Only add user fields if user is an employee (not owner)
-        if (!currentUser.isOwner && currentUser.id) {
-          offlineTxnData.user_id = currentUser.id;
+        // Add user_name for all users (owners and employees)
+        if (currentUser && currentUser.username) {
           offlineTxnData.user_name = currentUser.displayName || currentUser.username;
+          // Only set user_id for employees (not owners, whose ID is a store_id)
+          if (!currentUser.isOwner && currentUser.id) {
+            offlineTxnData.user_id = currentUser.id;
+          }
         }
         await queueTransaction(offlineTxnData);
         toast.info("Transaction saved offline - will sync when online");

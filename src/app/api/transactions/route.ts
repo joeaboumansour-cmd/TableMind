@@ -134,10 +134,13 @@ export async function POST(request: Request) {
           whatsapp_sent_to: body.whatsapp_sent_to,
           whatsapp_sent_at: new Date().toISOString(),
         }),
-        // If user_id provided, save user info
+        // Always save user_name if provided (for all users: owners and employees)
+        ...(body.user_name && {
+          user_name: body.user_name,
+        }),
+        // Only save user_id for employees (references store_users table)
         ...(body.user_id && {
           user_id: body.user_id,
-          user_name: body.user_name,
         }),
       })
       .select()
