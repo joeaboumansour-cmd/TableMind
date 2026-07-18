@@ -236,9 +236,7 @@ class SyncEngine {
   }
 
   /**
-   * Full sync: pull latest products into local cache
-   * (Transaction sync is disabled for now — queued transactions
-   *  are stored locally only for record-keeping.)
+   * Full sync: pull latest products and push queued transactions
    */
   async syncNow(): Promise<{
     success: boolean;
@@ -263,21 +261,23 @@ class SyncEngine {
 
     try {
       // Pull latest products (refreshed stock, prices, etc.)
-      // Transactions sync is disabled — queued transactions stay local
       const pullResult = await this.pullProducts();
+
+      // Push queued transactions
+      const pushResult = await this.pushQueuedTransactions();
 
       const success = pullResult.success;
       this._status = success ? "idle" : "error";
       this.notify();
 
-      console.log(`[Sync] Complete: pulled ${pullResult.count} products`);
+      console.log(`[Sync] Complete: pulled ${pullResult.count} products, pushed ${pushResult.pushed} transactions`);
 
       return {
         success,
         pulled: pullResult.count,
-        pushed: 0,
-        failed: 0,
-        errors: [],
+        pushed: pushResult.pushed,
+        failed: pushResult.failed,
+        errors: pushResult.errors,
       };
     } catch (error: any) {
       this._status = "error";

@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { formatCurrency, formatDateTime } from "@/lib/utils/format";
+import { usePermissionGuard } from "@/lib/auth/usePermissionGuard";
 
 const supabase = createClient();
 
@@ -41,6 +42,8 @@ export default function ReceiptPage() {
   const router = useRouter();
   const params = useParams();
   const transactionNumber = params.id as string;
+  // Permission check
+  usePermissionGuard("receipts");
 
   const [transaction, setTransaction] = useState<Transaction | null>(null);
   const [items, setItems] = useState<TransactionItem[]>([]);

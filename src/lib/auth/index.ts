@@ -3,34 +3,32 @@
 // =============================================
 
 export {
-  // Role configuration
-  ROLE_BASED_NAV_ITEMS,
-  ROLE_HIERARCHY,
-  PERMISSIONS,
-  
-  // Helper functions
-  hasRolePermission,
-  getNavItemsForRole,
-  canAccessRoute,
-  getDefaultRouteForRole,
-  hasPermission,
-} from "./roles";
+  // Permission sections
+  SECTIONS,
+  getDefaultPermissions,
+  getFullPermissions,
+  canAccess,
+} from "./permissions";
 
-export type { NavItem } from "./roles";
+export type { SectionKey, UserPermissions, StoreUser } from "./permissions";
 
 export {
-  // Guard components
-  RoleGuard,
+  // Guard component
   PermissionGuard,
-  HierarchyGuard,
-  RoleButton,
-  
-  // HOC
-  withRoleAccess,
-  
-  // Hook
-  useRoleAccess,
+  withPermissionGuard,
 } from "./guards";
 
-// Re-export UserRole for convenience
-export type { UserRole } from "@/lib/types/database";
+export {
+  // Context provider and hook
+  AuthProvider,
+  useAuth,
+} from "./AuthContext";
+
+export {
+  // Utility hooks and helpers
+  usePermissionGuard,
+  getCurrentUser,
+  getStoreId,
+  getUserDisplayName,
+  hasSectionAccess,
+} from "./usePermissionGuard";

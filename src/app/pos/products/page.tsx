@@ -18,23 +18,24 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import {
-  Plus,
-  Loader2,
-  Package,
-  Edit,
-  Trash2,
-  RefreshCw,
-  LogOut,
-  ArrowLeft,
-  Search,
-  Scan,
-  Info,
-  X,
-  Download,
-  Upload,
-  Layers,
-} from "lucide-react";
-import { toast } from "sonner";
+   Plus,
+   Loader2,
+   Package,
+   Edit,
+   Trash2,
+   RefreshCw,
+   LogOut,
+   ArrowLeft,
+   Search,
+   Scan,
+   Info,
+   X,
+   Download,
+   Upload,
+   Layers,
+ } from "lucide-react";
+ import { toast } from "sonner";
+import { useAuth } from "@/lib/auth/AuthContext";
 import { formatLL, formatUSD, convertUsdToLl, convertLlToUsdForSale, SELL_RATE, RETURN_RATE, convertLlToUsdForReturn } from "@/lib/utils/format";
 import BarcodeScanner from "@/components/BarcodeScanner";
 import CSVImportDialog from "@/components/CSVImportDialog";
@@ -60,6 +61,7 @@ interface Product {
 
 export default function StoreProductsPage() {
   const router = useRouter();
+  const { user, logout: authLogout } = useAuth();
   const [storeId, setStoreId] = useState<string>("");
   const [products, setProducts] = useState<Product[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -179,30 +181,40 @@ export default function StoreProductsPage() {
     }
   };
 
-  // Check store auth
+  // Load products when user is available
   useEffect(() => {
+    if (user) {
+      setStoreId(user.storeId);
+      fetchProducts(user.storeId);
+    }
+  }, [user]);
+
+  // Check license expiration
+  useEffect(() => {
+    if (!user) return;
+    
     const authData = localStorage.getItem("goldensquirrel_auth");
-    if (!authData) {
-      router.push("/login");
-      return;
+    if (authData) {
+      const { license_expires_at } = JSON.parse(authData);
+      const licenseExpires = new Date(license_expires_at);
+      const now = new Date();
+      
+      if (licenseExpires < now) {
+        toast.error("Your license has expired. Please contact support.");
+        localStorage.removeItem("goldensquirrel_auth");
+        localStorage.removeItem("goldensquirrel_user");
+        authLogout();
+        router.push("/login");
+      }
     }
+  }, [user, authLogout, router]);
 
-    const { store_id, license_expires_at } = JSON.parse(authData);
-    
-    // Check license expiration
-    const licenseExpires = new Date(license_expires_at);
-    const now = new Date();
-    
-    if (licenseExpires < now) {
-      toast.error("Your license has expired. Please contact support.");
-      localStorage.removeItem("goldensquirrel_auth");
-      router.push("/login");
-      return;
+  // Redirect if no user
+  useEffect(() => {
+    if (!user) {
+      router.replace("/login");
     }
-
-    setStoreId(store_id);
-    fetchProducts(store_id);
-  }, [router]);
+  }, [user, router]);
 
   // ---- Build O(1) barcode index whenever products change ----
   useEffect(() => {
@@ -404,7 +416,7 @@ export default function StoreProductsPage() {
   };
 
   const handleLogout = () => {
-    localStorage.removeItem("goldensquirrel_auth");
+    authLogout();
     router.push("/login");
   };
 

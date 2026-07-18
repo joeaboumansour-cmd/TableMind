@@ -34,6 +34,8 @@ export interface QueuedTransaction {
   payment_method: string;
   subtotal_usd: number;
   total_usd: number;
+  amount_paid_usd: number;
+  change_given_usd: number;
   items: QueuedTransactionItem[];
   created_at: string;
 }

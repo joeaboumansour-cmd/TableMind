@@ -23,6 +23,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { useCartStore } from "@/lib/stores/cartStore";
+import { useAuth } from "@/lib/auth/AuthContext";
 import { Product } from "@/lib/types/product";
 import { toast } from "sonner";
 import { formatCurrency, formatLL, convertUsdToLl, formatUSD, convertLlToUsd, convertLlToUsdForSale, convertLlToUsdForReturn, SELL_RATE, RETURN_RATE } from "@/lib/utils/format";
@@ -40,6 +41,7 @@ const supabase = createClient();
 
 export default function POSPage() {
   const router = useRouter();
+  const { user, logout: authLogout, canAccess } = useAuth();
   const [isScannerActive, setIsScannerActive] = useState(() => {
     if (typeof window !== 'undefined' && 'localStorage' in window) {
       const saved = localStorage.getItem("scanner_active");
@@ -57,6 +59,8 @@ export default function POSPage() {
   // O(1) barcode lookup — rebuilt whenever products change
   const [barcodeIndex, setBarcodeIndex] = useState<Map<string, Product>>(new Map());
   const barcodeIndexRef = useRef<Map<string, Product>>(new Map());
+  // Check user permissions for History button
+  const [canViewTransactions, setCanViewTransactions] = useState(false);
 
   const {
     items,
@@ -73,33 +77,47 @@ export default function POSPage() {
     isEmpty,
   } = useCartStore();
 
+  // Check user permissions on mount
+  useEffect(() => {
+    if (user) {
+      setCanViewTransactions(canAccess("transactions"));
+    }
+  }, [user, canAccess]);
+
+  // Redirect if no user
+  useEffect(() => {
+    if (!user && !isLoading) {
+      router.replace("/login");
+    }
+  }, [user, isLoading, router]);
+
   // Load store and products data
   useEffect(() => {
     let isMounted = true;
 
     const loadData = async () => {
+      if (!user) return;
+
       try {
-        // Get auth data from localStorage
+        // Get auth data from localStorage for legacy compatibility
         if (typeof window !== 'undefined' && 'localStorage' in window) {
           const authData = localStorage.getItem("goldensquirrel_auth");
-          if (!authData) {
-            router.push("/login");
-            return;
-          }
-
-          const { store_id, license_expires_at } = JSON.parse(authData);
+          const licenseExpiresAt = authData ? JSON.parse(authData)?.license_expires_at : null;
 
           // Check license expiration
-          const licenseExpires = new Date(license_expires_at);
-          const now = new Date();
-
-          if (licenseExpires < now) {
-            toast.error("Your license has expired. Please contact support.");
-            localStorage.removeItem("goldensquirrel_auth");
-            router.push("/login");
-            return;
+          if (licenseExpiresAt) {
+            const licenseExpires = new Date(licenseExpiresAt);
+            const now = new Date();
+            if (licenseExpires < now) {
+              toast.error("Your license has expired. Please contact support.");
+              localStorage.removeItem("goldensquirrel_auth");
+              authLogout();
+              router.push("/login");
+              return;
+            }
           }
 
+          const store_id = user.storeId;
           setMerchant({ id: store_id });
           setStoreId(store_id);
           syncEngine.setStoreId(store_id);
@@ -209,7 +227,7 @@ export default function POSPage() {
       isMounted = false;
       window.removeEventListener('focus', handleFocus);
     };
-  }, [router, setStoreId, merchant?.id]);
+  }, [router, setStoreId, merchant?.id, user, authLogout]);
 
   // ---- Build O(1) barcode index whenever products change ----
   useEffect(() => {
@@ -304,11 +322,13 @@ export default function POSPage() {
     // No page reload needed — BarcodeScanner's isActive prop change triggers stop/start automatically
   };
 
-  // Handle logout
+  // Handle logout - clear both auth keys
   const handleLogout = () => {
     if (typeof window !== 'undefined' && 'localStorage' in window) {
       localStorage.removeItem("goldensquirrel_auth");
+      localStorage.removeItem("goldensquirrel_user");
     }
+    authLogout();
     router.push("/login");
   };
 
@@ -338,9 +358,11 @@ export default function POSPage() {
     if (navigator.onLine) {
       router.prefetch("/checkout");
       router.prefetch("/pos/products");
+      router.prefetch("/transactions");
       // Also warm the service worker cache by fetching the documents
       fetch("/checkout", { method: "HEAD", cache: "force-cache" }).catch(() => {});
       fetch("/pos/products", { method: "HEAD", cache: "force-cache" }).catch(() => {});
+      fetch("/transactions", { method: "HEAD", cache: "force-cache" }).catch(() => {});
     }
   }, [router]);
 
@@ -374,6 +396,12 @@ export default function POSPage() {
             {/* Desktop Buttons */}
             <div className="hidden md:flex items-center gap-2">
               <SyncIndicator />
+              {canViewTransactions && (
+                <Button variant="ghost" size="sm" onClick={() => router.push("/transactions")}>
+                  <History className="h-4 w-4 mr-1" />
+                  History
+                </Button>
+              )}
               <Button variant="ghost" size="sm" onClick={() => router.push("/pos/products")}>
                 <Package className="h-4 w-4 mr-1" />
                 Inventory
@@ -404,6 +432,18 @@ export default function POSPage() {
                    <div className="px-4 py-2 border-b">
                      <SyncIndicator compact />
                    </div>
+                   {canViewTransactions && (
+                     <button
+                       className="w-full px-4 py-3 text-left flex items-center gap-3 hover:bg-muted/50 transition-colors"
+                       onClick={() => {
+                         router.push("/transactions");
+                         setIsMobileMenuOpen(false);
+                       }}
+                     >
+                       <History className="h-4 w-4" />
+                       <span>History</span>
+                     </button>
+                   )}
                    <button
                      className="w-full px-4 py-3 text-left flex items-center gap-3 hover:bg-muted/50 transition-colors"
                      onClick={() => {

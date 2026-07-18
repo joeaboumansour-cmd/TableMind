@@ -40,41 +40,130 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: "Unauthorized - No store_id in auth data" }, { status: 401 });
     }
 
-    // TRANSACTIONS DISABLED - 4/19/2026
-    // Query transactions from the last 48 hours only
-    // const { data: transactions, error } = await supabase
-    //   .from("transactions")
-    //   .select(`
-    //     id,
-    //     transaction_number,
-    //     subtotal,
-    //     total_amount,
-    //     amount_paid,
-    //     change_given,
-    //     created_at,
-    //     transaction_items (
-    //       id,
-    //       product_name,
-    //       quantity,
-    //       unit_price,
-    //       total_price
-    //     )
-    //   `)
-    //   .eq("store_id", store_id)
-    //   .gte("created_at", new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString())
-    //   .order("created_at", { ascending: false });
+    // Get store retention settings first
+    const { data: store, error: storeError } = await supabase
+      .from("stores")
+      .select("transaction_retention_days, max_transactions")
+      .eq("id", store_id)
+      .single();
 
-    // if (error) {
-    //   console.error("Supabase query error:", error);
-    //   return NextResponse.json({ error: error.message, details: error }, { status: 500 });
-    // }
+    if (storeError) {
+      console.error("Error fetching store settings:", storeError);
+      return NextResponse.json({ error: "Failed to fetch store settings", details: storeError }, { status: 500 });
+    }
 
-    // Always return empty array - transactions are disabled
-    return NextResponse.json({ transactions: [] });
+    // Build query - filter based on retention days
+    let query = supabase
+      .from("transactions")
+      .select(`
+        id,
+        transaction_number,
+        subtotal,
+        total_amount,
+        amount_paid,
+        change_given,
+        created_at,
+        whatsapp_sent_to,
+        whatsapp_sent_at,
+        transaction_items (
+          id,
+          product_name,
+          quantity,
+          unit_price,
+          total_price,
+          currency
+        )
+      `)
+      .eq("store_id", store_id)
+      .order("created_at", { ascending: false });
+
+    // Apply time filter only if retention_days is set and not 0
+    if (store.transaction_retention_days && store.transaction_retention_days > 0) {
+      const cutoffDate = new Date(Date.now() - store.transaction_retention_days * 24 * 60 * 60 * 1000).toISOString();
+      query = query.gte("created_at", cutoffDate);
+    }
+
+    const { data: transactions, error } = await query;
+
+    if (error) {
+      console.error("Supabase query error:", error);
+      return NextResponse.json({ error: error.message, details: error }, { status: 500 });
+    }
+
+    return NextResponse.json({ transactions: transactions || [] });
   } catch (error: any) {
     console.error("Error fetching transactions:", error);
     return NextResponse.json({ 
       error: "Failed to fetch transactions", 
+      details: error?.message || String(error) 
+    }, { status: 500 });
+  }
+}
+
+export async function POST(request: Request) {
+  try {
+    const supabase = await createServiceRoleClient();
+    
+    const authData = request.headers.get('x-auth-data');
+    if (!authData) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    const { store_id } = JSON.parse(authData);
+    const body = await request.json();
+    
+    // Create transaction
+    const { data: transaction, error } = await supabase
+      .from("transactions")
+      .insert({
+        store_id: store_id,
+        transaction_number: body.transaction_number,
+        subtotal: body.subtotal,
+        total_amount: body.total_amount,
+        amount_paid: body.amount_paid,
+        change_given: body.change_given || 0,
+        payment_method: body.payment_method || 'cash',
+        usd_subtotal: body.usd_subtotal,
+        usd_total_amount: body.usd_total_amount,
+        usd_amount_paid: body.usd_amount_paid || 0,
+        usd_change_given: body.usd_change_given || 0,
+      })
+      .select()
+      .single();
+
+    if (error) {
+      console.error("Transaction creation error:", error);
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+
+    // Insert transaction items if provided
+    if (body.items && body.items.length > 0) {
+      const txnItems = body.items.map((item: any) => ({
+        store_id: store_id,
+        transaction_id: transaction.id,
+        product_id: item.product_id,
+        product_name: item.product_name,
+        quantity: item.quantity,
+        unit_price: item.unit_price,
+        total_price: item.total_price,
+        currency: item.currency || 'LL',
+      }));
+
+      const { error: itemsError } = await supabase
+        .from("transaction_items")
+        .insert(txnItems);
+
+      if (itemsError) {
+        console.error("Transaction items error:", itemsError);
+        // Transaction created but items failed - still return success but log error
+      }
+    }
+
+    return NextResponse.json({ transaction }, { status: 201 });
+  } catch (error: any) {
+    console.error("Error creating transaction:", error);
+    return NextResponse.json({ 
+      error: "Failed to create transaction", 
       details: error?.message || String(error) 
     }, { status: 500 });
   }
@@ -92,20 +181,23 @@ export async function DELETE(request: Request) {
 
     const { store_id } = JSON.parse(authData);
 
-    // TRANSACTIONS DISABLED - 4/19/2026
-    // Delete transactions older than 48 hours
-    // const { data, error } = await supabase
-    //   .from("transactions")
-    //   .delete()
-    //   .eq("store_id", store_id)
-    //   .lt("created_at", new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString());
+    // Call cleanup function for this store
+    const { data, error } = await supabase
+      .rpc("cleanup_old_transactions_for_store", {
+        p_store_id: store_id
+      });
 
-    // if (error) {
-    //   throw error;
-    // }
+    if (error) {
+      console.error("Cleanup error:", error);
+      return NextResponse.json({ error: "Failed to clean up transactions", details: error }, { status: 500 });
+    }
 
-    // Return success without doing anything
-    return NextResponse.json({ message: "Old transactions cleaned up", deleted: 0 });
+    const result = data as any;
+    return NextResponse.json({ 
+      message: "Transactions cleaned up", 
+      deleted: result?.deleted_count || 0,
+      reason: result?.reason || "completed"
+    });
   } catch (error) {
     console.error("Error cleaning up transactions:", error);
     return NextResponse.json({ error: "Failed to clean up transactions" }, { status: 500 });

@@ -40,12 +40,16 @@ GoldenSquirrel Mobile POS is a Progressive Web App (PWA) designed for small busi
 - **Role-based Access**: Multi-tenant restaurant support
 
 ### 3. Database Layer
-- **Provider**: Supabase (PostgreSQL)
-- **Key Tables**:
-  - `products` - Item catalog with prices and stock
-  - `transactions` - Sales records
-  - `transaction_items` - Line items for each sale
-  - `merchants` - Business profiles with profit settings
+ - **Provider**: Supabase (PostgreSQL)
+ - **Key Tables**:
+   - `products` - Item catalog with prices and stock
+   - `transactions` - Sales records
+   - `transaction_items` - Line items for each sale
+   - `stores` - Business profiles with retention settings
+ - **Transaction Retention**: Automatic cleanup triggered on insert:
+   - Transactions older than configured `transaction_retention_days` (default 90) are deleted
+   - When transaction count exceeds `max_transactions` (default 5000), oldest are removed
+   - Cascade delete removes related transaction_items automatically
 
 ### 4. Barcode Integration
 - **Input Method**: Camera-based scanning or external scanner

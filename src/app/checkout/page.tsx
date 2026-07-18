@@ -3,6 +3,7 @@
 import { useState, useEffect, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
+import type { Database } from "@/lib/types/database";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -117,15 +118,81 @@ function CheckoutContent() {
       setChangeGiven(calculatedChangeGiven);
       setChangeUsd(calcChangeUsd);
 
-      // Sync inventory: decrement stock if online
+      // Save transaction to database
+      const transactionData = {
+        transaction_number: txnNumber,
+        subtotal: getSubtotal(),
+        total_amount: total,
+        amount_paid: totalPaid,
+        change_given: calculatedChangeGiven,
+        payment_method: "cash",
+        usd_subtotal: getSubtotalUsd(),
+        usd_total_amount: totalUsd,
+        usd_amount_paid: paidUSD,
+        usd_change_given: calcChangeUsd,
+           items: items.map((item) => ({
+             product_id: item.product_id,
+             product_name: item.product_name,
+             quantity: item.quantity,
+             unit_price: item.unit_price,
+             total_price: item.total_price,
+             currency: item.currency,
+             unit_price_usd: item.unit_price_usd,
+             total_price_usd: item.total_price_usd,
+           })),
+      };
+
       if (navigator.onLine) {
-        const stockDecrements = items.map((item) =>
-          supabase.rpc("decrement_stock", {
+        // Online: Save directly to Supabase
+        try {
+          const authData = JSON.parse(localStorage.getItem("goldensquirrel_auth") || "{}");
+          
+          const response = await fetch("/api/transactions", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-auth-data": JSON.stringify({ store_id: authData.store_id }),
+            },
+            body: JSON.stringify(transactionData),
+          });
+
+          if (!response.ok) {
+            throw new Error("Failed to save transaction");
+          }
+        } catch (error) {
+          console.error("Failed to save transaction online:", error);
+          toast.error("Payment processed but failed to save receipt");
+        }
+      } else {
+        // Offline: Queue for later sync
+        const { queueTransaction } = await import("@/lib/db/localDB");
+        const authDataOffline = JSON.parse(localStorage.getItem("goldensquirrel_auth") || "{}");
+        await queueTransaction({
+          id: crypto.randomUUID(),
+          store_id: authDataOffline.store_id || "",
+          transaction_number: txnNumber,
+          subtotal: getSubtotal(),
+          total_amount: total,
+          amount_paid: totalPaid,
+          change_given: calculatedChangeGiven,
+          payment_method: "cash",
+          subtotal_usd: getSubtotalUsd(),
+          total_usd: totalUsd,
+          amount_paid_usd: paidUSD,
+          change_given_usd: calcChangeUsd,
+          items: items.map((item) => ({
             product_id: item.product_id,
+            product_name: item.product_name,
             quantity: item.quantity,
-          })
-        );
-        await Promise.allSettled(stockDecrements);
+            unit_price: item.unit_price,
+            total_price: item.total_price,
+            currency: item.currency,
+            unit_price_usd: item.unit_price_usd,
+            total_price_usd: item.total_price_usd,
+          })),
+          created_at: new Date().toISOString(),
+        });
+        toast.info("Transaction saved offline - will sync when online");
       }
 
       // Transaction complete — just show receipt

@@ -15,6 +15,8 @@ export interface Database {
           username: string;
           password_hash: string;
           license_expires_at: string;
+          transaction_retention_days: number | null;
+          max_transactions: number | null;
           created_at: string;
         };
         Insert: {
@@ -22,6 +24,8 @@ export interface Database {
           username: string;
           password_hash: string;
           license_expires_at: string;
+          transaction_retention_days?: number | null;
+          max_transactions?: number | null;
           created_at?: string;
         };
         Update: {
@@ -29,6 +33,8 @@ export interface Database {
           username?: string;
           password_hash?: string;
           license_expires_at?: string;
+          transaction_retention_days?: number | null;
+          max_transactions?: number | null;
           created_at?: string;
         };
       };
@@ -79,6 +85,11 @@ export interface Database {
           total_amount: number;
           amount_paid: number | null;
           change_given: number;
+          payment_method: string | null;
+          usd_subtotal: number | null;
+          usd_total_amount: number | null;
+          usd_amount_paid: number | null;
+          usd_change_given: number | null;
           created_at: string;
         };
         Insert: {
@@ -89,6 +100,11 @@ export interface Database {
           total_amount?: number;
           amount_paid?: number | null;
           change_given?: number;
+          payment_method?: string | null;
+          usd_subtotal?: number | null;
+          usd_total_amount?: number | null;
+          usd_amount_paid?: number | null;
+          usd_change_given?: number | null;
           created_at?: string;
         };
         Update: {
@@ -99,6 +115,11 @@ export interface Database {
           total_amount?: number;
           amount_paid?: number | null;
           change_given?: number;
+          payment_method?: string | null;
+          usd_subtotal?: number | null;
+          usd_total_amount?: number | null;
+          usd_amount_paid?: number | null;
+          usd_change_given?: number | null;
           created_at?: string;
         };
       };
@@ -154,6 +175,12 @@ export interface Database {
           quantity: number;
         };
         Returns: undefined;
+      };
+      cleanup_old_transactions_for_store: {
+        Args: {
+          p_store_id: string;
+        };
+        Returns: { deleted_count: number; reason: string }[];
       };
     };
     Enums: {

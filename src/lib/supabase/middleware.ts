@@ -37,13 +37,9 @@ export async function updateSession(request: NextRequest) {
     }
   );
 
-  // refreshing the auth token - this is critical for API routes
-  const { data: { user }, error } = await supabase.auth.getUser();
-  
-  if (error) {
-    console.error("Middleware auth error:", error.message);
-  }
+  // This app uses custom localStorage-based auth, not Supabase SSR auth.
+  // The client is initialized above only to support Supabase Data API queries.
+  // No session check is needed here.
 
-  // Return the response with updated cookies
   return supabaseResponse;
 }

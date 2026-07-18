@@ -1,79 +1,139 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
+import { useAuth } from "@/lib/auth/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Utensils, Loader2, Eye, EyeOff, AlertTriangle } from "lucide-react";
+import { Loader2, Eye, EyeOff, AlertTriangle, Store, User } from "lucide-react";
 import { toast } from "sonner";
 
 const supabase = createClient();
 
 export default function LoginPage() {
   const router = useRouter();
-  const [isLoading, setIsLoading] = useState(false);
+  const { user, login, isLoading } = useAuth();
   const [showPassword, setShowPassword] = useState(false);
+
+  // Form fields
+  const [storeUsername, setStoreUsername] = useState("");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
 
-  const handleLogin = async (e: React.FormEvent) => {
+  // If already logged in, redirect to POS
+  useEffect(() => {
+    if (user) {
+      router.replace("/pos");
+    }
+  }, [user, router]);
+
+  // Main login handler — works for both store owners and employees
+  const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setIsLoading(true);
 
-    try {
-      // Fetch store by username
-      const { data: store, error: fetchError } = await supabase
-        .from("stores")
-        .select("*")
-        .eq("username", username)
-        .single();
+    if (!storeUsername.trim() || !username.trim() || !password.trim()) {
+      toast.error("Please fill in all fields");
+      return;
+    }
 
-      if (fetchError || !store) {
-        toast.error("Invalid username or password");
+    // Find store by store username
+    const { data: store, error: storeError } = await supabase
+      .from("stores")
+      .select("id, username, password_hash, license_expires_at")
+      .eq("username", storeUsername.trim())
+      .maybeSingle();
+
+    if (storeError || !store) {
+      toast.error("Invalid store credentials");
+      return;
+    }
+
+    // Check license
+    if (new Date(store.license_expires_at) < new Date()) {
+      toast.error("Your license has expired. Please contact support to renew.");
+      return;
+    }
+
+    // Case 1: Owner login — username matches store username
+    if (username.trim() === store.username) {
+      if (store.password_hash !== password) {
+        toast.error("Invalid store credentials");
         return;
       }
 
-      // Check license expiration
-      const licenseExpires = new Date(store.license_expires_at);
-      const now = new Date();
-      
-      if (licenseExpires < now) {
-        toast.error("Your license has expired. Please contact support to renew.");
-        return;
-      }
-
-      // Verify password (in production, use proper bcrypt comparison)
-      const isValidPassword = store.password_hash === password;
-      
-      if (!isValidPassword) {
-        toast.error("Invalid username or password");
-        return;
-      }
-
-      // Store auth data in localStorage
-      const authData = {
+      // Backward compatibility — also set the legacy goldensquirrel_auth
+      localStorage.setItem("goldensquirrel_auth", JSON.stringify({
         store_id: store.id,
         username: store.username,
         license_expires_at: store.license_expires_at,
         timestamp: Date.now(),
-      };
-      localStorage.setItem("goldensquirrel_auth", JSON.stringify(authData));
+      }));
 
-      toast.success(`Welcome!`);
-      
-      // Redirect to POS
-      setTimeout(() => {
-        window.location.href = "/pos";
-      }, 100);
-    } catch (error) {
-      console.error("Login error:", error);
-      toast.error("An error occurred during login");
-    } finally {
-      setIsLoading(false);
+      const result = await login(store.username, password);
+      if (result.success) {
+        toast.success("Welcome back!");
+        setTimeout(() => {
+          window.location.href = "/pos";
+        }, 100);
+      } else {
+        toast.error(result.error || "Invalid credentials");
+      }
+      return;
     }
+
+    // Case 2: Employee login
+    const { data: employee, error: empError } = await supabase
+      .from("store_users")
+      .select("*")
+      .eq("store_id", store.id)
+      .eq("username", username.trim())
+      .maybeSingle();
+
+    if (empError || !employee) {
+      toast.error("Invalid store credentials");
+      return;
+    }
+
+    if (!employee.is_active) {
+      toast.error("This account has been deactivated. Contact your store owner.");
+      return;
+    }
+
+    if (employee.password_hash !== password) {
+      toast.error("Invalid store credentials");
+      return;
+    }
+
+    // Store employee data in localStorage directly (same pattern as before)
+    const employeeUser = {
+      id: employee.id,
+      storeId: employee.store_id,
+      username: employee.username,
+      displayName: employee.display_name || employee.username,
+      isOwner: false,
+      permissions: typeof employee.permissions === "string"
+        ? JSON.parse(employee.permissions)
+        : employee.permissions,
+    };
+
+    localStorage.setItem("goldensquirrel_user", JSON.stringify(employeeUser));
+
+    // Backward compatibility — also set legacy goldensquirrel_auth so existing
+    // pages that read it for store_id still work
+    localStorage.setItem("goldensquirrel_auth", JSON.stringify({
+      store_id: employee.store_id,
+      username: employee.username,
+      license_expires_at: store.license_expires_at,
+      timestamp: Date.now(),
+    }));
+
+    toast.success(`Welcome, ${employeeUser.displayName}!`);
+    setTimeout(() => {
+      window.location.href = "/pos";
+    }, 100);
   };
 
   return (
@@ -83,39 +143,14 @@ export default function LoginPage() {
         <div className="h-12 w-12 rounded-xl bg-amber-500 flex items-center justify-center shadow-lg">
           <svg viewBox="0 0 32 32" className="h-7 w-7 text-white" fill="currentColor">
             {/* Side Profile Squirrel */}
-            {/* Body */}
             <ellipse cx="18" cy="22" rx="6" ry="7" />
-            {/* Head */}
             <circle cx="24" cy="14" r="5" />
-            {/* Snout */}
             <ellipse cx="28" cy="15" rx="3" ry="2.5" />
-            {/* Ear */}
             <path d="M22 10 L24 6 L26 10 Z" />
-            {/* Eye */}
             <circle cx="25" cy="13" r="1.2" fill="#FEF3C7" />
-            {/* Front paws */}
             <ellipse cx="22" cy="20" rx="2" ry="3" />
-            {/* Hind leg */}
             <ellipse cx="14" cy="24" rx="2.5" ry="4" />
-            {/* Big curly tail */}
-            <path d="M12 20 
-                     C 8 18, 6 14, 6 10 
-                     C 6 4, 10 2, 14 4 
-                     C 17 5, 18 8, 16 10 
-                     C 14 12, 11 10, 12 8 
-                     C 12 6, 14 6, 15 7
-                     C 16 8, 16 10, 14 12
-                     C 12 14, 10 16, 12 20 Z" />
-            {/* Tail inner highlight */}
-            <path d="M10 14 
-                     C 9 12, 9 8, 11 6 
-                     C 13 5, 14 6, 13 8 
-                     C 12 9, 11 8, 11 7" 
-                  fill="none" 
-                  stroke="white" 
-                  strokeWidth="1.5"
-                  opacity="0.6"
-                  strokeLinecap="round"/>
+            <path d="M12 20 C 8 18, 6 14, 6 10 C 6 4, 10 2, 14 4 C 17 5, 18 8, 16 10 C 14 12, 11 10, 12 8 C 12 6, 14 6, 15 7 C 16 8, 16 10, 14 12 C 12 14, 10 16, 12 20 Z" />
           </svg>
         </div>
         <div>
@@ -132,13 +167,27 @@ export default function LoginPage() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <form onSubmit={handleLogin} className="space-y-4">
+          <form onSubmit={handleLoginSubmit} className="space-y-4">
             <div className="space-y-2">
-              <Label htmlFor="username">Username</Label>
+              <Label htmlFor="storeUsername">Store Username</Label>
+              <Input
+                id="storeUsername"
+                type="text"
+                placeholder="e.g., downtown_store"
+                value={storeUsername}
+                onChange={(e) => setStoreUsername(e.target.value)}
+                required
+                className="h-12"
+                autoComplete="username"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="username">Username (or store username for owner)</Label>
               <Input
                 id="username"
                 type="text"
-                placeholder="Enter your store username"
+                placeholder="Your username or store username"
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
                 required
@@ -186,14 +235,19 @@ export default function LoginPage() {
             </Button>
           </form>
 
-          <div className="mt-6 p-4 bg-muted rounded-lg">
+          <div className="mt-6 p-4 bg-muted rounded-lg space-y-2">
             <div className="flex items-start gap-2">
-              <AlertTriangle className="h-4 w-4 text-amber-500 mt-0.5" />
+              <Store className="h-4 w-4 text-amber-500 mt-0.5 flex-shrink-0" />
               <div className="text-sm text-muted-foreground">
-                <p className="font-medium">Store Account Required</p>
-                <p className="text-xs mt-1">
-                  Contact your system administrator if you need a store account or your license has expired.
-                </p>
+                <p className="font-medium">Store Owner</p>
+                <p className="text-xs">Use your store username in both fields or as username</p>
+              </div>
+            </div>
+            <div className="flex items-start gap-2">
+              <User className="h-4 w-4 text-amber-500 mt-0.5 flex-shrink-0" />
+              <div className="text-sm text-muted-foreground">
+                <p className="font-medium">Employee</p>
+                <p className="text-xs">Use your assigned personal username. Contact your store owner if you don't have one.</p>
               </div>
             </div>
           </div>

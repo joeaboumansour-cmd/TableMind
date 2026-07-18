@@ -13,7 +13,6 @@ import {
   Receipt,
   RefreshCw,
   Send,
-  Search,
   ChevronDown,
   ChevronUp,
   AlertCircle,
@@ -23,7 +22,7 @@ import {
 } from "lucide-react";
 import { formatLL, formatDateTime, formatRelativeTime, formatUSD } from "@/lib/utils/format";
 import { toast } from "sonner";
-import { useAuth } from "@/lib/auth/AuthContext";
+import { usePermissionGuard } from "@/lib/auth/usePermissionGuard";
 import {
   Collapsible,
   CollapsibleContent,
@@ -59,14 +58,7 @@ type DateFilter = "all" | "hour" | "today" | "week" | "month" | "90days";
 
 export default function TransactionHistoryPage() {
   const router = useRouter();
-  const { user, logout: authLogout } = useAuth();
-
-  // Redirect if no user
-  useEffect(() => {
-    if (!user) {
-      router.replace("/login");
-    }
-  }, [user, router]);
+  usePermissionGuard("transactions");
 
   const [transactions, setTransactions] = useState<TransactionWithChange[]>([]);
   const [filteredTransactions, setFilteredTransactions] = useState<TransactionWithChange[]>([]);
@@ -77,12 +69,10 @@ export default function TransactionHistoryPage() {
   const [openAccordion, setOpenAccordion] = useState<string | null>(null);
   
   const fetchTransactions = useCallback(async () => {
-    if (!user) return;
-    
     setIsLoading(true);
     setError(null);
-
-    try {
+    
+    if (typeof window !== 'undefined' && 'localStorage' in window) {
       const authData = localStorage.getItem("goldensquirrel_auth");
       if (!authData) {
         router.replace("/login");
@@ -96,29 +86,31 @@ export default function TransactionHistoryPage() {
         return;
       }
 
-      const response = await fetch("/api/transactions", {
-        headers: {
-          "x-auth-data": authData,
-        },
-      });
+      try {
+        const response = await fetch("/api/transactions", {
+          headers: {
+            "x-auth-data": authData,
+          },
+        });
 
-      if (!response.ok) {
-        throw new Error("Failed to fetch transactions");
+        if (!response.ok) {
+          throw new Error("Failed to fetch transactions");
+        }
+
+        const data = await response.json();
+        const transactionsWithChange = (data.transactions || []).map((t: Transaction) => ({
+          ...t,
+          calculated_change: t.amount_paid && t.total_amount ? t.amount_paid - t.total_amount : 0
+        }));
+        setTransactions(transactionsWithChange);
+      } catch (err: any) {
+        console.error("Error fetching transactions:", err);
+        setError(err.message || "Failed to load transactions");
+      } finally {
+        setIsLoading(false);
       }
-
-      const data = await response.json();
-      const transactionsWithChange = (data.transactions || []).map((t: Transaction) => ({
-        ...t,
-        calculated_change: t.amount_paid && t.total_amount ? t.amount_paid - t.total_amount : 0
-      }));
-      setTransactions(transactionsWithChange);
-    } catch (err: any) {
-      console.error("Error fetching transactions:", err);
-      setError(err.message || "Failed to load transactions");
-    } finally {
-      setIsLoading(false);
     }
-  }, [user, router]);
+  }, [router]);
 
   useEffect(() => {
     fetchTransactions();
@@ -152,22 +144,13 @@ export default function TransactionHistoryPage() {
       filtered = filtered.filter(t => new Date(t.created_at) >= cutoff);
     }
     
-    // Apply search filter - by transaction #, phone number, or amount
+    // Apply search filter
     if (searchQuery.trim()) {
       const query = searchQuery.toLowerCase();
-      const numericQuery = parseFloat(searchQuery.replace(/[^0-9.]/g, ""));
-      
-      filtered = filtered.filter(t => {
-        // Search by transaction number
-        if (t.transaction_number.toLowerCase().includes(query)) return true;
-        // Search by phone number
-        if (t.whatsapp_sent_to && t.whatsapp_sent_to.includes(searchQuery.replace(/\D/g, ""))) return true;
-        // Search by transaction amount
-        if (!isNaN(numericQuery) && t.total_amount === numericQuery) return true;
-        // Search by amount paid
-        if (!isNaN(numericQuery) && t.amount_paid === numericQuery) return true;
-        return false;
-      });
+      filtered = filtered.filter(t => 
+        t.transaction_number.toLowerCase().includes(query) ||
+        (t.whatsapp_sent_to && t.whatsapp_sent_to.includes(searchQuery))
+      );
     }
     
     setFilteredTransactions(filtered);
@@ -241,7 +224,7 @@ export default function TransactionHistoryPage() {
     setOpenAccordion(openAccordion === id ? null : id);
   };
 
-  if (isLoading || !user) {
+  if (isLoading) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
         <div className="text-center">
@@ -273,15 +256,14 @@ export default function TransactionHistoryPage() {
             </Button>
           </div>
           
-          {/* Search Bar - search by transaction #, phone, or amount */}
+          {/* Search Bar */}
           <div className="relative mb-2">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input
               type="text"
-              placeholder="Search by #, phone, or amount..."
+              placeholder="Search by transaction # or phone number..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-10"
+              className="w-full"
             />
           </div>
           
