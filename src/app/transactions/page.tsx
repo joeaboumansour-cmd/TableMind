@@ -157,11 +157,12 @@ export default function TransactionHistoryPage() {
       const query = searchQuery.toLowerCase();
       const numericQuery = parseFloat(searchQuery.replace(/[^0-9.]/g, ""));
       
-      filtered = filtered.filter(t => {
+       filtered = filtered.filter(t => {
         // Search by transaction number
         if (t.transaction_number.toLowerCase().includes(query)) return true;
-        // Search by phone number
-        if (t.whatsapp_sent_to && t.whatsapp_sent_to.includes(searchQuery.replace(/\D/g, ""))) return true;
+        // Search by phone number - only match if there are actual digits in the search
+        const digitsOnly = searchQuery.replace(/\D/g, "");
+        if (t.whatsapp_sent_to && digitsOnly && t.whatsapp_sent_to.includes(digitsOnly)) return true;
         // Search by transaction amount
         if (!isNaN(numericQuery) && t.total_amount === numericQuery) return true;
         // Search by amount paid
@@ -433,13 +434,20 @@ export default function TransactionHistoryPage() {
                         )}
                       </div>
 
-                      <div className="flex gap-2">
-                        <Button variant="outline" className="flex-1" onClick={() => handleSendWhatsApp(transaction)}>
-                          <Send className="h-4 w-4 mr-2" />
-                          Send to WhatsApp
-                        </Button>
-                      </div>
-                    </CardContent>
+                       <div className="flex gap-2">
+                         {transaction.whatsapp_sent_to ? (
+                           <div className="flex-1 flex items-center justify-center text-sm text-green-600 font-medium">
+                             <Send className="h-4 w-4 mr-2" />
+                             Sent to: {transaction.whatsapp_sent_to}
+                           </div>
+                         ) : (
+                           <Button variant="outline" className="flex-1" onClick={() => handleSendWhatsApp(transaction)}>
+                             <Send className="h-4 w-4 mr-2" />
+                             Send to WhatsApp
+                           </Button>
+                         )}
+                       </div>
+                     </CardContent>
                   </CollapsibleContent>
                 </Card>
               </Collapsible>

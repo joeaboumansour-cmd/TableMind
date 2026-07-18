@@ -118,6 +118,15 @@ function CheckoutContent() {
       setChangeGiven(calculatedChangeGiven);
       setChangeUsd(calcChangeUsd);
 
+      // Prepare WhatsApp phone number for saving
+      let cleanPhoneNumber: string | undefined;
+      if (whatsappNumber && whatsappNumber.trim()) {
+        const clean = whatsappNumber.replace(/\D/g, '');
+        if (clean.length === 8) {
+          cleanPhoneNumber = clean;
+        }
+      }
+
       // Save transaction to database
       const transactionData = {
         transaction_number: txnNumber,
@@ -130,16 +139,17 @@ function CheckoutContent() {
         usd_total_amount: totalUsd,
         usd_amount_paid: paidUSD,
         usd_change_given: calcChangeUsd,
-           items: items.map((item) => ({
-             product_id: item.product_id,
-             product_name: item.product_name,
-             quantity: item.quantity,
-             unit_price: item.unit_price,
-             total_price: item.total_price,
-             currency: item.currency,
-             unit_price_usd: item.unit_price_usd,
-             total_price_usd: item.total_price_usd,
-           })),
+        whatsapp_sent_to: cleanPhoneNumber,
+        items: items.map((item) => ({
+          product_id: item.product_id,
+          product_name: item.product_name,
+          quantity: item.quantity,
+          unit_price: item.unit_price,
+          total_price: item.total_price,
+          currency: item.currency,
+          unit_price_usd: item.unit_price_usd,
+          total_price_usd: item.total_price_usd,
+        })),
       };
 
       if (navigator.onLine) {
@@ -180,6 +190,7 @@ function CheckoutContent() {
           total_usd: totalUsd,
           amount_paid_usd: paidUSD,
           change_given_usd: calcChangeUsd,
+          whatsapp_sent_to: cleanPhoneNumber,
           items: items.map((item) => ({
             product_id: item.product_id,
             product_name: item.product_name,

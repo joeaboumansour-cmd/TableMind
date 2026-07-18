@@ -127,6 +127,11 @@ export async function POST(request: Request) {
         usd_total_amount: body.usd_total_amount,
         usd_amount_paid: body.usd_amount_paid || 0,
         usd_change_given: body.usd_change_given || 0,
+        // If whatsapp_sent_to provided, save it and set timestamp
+        ...(body.whatsapp_sent_to && {
+          whatsapp_sent_to: body.whatsapp_sent_to,
+          whatsapp_sent_at: new Date().toISOString(),
+        }),
       })
       .select()
       .single();

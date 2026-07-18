@@ -36,6 +36,7 @@ export interface QueuedTransaction {
   total_usd: number;
   amount_paid_usd: number;
   change_given_usd: number;
+  whatsapp_sent_to?: string;
   items: QueuedTransactionItem[];
   created_at: string;
 }

@@ -176,8 +176,13 @@ class SyncEngine {
             payment_method: txn.payment_method,
             usd_subtotal: txn.subtotal_usd,
             usd_total_amount: txn.total_usd,
-            usd_amount_paid: txn.amount_paid,
-            usd_change_given: txn.change_given,
+            usd_amount_paid: txn.amount_paid_usd || txn.amount_paid,
+            usd_change_given: txn.change_given_usd || txn.change_given,
+            // Include WhatsApp phone if provided
+            ...(txn.whatsapp_sent_to && {
+              whatsapp_sent_to: txn.whatsapp_sent_to,
+              whatsapp_sent_at: new Date().toISOString(),
+            }),
           })
           .select()
           .single();
