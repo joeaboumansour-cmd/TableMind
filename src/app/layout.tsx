@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { Providers } from "./providers";
+import PWAInstallPrompt from "@/components/PWAInstallPrompt";
 
 export const viewport: Viewport = {
   themeColor: '#f59e0b',
@@ -25,6 +26,24 @@ export const metadata: Metadata = {
   title: "Golden Squirrel - POS System",
   description: "Mobile Point of Sale for Golden Squirrel",
   manifest: "/manifest.json",
+  icons: [
+    {
+      rel: "icon",
+      url: "/icons/launchericon-192x192.png",
+      sizes: "192x192",
+      type: "image/png",
+    },
+    {
+      rel: "icon",
+      url: "/icons/launchericon-512x512.png",
+      sizes: "512x512",
+      type: "image/png",
+    },
+    {
+      rel: "apple-touch-icon",
+      url: "/icons/launchericon-192x192.png",
+    },
+  ],
   appleWebApp: {
     capable: true,
     statusBarStyle: "black-translucent",
@@ -52,6 +71,7 @@ export default function RootLayout({
       >
         <Providers>
           {children}
+          <PWAInstallPrompt />
         </Providers>
       </body>
     </html>

@@ -1,5 +1,4 @@
 {
-  "id": "/pos",
   "name": "Golden Squirrel POS",
   "short_name": "SquirrelPOS",
   "description": "Mobile Point of Sale",
@@ -8,6 +7,7 @@
   "display": "standalone",
   "background_color": "#000000",
   "theme_color": "#f59e0b",
+  "prefer_related_applications": false,
   "icons": [
     {
       "src": "/icons/launchericon-192x192.png",
