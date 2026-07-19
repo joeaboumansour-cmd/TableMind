@@ -11,8 +11,9 @@ import {
   removeQueuedTransaction,
   getCachedProductsCount,
   getCachedProducts,
+  getQueuedCount,
 } from "@/lib/db/localDB";
-import type { CachedProduct } from "@/lib/db/localDB";
+import type { CachedProduct, QueuedTransaction } from "@/lib/db/localDB";
 
 type SyncStatus = "idle" | "syncing" | "error" | "offline";
 type SyncListener = (status: SyncStatus, pendingCount?: number) => void;
@@ -23,6 +24,8 @@ class SyncEngine {
   private syncInProgress = false;
   private storeId: string | null = null;
   private initialized = false;
+  private retryIntervalId: ReturnType<typeof setInterval> | null = null;
+  private _pendingCount = 0;
 
   constructor() {
     // Defer browser-only initialization to avoid SSR issues
@@ -31,11 +34,13 @@ class SyncEngine {
     }
   }
 
-  private initBrowserListeners(): void {
+  private async initBrowserListeners(): Promise<void> {
     if (this.initialized) return;
     this.initialized = true;
 
     this._status = navigator.onLine ? "idle" : "offline";
+    this._pendingCount = await getQueuedCount();
+    this.notify();
 
     // Listen for online/offline events
     window.addEventListener("online", () => {
@@ -44,13 +49,52 @@ class SyncEngine {
       this.notify();
       // Auto-sync when coming back online
       this.syncNow();
+      // Start periodic retry
+      this.startRetryInterval();
     });
 
     window.addEventListener("offline", () => {
       console.log("[Sync] Connection lost, entering offline mode");
       this._status = "offline";
       this.notify();
+      // Stop periodic retry when offline
+      this.stopRetryInterval();
     });
+
+    // Retry sync when page becomes visible again (e.g., user switches back to tab)
+    window.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible" && navigator.onLine) {
+        console.log("[Sync] Page became visible, checking for pending sync...");
+        this.syncNow();
+      }
+    });
+
+    // Start periodic retry if online on init
+    if (navigator.onLine) {
+      this.startRetryInterval();
+    }
+  }
+
+  /**
+   * Periodically retry syncing queued transactions
+   * Runs every 30 seconds when online
+   */
+  private startRetryInterval(): void {
+    if (this.retryIntervalId) return;
+    this.retryIntervalId = setInterval(async () => {
+      const count = await getQueuedCount();
+      if (count > 0 && navigator.onLine) {
+        console.log(`[Sync] Periodic check: ${count} queued transactions, attempting sync...`);
+        this.syncNow();
+      }
+    }, 30000); // Every 30 seconds
+  }
+
+  private stopRetryInterval(): void {
+    if (this.retryIntervalId) {
+      clearInterval(this.retryIntervalId);
+      this.retryIntervalId = null;
+    }
   }
 
   get status(): SyncStatus {
@@ -63,6 +107,10 @@ class SyncEngine {
 
   get isOffline(): boolean {
     return !navigator.onLine;
+  }
+
+  get pendingCount(): number {
+    return this._pendingCount;
   }
 
   /**
@@ -78,15 +126,14 @@ class SyncEngine {
   subscribe(listener: SyncListener): () => void {
     this.listeners.add(listener);
     // Immediately notify with current status
-    listener(this._status);
+    listener(this._status, this._pendingCount);
     return () => {
       this.listeners.delete(listener);
     };
   }
 
   private notify(): void {
-    const pendingCount = 0; // Will be updated by syncNow
-    this.listeners.forEach((l) => l(this._status, pendingCount));
+    this.listeners.forEach((l) => l(this._status, this._pendingCount));
   }
 
   /**
@@ -142,7 +189,8 @@ class SyncEngine {
   }
 
   /**
-   * Push queued offline transactions to Supabase
+   * Push queued offline transactions to Supabase via the API endpoint
+   * Using the API route ensures we use the service role client (bypasses RLS)
    */
   async pushQueuedTransactions(): Promise<{
     pushed: number;
@@ -150,7 +198,6 @@ class SyncEngine {
     errors: string[];
   }> {
     const result = { pushed: 0, failed: 0, errors: [] as string[] };
-    const supabase = createClient();
 
     // Get all queued transactions ordered by creation time
     const queued = await getQueuedTransactions();
@@ -159,60 +206,67 @@ class SyncEngine {
       return result;
     }
 
-    console.log(`[Sync] Pushing ${queued.length} queued transactions...`);
+    console.log(`[Sync] Pushing ${queued.length} queued transactions via API...`);
+
+    // Get auth data for API headers
+    const authData = localStorage.getItem("goldensquirrel_auth") || "{}";
 
     for (const txn of queued) {
       try {
-        // Step 1: Insert the transaction
-        const { data: transaction, error: txnError } = await supabase
-          .from("transactions")
-           .insert({
-             store_id: txn.store_id,
-             transaction_number: txn.transaction_number,
-             subtotal: txn.subtotal,
-             total_amount: txn.total_amount,
-             amount_paid: txn.amount_paid,
-             change_given: txn.change_given,
-             payment_method: txn.payment_method,
-             usd_subtotal: txn.subtotal_usd,
-             usd_total_amount: txn.total_usd,
-             usd_amount_paid: txn.amount_paid_usd || txn.amount_paid,
-             usd_change_given: txn.change_given_usd || txn.change_given,
-             // Include WhatsApp phone if provided
-             ...(txn.whatsapp_sent_to && {
-               whatsapp_sent_to: txn.whatsapp_sent_to,
-               whatsapp_sent_at: new Date().toISOString(),
-             }),
-             // Include user info if provided
-             ...(txn.user_id && {
-               user_id: txn.user_id,
-               user_name: txn.user_name,
-             }),
-           })
-          .select()
-          .single();
+        // Build the transaction payload matching the API's expected format
+        const payload = {
+          transaction_number: txn.transaction_number,
+          subtotal: txn.subtotal,
+          total_amount: txn.total_amount,
+          amount_paid: txn.amount_paid,
+          change_given: txn.change_given,
+          payment_method: txn.payment_method || "cash",
+          usd_subtotal: txn.subtotal_usd,
+          usd_total_amount: txn.total_usd,
+          usd_amount_paid: txn.amount_paid_usd || 0,
+          usd_change_given: txn.change_given_usd || 0,
+          // Include WhatsApp phone if provided
+          ...(txn.whatsapp_sent_to && {
+            whatsapp_sent_to: txn.whatsapp_sent_to,
+          }),
+          // Include user info - ALWAYS send user_name, independently of user_id
+          ...(txn.user_name && {
+            user_name: txn.user_name,
+          }),
+          ...(txn.user_id && {
+            user_id: txn.user_id,
+          }),
+          items: txn.items.map((item) => ({
+            product_id: item.product_id,
+            product_name: item.product_name,
+            quantity: item.quantity,
+            unit_price: item.unit_price,
+            total_price: item.total_price,
+            currency: item.currency,
+            unit_price_usd: item.unit_price_usd || 0,
+            total_price_usd: item.total_price_usd || 0,
+          })),
+        };
 
-        if (txnError) throw txnError;
+        const response = await fetch("/api/transactions", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-auth-data": authData,
+          },
+          body: JSON.stringify(payload),
+        });
 
-        // Step 2: Insert transaction items
-        const txnItems = txn.items.map((item) => ({
-          store_id: txn.store_id,
-          transaction_id: transaction.id,
-          product_id: item.product_id,
-          product_name: item.product_name,
-          quantity: item.quantity,
-          unit_price: item.unit_price,
-          total_price: item.total_price,
-          currency: item.currency,
-        }));
+        if (!response.ok) {
+          const errorBody = await response.text();
+          throw new Error(`API error ${response.status}: ${errorBody}`);
+        }
 
-        const { error: itemsError } = await supabase
-          .from("transaction_items")
-          .insert(txnItems);
+        const apiResult = await response.json();
 
-        if (itemsError) throw itemsError;
-
-        // Step 3: Decrement stock for each item
+        // Step 2: Decrement stock for each item via RPC (this needs anonymous client since it's a function call, but the API could handle this too)
+        // The API route already creates the transaction, so we just need to decrement stock
+        const supabase = createClient();
         for (const item of txn.items) {
           const { error: stockError } = await supabase.rpc("decrement_stock", {
             product_id: item.product_id,
@@ -226,7 +280,7 @@ class SyncEngine {
           }
         }
 
-        // Step 4: Remove from queue after successful sync
+        // Step 3: Remove from queue after successful sync
         await removeQueuedTransaction(txn.id);
         result.pushed++;
         console.log(`[Sync] Synced transaction ${txn.transaction_number}`);
@@ -241,6 +295,10 @@ class SyncEngine {
         );
       }
     }
+
+    // Update pending count after sync attempt
+    this._pendingCount = await getQueuedCount();
+    this.notify();
 
     return result;
   }
@@ -312,6 +370,13 @@ class SyncEngine {
     this.storeId = storeId;
 
     if (navigator.onLine) {
+      // Attempt to push any queued transactions from previous offline sessions
+      const queuedCount = await getQueuedCount();
+      if (queuedCount > 0) {
+        console.log(`[Sync] Found ${queuedCount} queued transactions from previous session, attempting sync...`);
+        await this.pushQueuedTransactions();
+      }
+
       // Check if cache is empty
       const count = await getCachedProductsCount();
       if (count === 0) {
@@ -329,6 +394,14 @@ class SyncEngine {
         "[Sync] Offline at startup, using existing cache if available"
       );
     }
+  }
+
+  /**
+   * Clean up resources (call on unmount)
+   */
+  destroy(): void {
+    this.stopRetryInterval();
+    this.listeners.clear();
   }
 }
 

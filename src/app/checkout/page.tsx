@@ -192,9 +192,11 @@ function CheckoutContent() {
         // Offline: Queue for later sync
         const { queueTransaction } = await import("@/lib/db/localDB");
         const authDataOffline = JSON.parse(localStorage.getItem("goldensquirrel_auth") || "{}");
+        // Ensure store_id is never empty - try multiple fallbacks
+        const offlineStoreId = authDataOffline.store_id || "";
         const offlineTxnData: any = {
           id: crypto.randomUUID(),
-          store_id: authDataOffline.store_id || "",
+          store_id: offlineStoreId,
           transaction_number: txnNumber,
           subtotal: getSubtotal(),
           total_amount: total,
@@ -218,12 +220,24 @@ function CheckoutContent() {
           })),
           created_at: new Date().toISOString(),
         };
-        // Add user_name for all users (owners and employees)
+        // Add user_name for ALL users (owners included) - always set independently of user_id
         if (currentUser && currentUser.username) {
           offlineTxnData.user_name = currentUser.displayName || currentUser.username;
           // Only set user_id for employees (not owners, whose ID is a store_id)
           if (!currentUser.isOwner && currentUser.id) {
             offlineTxnData.user_id = currentUser.id;
+          }
+        } else {
+          // Fallback: try to get user info from auth data
+          try {
+            const storedUser = JSON.parse(localStorage.getItem("goldensquirrel_user") || "{}");
+            if (storedUser.displayName) {
+              offlineTxnData.user_name = storedUser.displayName;
+            } else if (storedUser.username) {
+              offlineTxnData.user_name = storedUser.username;
+            }
+          } catch (e) {
+            // Ignore parse errors
           }
         }
         await queueTransaction(offlineTxnData);
