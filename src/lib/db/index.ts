@@ -8,6 +8,9 @@ export {
   getCachedProductByBarcode,
   getCachedProductById,
   getCachedProductsCount,
+  cacheTransactions,
+  getCachedTransactions,
+  getCachedTransactionsCount,
   queueTransaction,
   getQueuedTransactions,
   removeQueuedTransaction,
@@ -19,6 +22,8 @@ export {
 
 export type {
   CachedProduct,
+  CachedTransaction,
+  CachedTransactionItem,
   QueuedTransaction,
   QueuedTransactionItem,
 } from "./localDB";

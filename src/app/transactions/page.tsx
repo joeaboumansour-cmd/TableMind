@@ -21,6 +21,7 @@ import {
   Phone,
   Filter,
   User,
+  WifiOff,
 } from "lucide-react";
 import { formatLL, formatDateTime, formatRelativeTime, formatUSD } from "@/lib/utils/format";
 import { toast } from "sonner";
@@ -30,6 +31,12 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
+import {
+  cacheTransactions,
+  getCachedTransactions,
+  getCachedTransactionsCount,
+} from "@/lib/db";
+import type { CachedTransaction, CachedTransactionItem } from "@/lib/db";
 
 interface TransactionItem {
   id: string;
@@ -79,6 +86,7 @@ export default function TransactionHistoryPage() {
   const [dateFilter, setDateFilter] = useState<DateFilter>("all");
   const [openAccordion, setOpenAccordion] = useState<string | null>(null);
   const [isOffline, setIsOffline] = useState(false);
+  const [isShowingCached, setIsShowingCached] = useState(false);
   
   // Track online/offline status
   useEffect(() => {
@@ -93,11 +101,33 @@ export default function TransactionHistoryPage() {
     };
   }, []);
 
+  const fetchTransactionsFromCache = useCallback(async (storeId: string) => {
+    try {
+      const cached = await getCachedTransactions(storeId);
+      if (cached.length > 0) {
+        const withChange = cached.map((t) => ({
+          ...t,
+          calculated_change: t.amount_paid && t.total_amount ? t.amount_paid - t.total_amount : 0,
+        }));
+        setTransactions(withChange);
+        setIsShowingCached(true);
+      } else {
+        setError("You are offline and no cached transactions are available.");
+        setIsShowingCached(false);
+      }
+    } catch (err) {
+      console.error("Error reading cached transactions:", err);
+      setError("Failed to read cached transactions.");
+      setIsShowingCached(false);
+    }
+  }, []);
+
   const fetchTransactions = useCallback(async () => {
     if (!user) return;
     
     setIsLoading(true);
     setError(null);
+    setIsShowingCached(false);
 
     try {
       const authData = localStorage.getItem("goldensquirrel_auth");
@@ -115,7 +145,8 @@ export default function TransactionHistoryPage() {
 
       if (!navigator.onLine) {
         setIsOffline(true);
-        setError("You are offline. Transactions cannot be loaded while offline.");
+        // Fall back to cached transactions when offline
+        await fetchTransactionsFromCache(store_id);
         setIsLoading(false);
         return;
       }
@@ -136,18 +167,54 @@ export default function TransactionHistoryPage() {
         calculated_change: t.amount_paid && t.total_amount ? t.amount_paid - t.total_amount : 0
       }));
       setTransactions(transactionsWithChange);
+      setIsShowingCached(false);
+
+      // Cache transactions locally for offline use
+      if (data.transactions && data.transactions.length > 0) {
+        const toCache: CachedTransaction[] = data.transactions.map((t: any) => ({
+          id: t.id,
+          store_id: store_id,
+          transaction_number: t.transaction_number,
+          subtotal: t.subtotal,
+          total_amount: t.total_amount,
+          amount_paid: t.amount_paid,
+          change_given: t.change_given || 0,
+          created_at: t.created_at,
+          whatsapp_sent_to: t.whatsapp_sent_to,
+          user_id: t.user_id,
+          user_name: t.user_name,
+          transaction_items: (t.transaction_items || []).map((item: any) => ({
+            id: item.id,
+            product_name: item.product_name,
+            quantity: item.quantity,
+            unit_price: item.unit_price,
+            total_price: item.total_price,
+            currency: item.currency,
+          })),
+        }));
+        cacheTransactions(toCache).catch((err) =>
+          console.error("[Transactions] Failed to cache transactions:", err)
+        );
+      }
     } catch (err: any) {
       console.error("Error fetching transactions:", err);
       if (!navigator.onLine) {
         setIsOffline(true);
-        setError("You are offline. Transactions cannot be loaded while offline.");
+        // Try falling back to cache on network error too
+        const authData = localStorage.getItem("goldensquirrel_auth");
+        if (authData) {
+          const parsed = JSON.parse(authData);
+          if (parsed.store_id) {
+            await fetchTransactionsFromCache(parsed.store_id);
+          }
+        }
       } else {
         setError(err.message || "Failed to load transactions");
       }
     } finally {
       setIsLoading(false);
     }
-  }, [user, router]);
+  }, [user, router, fetchTransactionsFromCache]);
 
   useEffect(() => {
     fetchTransactions();
@@ -340,13 +407,38 @@ export default function TransactionHistoryPage() {
       </header>
 
       <div className="container mx-auto px-4 py-6">
-        {error && (
+        {isOffline && (
+          <Card className="mb-6 border-amber-500 bg-amber-500/5">
+            <CardContent className="flex items-center gap-3 pt-4">
+              <WifiOff className="h-5 w-5 text-amber-600 shrink-0" />
+              <div>
+                <p className="font-medium text-amber-700 text-sm">
+                  You are offline
+                </p>
+                <p className="text-amber-600/80 text-xs mt-0.5">
+                  {isShowingCached
+                    ? "Showing cached transaction history. Data may not be up to date."
+                    : "Transactions cannot be fetched. Please connect to the internet and refresh."}
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {error && !isShowingCached && (
           <Card className="mb-6 border-destructive">
             <CardContent className="flex items-center gap-4 pt-6">
-              <AlertCircle className="h-5 w-5 text-destructive" />
+              <AlertCircle className="h-5 w-5 text-destructive shrink-0" />
               <p className="text-destructive">{error}</p>
             </CardContent>
           </Card>
+        )}
+
+        {isShowingCached && (
+          <div className="mb-4 text-xs text-muted-foreground flex items-center gap-2">
+            <div className="h-2 w-2 rounded-full bg-amber-500 animate-pulse" />
+            <span>Showing cached data from your last online session. {transactions.length} transactions available.</span>
+          </div>
         )}
 
         {filteredTransactions.length === 0 && !error ? (
@@ -472,23 +564,23 @@ export default function TransactionHistoryPage() {
                       </div>
 
                        <div className="flex flex-col gap-2">
-                         {transaction.whatsapp_sent_to ? (
-                           <div className="flex-1 flex items-center justify-center text-sm text-green-600 font-medium">
-                             <Send className="h-4 w-4 mr-2" />
-                             Sent to: {transaction.whatsapp_sent_to}
-                           </div>
-                         ) : (
-                           <Button variant="outline" className="flex-1" onClick={() => handleSendWhatsApp(transaction)}>
-                             <Send className="h-4 w-4 mr-2" />
-                             Send to WhatsApp
-                           </Button>
-                         )}
-                         {transaction.user_name && (
-                           <div className="flex-1 flex items-center justify-center text-xs text-muted-foreground">
-                             <User className="h-3 w-3 mr-1" />
-                             By: {transaction.user_name}
-                           </div>
-                         )}
+                          {transaction.whatsapp_sent_to ? (
+                            <div className="flex-1 flex items-center justify-center text-sm text-green-600 font-medium">
+                              <Send className="h-4 w-4 mr-2" />
+                              Sent to: {transaction.whatsapp_sent_to}
+                            </div>
+                          ) : (
+                            <Button variant="outline" className="flex-1" onClick={() => handleSendWhatsApp(transaction)}>
+                              <Send className="h-4 w-4 mr-2" />
+                              Send to WhatsApp
+                            </Button>
+                          )}
+                          {transaction.user_name && (
+                            <div className="flex-1 flex items-center justify-center text-xs text-muted-foreground">
+                              <User className="h-3 w-3 mr-1" />
+                              By: {transaction.user_name}
+                            </div>
+                          )}
                        </div>
                      </CardContent>
                   </CollapsibleContent>

@@ -7,6 +7,30 @@ import Dexie, { type EntityTable } from "dexie";
 
 // ---- Types ----
 
+export interface CachedTransactionItem {
+  id: string;
+  product_name: string;
+  quantity: number;
+  unit_price: number;
+  total_price: number;
+  currency: string;
+}
+
+export interface CachedTransaction {
+  id: string;
+  store_id: string;
+  transaction_number: string;
+  subtotal: number;
+  total_amount: number;
+  amount_paid: number;
+  change_given: number;
+  created_at: string;
+  whatsapp_sent_to?: string;
+  user_id?: string;
+  user_name?: string;
+  transaction_items: CachedTransactionItem[];
+}
+
 export interface CachedProduct {
   id: string;
   store_id: string;
@@ -67,6 +91,7 @@ export interface PendingWrite {
 
 const db = new Dexie("GoldenSquirrelPOS") as Dexie & {
   products_cache: EntityTable<CachedProduct, "id">;
+  transactions_cache: EntityTable<CachedTransaction, "id">;
   offline_queue: EntityTable<QueuedTransaction, "id">;
   pending_writes: EntityTable<PendingWrite, "id">;
 };
@@ -76,6 +101,10 @@ db.version(1).stores({
   // Products cache - mirrored from Supabase
   products_cache:
     "id, store_id, name, barcode, updated_at",
+
+  // Transaction history cache - mirrored from API responses
+  transactions_cache:
+    "id, store_id, transaction_number, created_at",
 
   // Offline transactions waiting to be synced
   offline_queue:
@@ -118,6 +147,26 @@ export async function getCachedProductById(
 
 export async function getCachedProductsCount(): Promise<number> {
   return db.products_cache.count();
+}
+
+// ---- Transactions Cache Operations ----
+
+export async function cacheTransactions(transactions: CachedTransaction[]): Promise<void> {
+  await db.transactions_cache.clear();
+  await db.transactions_cache.bulkAdd(transactions);
+  console.log(`[LocalDB] Cached ${transactions.length} transactions`);
+}
+
+export async function getCachedTransactions(storeId: string): Promise<CachedTransaction[]> {
+  return db.transactions_cache
+    .where("store_id")
+    .equals(storeId)
+    .reverse()
+    .sortBy("created_at");
+}
+
+export async function getCachedTransactionsCount(): Promise<number> {
+  return db.transactions_cache.count();
 }
 
 // ---- Offline Queue Operations ----
