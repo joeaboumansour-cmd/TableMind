@@ -102,15 +102,23 @@ db.version(1).stores({
   products_cache:
     "id, store_id, name, barcode, updated_at",
 
-  // Transaction history cache - mirrored from API responses
-  transactions_cache:
-    "id, store_id, transaction_number, created_at",
-
   // Offline transactions waiting to be synced
   offline_queue:
     "id, store_id, created_at",
 
   // Pending writes (generic fallback for other operations)
+  pending_writes:
+    "id, type, created_at, retry_count",
+});
+
+// Database version 2: add transactions history cache
+db.version(2).stores({
+  products_cache:
+    "id, store_id, name, barcode, updated_at",
+  transactions_cache:
+    "id, store_id, transaction_number, created_at",
+  offline_queue:
+    "id, store_id, created_at",
   pending_writes:
     "id, type, created_at, retry_count",
 });
@@ -214,6 +222,7 @@ export async function removePendingWrite(id: string): Promise<void> {
 
 export async function clearAllData(): Promise<void> {
   await db.products_cache.clear();
+  await db.transactions_cache.clear();
   await db.offline_queue.clear();
   await db.pending_writes.clear();
   console.log("[LocalDB] Cleared all local data");
@@ -221,11 +230,13 @@ export async function clearAllData(): Promise<void> {
 
 export async function getLocalDBSize(): Promise<{
   products: number;
+  transactions_cache: number;
   queued_transactions: number;
   pending_writes: number;
 }> {
   return {
     products: await db.products_cache.count(),
+    transactions_cache: await db.transactions_cache.count(),
     queued_transactions: await db.offline_queue.count(),
     pending_writes: await db.pending_writes.count(),
   };
