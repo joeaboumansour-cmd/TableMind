@@ -41,8 +41,6 @@ import BarcodeScanner from "@/components/BarcodeScanner";
 import CSVImportDialog from "@/components/CSVImportDialog";
 import { downloadCSV, productsToCSV } from "@/lib/csv/utils";
 
-const supabase = createClient();
-
 interface Product {
   id: string;
   store_id: string;
@@ -62,6 +60,8 @@ interface Product {
 export default function StoreProductsPage() {
   const router = useRouter();
   const { user, logout: authLogout, isLoading: authLoading } = useAuth();
+  // Lazy init supabase client inside component to avoid SSR issues on hard refresh
+  const [supabase] = useState(() => createClient());
   const [storeId, setStoreId] = useState<string>("");
   const [products, setProducts] = useState<Product[]>([]);
   const [isLoading, setIsLoading] = useState(true);
