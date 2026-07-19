@@ -409,8 +409,6 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
       if (!isMountedRef.current) return;
       if (err.name?.includes("NotAllowed") || err.name?.includes("Permission")) setError("Camera permission denied.");
       else if (err.name?.includes("NotFound")) setError("No camera found.");
-      else if (err.name?.includes("NotReadable")) setError("Camera in use by another app.");
-      else setError("Unable to access camera.");
     }
   }, [captureLoop, startQuagga]);
 
