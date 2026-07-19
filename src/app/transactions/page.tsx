@@ -78,7 +78,21 @@ export default function TransactionHistoryPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [dateFilter, setDateFilter] = useState<DateFilter>("all");
   const [openAccordion, setOpenAccordion] = useState<string | null>(null);
+  const [isOffline, setIsOffline] = useState(false);
   
+  // Track online/offline status
+  useEffect(() => {
+    setIsOffline(!navigator.onLine);
+    const handleOnline = () => setIsOffline(false);
+    const handleOffline = () => setIsOffline(true);
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
+    return () => {
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
+    };
+  }, []);
+
   const fetchTransactions = useCallback(async () => {
     if (!user) return;
     
@@ -96,6 +110,13 @@ export default function TransactionHistoryPage() {
       const store_id = parsed.store_id;
       if (!store_id) {
         router.replace("/login");
+        return;
+      }
+
+      if (!navigator.onLine) {
+        setIsOffline(true);
+        setError("You are offline. Transactions cannot be loaded while offline.");
+        setIsLoading(false);
         return;
       }
 
@@ -117,7 +138,12 @@ export default function TransactionHistoryPage() {
       setTransactions(transactionsWithChange);
     } catch (err: any) {
       console.error("Error fetching transactions:", err);
-      setError(err.message || "Failed to load transactions");
+      if (!navigator.onLine) {
+        setIsOffline(true);
+        setError("You are offline. Transactions cannot be loaded while offline.");
+      } else {
+        setError(err.message || "Failed to load transactions");
+      }
     } finally {
       setIsLoading(false);
     }

@@ -19,6 +19,7 @@ const withPWA = withPWAInit({
     additionalManifestEntries: [
       { url: "/checkout", revision: "tablemind-checkout" },
       { url: "/pos/products", revision: "tablemind-products" },
+      { url: "/transactions", revision: "tablemind-transactions" },
     ],
   },
 });
