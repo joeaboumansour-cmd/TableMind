@@ -4,18 +4,19 @@ import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { useAuth } from "@/lib/auth/AuthContext";
+import { hasCachedCredentials, getCachedCredentials } from "@/lib/auth/offlineAuth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Loader2, Eye, EyeOff, AlertTriangle, Store, User } from "lucide-react";
+import { Loader2, Eye, EyeOff, AlertTriangle, Store, User, WifiOff, Wifi } from "lucide-react";
 import { toast } from "sonner";
 
 const supabase = createClient();
 
 export default function LoginPage() {
   const router = useRouter();
-  const { user, login, isLoading } = useAuth();
+  const { user, login, loginOffline, isLoading } = useAuth();
   const [showPassword, setShowPassword] = useState(false);
 
   // Form fields
@@ -23,12 +24,42 @@ export default function LoginPage() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
 
+  // Offline state tracking
+  const [isOffline, setIsOffline] = useState(
+    typeof navigator !== "undefined" ? !navigator.onLine : false
+  );
+  const [cachedStoreUsername, setCachedStoreUsername] = useState<string | null>(null);
+
   // If already logged in, redirect to POS
   useEffect(() => {
     if (user) {
       router.replace("/pos");
     }
   }, [user, router]);
+
+  // Track online/offline status and check for cached credentials
+  useEffect(() => {
+    const handleOnline = () => setIsOffline(false);
+    const handleOffline = () => setIsOffline(true);
+
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
+
+    // Check for cached credentials
+    if (hasCachedCredentials()) {
+      const cached = getCachedCredentials();
+      if (cached) {
+        setCachedStoreUsername(cached.storeUsername);
+        // Pre-fill the store username if the form is empty
+        setStoreUsername((prev) => prev || cached.storeUsername);
+      }
+    }
+
+    return () => {
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
+    };
+  }, []);
 
   // Main login handler — works for both store owners and employees
   const handleLoginSubmit = async (e: React.FormEvent) => {
@@ -39,6 +70,26 @@ export default function LoginPage() {
       return;
     }
 
+    // If offline, use cached credentials
+    if (!navigator.onLine) {
+      if (!hasCachedCredentials()) {
+        toast.error("You are offline and no cached credentials are available. Please connect to the internet to log in.");
+        return;
+      }
+
+      const result = await loginOffline(storeUsername.trim(), password);
+      if (result.success) {
+        toast.success("Welcome back! (offline login)");
+        setTimeout(() => {
+          window.location.href = "/pos";
+        }, 100);
+      } else {
+        toast.error(result.error || "Invalid credentials");
+      }
+      return;
+    }
+
+    // Online: proceed with normal Supabase login
     // Find store by store username
     const { data: store, error: storeError } = await supabase
       .from("stores")
@@ -159,11 +210,35 @@ export default function LoginPage() {
         </div>
       </div>
 
+      {/* Offline Banner */}
+      {isOffline && (
+        <div className="mb-4 w-full max-w-md">
+          <div className="flex items-center gap-3 p-4 bg-amber-500/10 border border-amber-500/30 rounded-lg">
+            <WifiOff className="h-5 w-5 text-amber-600 shrink-0" />
+            <div className="flex-1">
+              <p className="font-medium text-amber-700 text-sm">
+                You are offline
+              </p>
+              <p className="text-amber-600/80 text-xs mt-0.5">
+                {cachedStoreUsername
+                  ? `Cached credentials available for "${cachedStoreUsername}". You can log in while offline.`
+                  : "No cached credentials available. Please connect to the internet to log in."}
+              </p>
+            </div>
+            <div className="flex items-center text-amber-600">
+              {isOffline ? <WifiOff className="h-4 w-4" /> : <Wifi className="h-4 w-4" />}
+            </div>
+          </div>
+        </div>
+      )}
+
       <Card className="w-full max-w-md border-2">
         <CardHeader className="text-center">
           <CardTitle className="text-2xl">Store Login</CardTitle>
           <CardDescription>
-            Enter your store credentials to access the POS
+            {isOffline
+              ? "Offline mode — using cached credentials"
+              : "Enter your store credentials to access the POS"}
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -229,10 +304,25 @@ export default function LoginPage() {
                   <Loader2 className="mr-2 h-5 w-5 animate-spin" />
                   Signing in...
                 </>
+              ) : isOffline ? (
+                "Sign In (Offline)"
               ) : (
                 "Sign In"
               )}
             </Button>
+
+            {/* Cached credentials hint */}
+            {isOffline && cachedStoreUsername && (
+              <div className="flex items-start gap-2 p-3 bg-muted/50 rounded-lg">
+                <AlertTriangle className="h-4 w-4 text-amber-500 mt-0.5 flex-shrink-0" />
+                <div className="text-sm text-muted-foreground">
+                  <p className="font-medium">Offline Login</p>
+                  <p className="text-xs">
+                    Enter your credentials to log in using cached data. Your password was securely cached during your last online session.
+                  </p>
+                </div>
+              </div>
+            )}
           </form>
 
           <div className="mt-6 p-4 bg-muted rounded-lg space-y-2">

@@ -34,6 +34,7 @@ import {
   getCachedProducts,
   getCachedProductByBarcode,
   getCachedProductsCount,
+  seedProductsIfNeeded,
 } from "@/lib/db";
 import type { CachedProduct } from "@/lib/db";
 
@@ -174,8 +175,16 @@ export default function POSPage() {
             // Initialize/refresh local cache in background (non-blocking)
             syncEngine.initialize(store_id).catch(() => {});
           } else if (!cached || cached.length === 0) {
-            // Offline with no cache - show empty state gracefully
-            console.log("[POS] Offline with no cached products");
+            // Offline with no cache - seed from static JSON for first-time offline use
+            console.log("[POS] Offline with no cached products, seeding from static data...");
+            const seeded = await seedProductsIfNeeded(store_id);
+            if (seeded > 0 && isMounted) {
+              const seededProducts = await getCachedProducts(store_id);
+              if (seededProducts && seededProducts.length > 0) {
+                setProducts(mapCachedToProducts(seededProducts));
+              }
+              toast.success(`Loaded ${seeded} default products (offline mode)`);
+            }
           }
         }
       } catch (error) {

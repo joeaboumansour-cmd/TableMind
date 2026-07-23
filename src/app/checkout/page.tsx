@@ -17,6 +17,7 @@ import {
   Calculator,
 } from "lucide-react";
 import { useCartStore } from "@/lib/stores/cartStore";
+import { queueStockDecrementsForTransaction } from "@/lib/db";
 import { toast } from "sonner";
 import { formatLL, formatUSD, formatDateTime, SELL_RATE, RETURN_RATE } from "@/lib/utils/format";
 
@@ -31,6 +32,9 @@ function CheckoutContent() {
   const [whatsappNumber, setWhatsappNumber] = useState<string>("");
   const [isProcessing, setIsProcessing] = useState(false);
   const [transactionComplete, setTransactionComplete] = useState(false);
+  const [isOffline, setIsOffline] = useState(
+    typeof navigator !== "undefined" ? !navigator.onLine : false
+  );
   const [transactionNumber, setTransactionNumber] = useState<string>("");
   const [paidAmount, setPaidAmount] = useState<number>(0);
   const [changeGiven, setChangeGiven] = useState<number>(0);
@@ -241,6 +245,13 @@ function CheckoutContent() {
           }
         }
         await queueTransaction(offlineTxnData);
+
+        // Queue stock decrements as pending_writes for reliable sync
+        await queueStockDecrementsForTransaction(
+          items.map((item) => ({ product_id: item.product_id, quantity: item.quantity })),
+          offlineStoreId
+        );
+
         toast.info("Transaction saved offline - will sync when online");
       }
 
@@ -313,6 +324,18 @@ function CheckoutContent() {
       setIsProcessing(false);
     }
   };
+
+  // Track online/offline status
+  useEffect(() => {
+    const handleOnline = () => setIsOffline(false);
+    const handleOffline = () => setIsOffline(true);
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
+    return () => {
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
+    };
+  }, []);
 
   // Handle new transaction
   const handleNewTransaction = () => {

@@ -3,6 +3,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { StoreUser, canAccess, getFullPermissions, SectionKey, UserPermissions } from "./permissions";
+import { cacheCredentials, clearCachedCredentials, validateCachedCredentials } from "./offlineAuth";
 
 const supabase = createClient();
 
@@ -11,6 +12,7 @@ interface AuthContextValue {
   isLoading: boolean;
   login: (storeUsername: string, password: string) => Promise<{ success: boolean; error?: string }>;
   loginEmployee: (storeId: string, username: string, password: string) => Promise<{ success: boolean; error?: string }>;
+  loginOffline: (storeUsername: string, password: string) => Promise<{ success: boolean; error?: string }>;
   logout: () => void;
   canAccess: (section: SectionKey) => boolean;
   refresh: () => Promise<void>;
@@ -75,6 +77,7 @@ function saveUserToStorage(user: StoreUser) {
 function clearUserFromStorage() {
   localStorage.removeItem("goldensquirrel_user");
   localStorage.removeItem("goldensquirrel_auth"); // legacy cleanup
+  clearCachedCredentials(); // Clear offline credentials on logout
 }
 
 export function AuthProvider({ children }: AuthProviderProps) {
@@ -130,6 +133,15 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
       setUser(ownerUser);
       saveUserToStorage(ownerUser);
+
+      // Cache credentials for offline login fallback
+      cacheCredentials(storeUsername, password, {
+        id: store.id,
+        username: store.username,
+        password_hash: store.password_hash,
+        license_expires_at: store.license_expires_at,
+      });
+
       return { success: true };
     } catch (err) {
       console.error("Login error:", err);
@@ -194,10 +206,99 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
       setUser(employeeUser);
       saveUserToStorage(employeeUser);
+
+      // Cache credentials for offline login fallback
+      cacheCredentials(username, password, {
+        id: employee.store_id,
+        username: username,
+        password_hash: employee.password_hash,
+        license_expires_at: "", // Will be filled from store data if available
+      }, {
+        id: employee.id,
+        store_id: employee.store_id,
+        username: employee.username,
+        password_hash: employee.password_hash,
+        display_name: employee.display_name,
+        is_active: employee.is_active,
+        permissions: employee.permissions,
+      });
+
       return { success: true };
     } catch (err) {
       console.error("Employee login error:", err);
       return { success: false, error: "An error occurred during login" };
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  /**
+   * Offline login fallback — validates credentials against cached data.
+   * Used when the user is offline and cannot reach Supabase.
+   */
+  const loginOffline = useCallback(async (storeUsername: string, password: string): Promise<{ success: boolean; error?: string }> => {
+    setIsLoading(true);
+    try {
+      const cached = validateCachedCredentials(storeUsername, password);
+      if (!cached) {
+        return { success: false, error: "No cached credentials found for this store. Please connect to the internet to log in." };
+      }
+
+      const { storeData, employeeData } = cached;
+
+      // If employee data exists, this was an employee login
+      if (employeeData) {
+        // Parse permissions
+        let perms: UserPermissions;
+        try {
+          const rawPerms = typeof employeeData.permissions === "string"
+            ? JSON.parse(employeeData.permissions)
+            : employeeData.permissions;
+          perms = {
+            pos: rawPerms.pos === true,
+            inventory: rawPerms.inventory === true,
+            transactions: rawPerms.transactions === true,
+            receipts: rawPerms.receipts === true,
+          };
+        } catch {
+          perms = {
+            pos: false,
+            inventory: false,
+            transactions: false,
+            receipts: false,
+          };
+        }
+
+        const employeeUser: StoreUser = {
+          id: employeeData.id,
+          storeId: employeeData.store_id,
+          username: employeeData.username,
+          displayName: employeeData.display_name || employeeData.username,
+          isOwner: false,
+          permissions: perms,
+        };
+
+        setUser(employeeUser);
+        saveUserToStorage(employeeUser);
+        return { success: true };
+      }
+
+      // Owner login from cached data
+      const ownerUser: StoreUser = {
+        id: storeData.id,
+        storeId: storeData.id,
+        username: storeData.username,
+        displayName: storeData.username,
+        isOwner: true,
+        permissions: getFullPermissions(),
+      };
+
+      setUser(ownerUser);
+      saveUserToStorage(ownerUser);
+      return { success: true };
+    } catch (err) {
+      console.error("Offline login error:", err);
+      return { success: false, error: "An error occurred during offline login" };
     } finally {
       setIsLoading(false);
     }
@@ -255,6 +356,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
       isLoading,
       login,
       loginEmployee,
+      loginOffline,
       logout,
       canAccess: checkAccess,
       refresh,

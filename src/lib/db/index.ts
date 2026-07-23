@@ -1,6 +1,6 @@
-// =============================================
+// ===
 // Local DB Module - Public API
-// =============================================
+// ===
 
 export {
   cacheProducts,
@@ -18,6 +18,10 @@ export {
   clearAllData,
   getLocalDBSize,
   localDB,
+  fetchSeedProducts,
+  seedProductsIfNeeded,
+  queueStockDecrement,
+  queueStockDecrementsForTransaction,
 } from "./localDB";
 
 export type {
@@ -26,4 +30,7 @@ export type {
   CachedTransactionItem,
   QueuedTransaction,
   QueuedTransactionItem,
+  SeedProduct,
+  PendingWrite,
 } from "./localDB";
+

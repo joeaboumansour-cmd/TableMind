@@ -12,8 +12,11 @@ import {
   getCachedProductsCount,
   getCachedProducts,
   getQueuedCount,
+  getPendingWrites,
+  removePendingWrite,
+  addPendingWrite,
 } from "@/lib/db/localDB";
-import type { CachedProduct, QueuedTransaction } from "@/lib/db/localDB";
+import type { CachedProduct, QueuedTransaction, PendingWrite } from "@/lib/db/localDB";
 
 type SyncStatus = "idle" | "syncing" | "error" | "offline";
 type SyncListener = (status: SyncStatus, pendingCount?: number) => void;
@@ -191,6 +194,8 @@ class SyncEngine {
   /**
    * Push queued offline transactions to Supabase via the API endpoint
    * Using the API route ensures we use the service role client (bypasses RLS)
+   * Stock decrements are queued as pending_writes instead of calling RPC directly,
+   * ensuring they are retried if the RPC fails or the user goes offline.
    */
   async pushQueuedTransactions(): Promise<{
     pushed: number;
@@ -264,23 +269,26 @@ class SyncEngine {
 
         const apiResult = await response.json();
 
-        // Step 2: Decrement stock for each item via RPC (this needs anonymous client since it's a function call, but the API could handle this too)
-        // The API route already creates the transaction, so we just need to decrement stock
-        const supabase = createClient();
+        // Queue stock decrements as pending_writes instead of calling RPC directly.
+        // This ensures stock is decremented even if the RPC fails or the user goes offline.
+        // The processPendingWrites() method will process these during sync.
         for (const item of txn.items) {
-          const { error: stockError } = await supabase.rpc("decrement_stock", {
-            product_id: item.product_id,
-            quantity: item.quantity,
-          });
-          if (stockError) {
-            console.warn(
-              `[Sync] Stock decrement warning for ${item.product_name}:`,
-              stockError
-            );
-          }
+          const pendingWrite: PendingWrite = {
+            id: crypto.randomUUID(),
+            type: "stock_decrement",
+            payload: {
+              product_id: item.product_id,
+              quantity: item.quantity,
+              store_id: txn.store_id,
+            },
+            created_at: new Date().toISOString(),
+            retry_count: 0,
+            last_error: null,
+          };
+          await addPendingWrite(pendingWrite);
         }
 
-        // Step 3: Remove from queue after successful sync
+        // Remove from queue after successful sync
         await removeQueuedTransaction(txn.id);
         result.pushed++;
         console.log(`[Sync] Synced transaction ${txn.transaction_number}`);
@@ -304,7 +312,83 @@ class SyncEngine {
   }
 
   /**
-   * Full sync: pull latest products and push queued transactions
+   * Process pending stock decrements from the pending_writes table.
+   * Each stock decrement is processed via the Supabase RPC.
+   * If a decrement fails, it is retried on the next sync cycle.
+   */
+  async processPendingWrites(): Promise<{
+    processed: number;
+    failed: number;
+    errors: string[];
+  }> {
+    const result = { processed: 0, failed: 0, errors: [] as string[] };
+
+    const pendingWrites = await getPendingWrites();
+    const stockDecrements = pendingWrites.filter(
+      (w) => w.type === "stock_decrement"
+    );
+
+    if (stockDecrements.length === 0) {
+      return result;
+    }
+
+    console.log(`[Sync] Processing ${stockDecrements.length} pending stock decrements...`);
+
+    const supabase = createClient();
+
+    for (const write of stockDecrements) {
+      try {
+        const payload = write.payload as {
+          product_id: string;
+          quantity: number;
+          store_id: string;
+        };
+
+        const { error: stockError } = await supabase.rpc("decrement_stock", {
+          product_id: payload.product_id,
+          quantity: payload.quantity,
+        });
+
+        if (stockError) {
+          throw new Error(stockError.message || "Stock decrement failed");
+        }
+
+        // Success — remove from pending writes
+        await removePendingWrite(write.id);
+        result.processed++;
+        console.log(`[Sync] Processed stock decrement for product ${payload.product_id}`);
+      } catch (error: any) {
+        console.error(
+          `[Sync] Failed to process stock decrement ${write.id}:`,
+          error
+        );
+        result.failed++;
+        result.errors.push(
+          `Stock decrement ${write.id}: ${error.message}`
+        );
+
+        // Update retry count and last error
+        // Use direct DB modification since updatePendingWriteRetry may not be available
+        try {
+          const { localDB } = await import("@/lib/db/localDB");
+          await localDB.pending_writes
+            .where("id")
+            .equals(write.id)
+            .modify((w) => {
+              w.retry_count += 1;
+              w.last_error = error.message;
+            });
+        } catch (e) {
+          console.warn("[Sync] Failed to update pending write retry count:", e);
+        }
+      }
+    }
+
+    return result;
+  }
+
+  /**
+   * Full sync: pull latest products, push queued transactions, and process pending writes
    */
   async syncNow(): Promise<{
     success: boolean;
@@ -331,21 +415,28 @@ class SyncEngine {
       // Pull latest products (refreshed stock, prices, etc.)
       const pullResult = await this.pullProducts();
 
-      // Push queued transactions
+      // Push queued transactions (also queues stock decrements as pending_writes)
       const pushResult = await this.pushQueuedTransactions();
+
+      // Process pending stock decrements
+      const pendingResult = await this.processPendingWrites();
 
       const success = pullResult.success;
       this._status = success ? "idle" : "error";
       this.notify();
 
-      console.log(`[Sync] Complete: pulled ${pullResult.count} products, pushed ${pushResult.pushed} transactions`);
+      console.log(
+        `[Sync] Complete: pulled ${pullResult.count} products, ` +
+        `pushed ${pushResult.pushed} transactions, ` +
+        `processed ${pendingResult.processed} stock decrements`
+      );
 
       return {
         success,
         pulled: pullResult.count,
         pushed: pushResult.pushed,
-        failed: pushResult.failed,
-        errors: pushResult.errors,
+        failed: pushResult.failed + pendingResult.failed,
+        errors: [...pushResult.errors, ...pendingResult.errors],
       };
     } catch (error: any) {
       this._status = "error";
@@ -379,7 +470,7 @@ class SyncEngine {
         console.log(`[Sync] Found ${queuedCount} queued transactions from previous session, attempting sync...`);
       }
 
-      // syncNow() handles both pulling products and pushing queued transactions
+      // syncNow() handles pulling products, pushing queued transactions, and processing pending writes
       await this.syncNow();
 
       // If syncNow() was blocked by syncInProgress (another sync already running),
