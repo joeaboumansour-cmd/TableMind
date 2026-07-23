@@ -16,7 +16,7 @@ const supabase = createClient();
 
 export default function LoginPage() {
   const router = useRouter();
-  const { user, login, loginOffline, isLoading } = useAuth();
+  const { user, login, loginEmployee, loginOffline, isLoading } = useAuth();
   const [showPassword, setShowPassword] = useState(false);
 
   // Form fields
@@ -136,55 +136,25 @@ export default function LoginPage() {
     }
 
     // Case 2: Employee login
-    const { data: employee, error: empError } = await supabase
-      .from("store_users")
-      .select("*")
-      .eq("store_id", store.id)
-      .eq("username", username.trim())
-      .maybeSingle();
+    // Use loginEmployee from AuthContext which handles caching for offline access
+    const result = await loginEmployee(store.id, username.trim(), password);
+    if (result.success) {
+      // Backward compatibility — also set legacy goldensquirrel_auth so existing
+      // pages that read it for store_id still work
+      localStorage.setItem("goldensquirrel_auth", JSON.stringify({
+        store_id: store.id,
+        username: username.trim(),
+        license_expires_at: store.license_expires_at,
+        timestamp: Date.now(),
+      }));
 
-    if (empError || !employee) {
-      toast.error("Invalid store credentials");
-      return;
+      toast.success("Welcome back!");
+      setTimeout(() => {
+        window.location.href = "/pos";
+      }, 100);
+    } else {
+      toast.error(result.error || "Invalid store credentials");
     }
-
-    if (!employee.is_active) {
-      toast.error("This account has been deactivated. Contact your store owner.");
-      return;
-    }
-
-    if (employee.password_hash !== password) {
-      toast.error("Invalid store credentials");
-      return;
-    }
-
-    // Store employee data in localStorage directly (same pattern as before)
-    const employeeUser = {
-      id: employee.id,
-      storeId: employee.store_id,
-      username: employee.username,
-      displayName: employee.display_name || employee.username,
-      isOwner: false,
-      permissions: typeof employee.permissions === "string"
-        ? JSON.parse(employee.permissions)
-        : employee.permissions,
-    };
-
-    localStorage.setItem("goldensquirrel_user", JSON.stringify(employeeUser));
-
-    // Backward compatibility — also set legacy goldensquirrel_auth so existing
-    // pages that read it for store_id still work
-    localStorage.setItem("goldensquirrel_auth", JSON.stringify({
-      store_id: employee.store_id,
-      username: employee.username,
-      license_expires_at: store.license_expires_at,
-      timestamp: Date.now(),
-    }));
-
-    toast.success(`Welcome, ${employeeUser.displayName}!`);
-    setTimeout(() => {
-      window.location.href = "/pos";
-    }, 100);
   };
 
   return (
