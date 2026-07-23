@@ -8,8 +8,7 @@ const withPWA = withPWAInit({
   cacheOnFrontEndNav: true,
   aggressiveFrontEndNavCaching: true,
   reloadOnOnline: true,
-  // Show a friendly offline page instead of a browser error when a
-  // route is not cached and the device is offline
+  // Show a friendly offline page as fallback for pages not specifically precached
   fallbacks: {
     document: "/offline.html",
   },
@@ -20,6 +19,26 @@ const withPWA = withPWAInit({
       { url: "/checkout", revision: "tablemind-checkout" },
       { url: "/pos/products", revision: "tablemind-products" },
       { url: "/transactions", revision: "tablemind-transactions" },
+    ],
+    // These routes MUST be served even when offline. The default page handler
+    // uses NetworkFirst which fails when offline and falls back to offline.html.
+    // By registering these with StaleWhileRevalidate BEFORE the default handler,
+    // they will:
+    //   1. Online: serve from network, cache the response for offline use
+    //   2. Offline (visited before): serve from cached response
+    //   3. Offline (cold start, never visited): fall through to NetworkFirst → offline.html
+    runtimeCaching: [
+      {
+        urlPattern: /^\/(?:checkout|pos(?:\/products)?|transactions)$/,
+        handler: "StaleWhileRevalidate",
+        options: {
+          cacheName: "offline-pages",
+          expiration: {
+            maxEntries: 32,
+            maxAgeSeconds: 86400, // 24 hours
+          },
+        },
+      },
     ],
   },
 });
