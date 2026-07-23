@@ -8,12 +8,9 @@ const withPWA = withPWAInit({
   cacheOnFrontEndNav: true,
   aggressiveFrontEndNavCaching: true,
   reloadOnOnline: true,
-  // Show a friendly offline page as fallback for pages not specifically precached
-  fallbacks: {
-    document: "/offline.html",
-  },
-  // Precache critical POS documents at build time so they are available
-  // even on a cold offline start (no prior online visit needed)
+  // NO fallbacks.document — we NEVER want to show an offline blocking page.
+  // All critical routes are precached and served by Workbox's precacheAndRoute
+  // which works offline from the very first install, even on cold start.
   workboxOptions: {
     additionalManifestEntries: [
       { url: "/", revision: "tablemind-root" },
@@ -21,29 +18,13 @@ const withPWA = withPWAInit({
       { url: "/checkout", revision: "tablemind-checkout" },
       { url: "/pos/products", revision: "tablemind-products" },
       { url: "/transactions", revision: "tablemind-transactions" },
+      { url: "/login", revision: "tablemind-login" },
       { url: "/offline", revision: "tablemind-offline" },
     ],
-    // These routes MUST be served even when offline. The default page handler
-    // uses NetworkFirst which fails when offline and falls back to offline.html.
-    // By registering these with StaleWhileRevalidate BEFORE the default handler,
-    // they will:
-    //   1. Online: serve from network, cache the response for offline use
-    //   2. Offline (visited before): serve from cached response
-    //   3. Offline (cold start, never visited): fall through to NetworkFirst → offline.html
-    runtimeCaching: [
-      {
-        // Match every critical route: /, /pos, /checkout, /pos/products, /transactions, /offline, /login
-        urlPattern: /^\/(?:pos(?:\/products)?|checkout|transactions|offline|login)?$/,
-        handler: "StaleWhileRevalidate",
-        options: {
-          cacheName: "offline-pages",
-          expiration: {
-            maxEntries: 64,
-            maxAgeSeconds: 86400, // 24 hours
-          },
-        },
-      },
-    ],
+    // No runtimeCaching needed — the additionalManifestEntries above are
+    // added to precacheAndRoute, which creates handlers that serve them
+    // directly from precache. These work offline on first install.
+    // Non-precached routes fall through to the default NetworkFirst handler.
   },
 });
 
