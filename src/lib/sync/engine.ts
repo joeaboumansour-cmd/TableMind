@@ -364,29 +364,29 @@ class SyncEngine {
 
   /**
    * Initialize the local cache (called on app startup)
-   * Pulls products from Supabase if cache is empty
+   * Pulls products from Supabase and pushes queued transactions
+   * Uses syncNow() to ensure the syncInProgress guard prevents race conditions
    */
   async initialize(storeId: string): Promise<void> {
     this.storeId = storeId;
 
     if (navigator.onLine) {
-      // Attempt to push any queued transactions from previous offline sessions
+      // Use syncNow() instead of calling pushQueuedTransactions() directly
+      // This ensures the syncInProgress flag prevents concurrent syncs
+      // (e.g., the online event listener also triggering syncNow())
       const queuedCount = await getQueuedCount();
       if (queuedCount > 0) {
         console.log(`[Sync] Found ${queuedCount} queued transactions from previous session, attempting sync...`);
-        await this.pushQueuedTransactions();
       }
 
-      // Check if cache is empty
+      // syncNow() handles both pulling products and pushing queued transactions
+      await this.syncNow();
+
+      // If syncNow() was blocked by syncInProgress (another sync already running),
+      // ensure we still pull products at least once
       const count = await getCachedProductsCount();
       if (count === 0) {
-        console.log("[Sync] Local cache empty, pulling from Supabase...");
-        await this.pullProducts();
-      } else {
-        console.log(
-          `[Sync] Local cache has ${count} products, refreshing...`
-        );
-        // Always refresh on init to ensure fresh data
+        console.log("[Sync] Local cache still empty after syncNow, pulling directly...");
         await this.pullProducts();
       }
     } else {

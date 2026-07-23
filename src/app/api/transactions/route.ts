@@ -114,6 +114,51 @@ export async function POST(request: Request) {
     const { store_id } = JSON.parse(authData);
     const body = await request.json();
     
+    // Check if a transaction with this transaction_number already exists for this store
+    // This prevents duplicate entries when the sync engine pushes the same queued transaction twice
+    const { data: existingTxn } = await supabase
+      .from("transactions")
+      .select("id")
+      .eq("store_id", store_id)
+      .eq("transaction_number", body.transaction_number)
+      .maybeSingle();
+
+    if (existingTxn) {
+      console.log(`[API] Transaction ${body.transaction_number} already exists, skipping duplicate`);
+      // Fetch the full existing transaction to return it
+      const { data: existing, error: fetchError } = await supabase
+        .from("transactions")
+        .select(`
+          id,
+          transaction_number,
+          subtotal,
+          total_amount,
+          amount_paid,
+          change_given,
+          created_at,
+          whatsapp_sent_to,
+          whatsapp_sent_at,
+          user_id,
+          user_name,
+          transaction_items (
+            id,
+            product_name,
+            quantity,
+            unit_price,
+            total_price,
+            currency
+          )
+        `)
+        .eq("id", existingTxn.id)
+        .single();
+
+      if (fetchError) {
+        return NextResponse.json({ error: fetchError.message }, { status: 500 });
+      }
+
+      return NextResponse.json({ transaction: existing, duplicated: true }, { status: 200 });
+    }
+
     // Create transaction
     const { data: transaction, error } = await supabase
       .from("transactions")
@@ -147,6 +192,41 @@ export async function POST(request: Request) {
       .single();
 
     if (error) {
+      // Handle unique constraint violation as a fallback safety net
+      if (error.code === '23505') {
+        console.log(`[API] Duplicate key violation for ${body.transaction_number}, treating as duplicate`);
+        // Fetch the existing transaction
+        const { data: existing } = await supabase
+          .from("transactions")
+          .select(`
+            id,
+            transaction_number,
+            subtotal,
+            total_amount,
+            amount_paid,
+            change_given,
+            created_at,
+            whatsapp_sent_to,
+            whatsapp_sent_at,
+            user_id,
+            user_name,
+            transaction_items (
+              id,
+              product_name,
+              quantity,
+              unit_price,
+              total_price,
+              currency
+            )
+          `)
+          .eq("store_id", store_id)
+          .eq("transaction_number", body.transaction_number)
+          .single();
+
+        if (existing) {
+          return NextResponse.json({ transaction: existing, duplicated: true }, { status: 200 });
+        }
+      }
       console.error("Transaction creation error:", error);
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
