@@ -16,9 +16,12 @@ const withPWA = withPWAInit({
   // even on a cold offline start (no prior online visit needed)
   workboxOptions: {
     additionalManifestEntries: [
+      { url: "/", revision: "tablemind-root" },
+      { url: "/pos", revision: "tablemind-pos" },
       { url: "/checkout", revision: "tablemind-checkout" },
       { url: "/pos/products", revision: "tablemind-products" },
       { url: "/transactions", revision: "tablemind-transactions" },
+      { url: "/offline", revision: "tablemind-offline" },
     ],
     // These routes MUST be served even when offline. The default page handler
     // uses NetworkFirst which fails when offline and falls back to offline.html.
@@ -29,12 +32,13 @@ const withPWA = withPWAInit({
     //   3. Offline (cold start, never visited): fall through to NetworkFirst → offline.html
     runtimeCaching: [
       {
-        urlPattern: /^\/(?:checkout|pos(?:\/products)?|transactions)$/,
+        // Match every critical route: /, /pos, /checkout, /pos/products, /transactions, /offline, /login
+        urlPattern: /^\/(?:pos(?:\/products)?|checkout|transactions|offline|login)?$/,
         handler: "StaleWhileRevalidate",
         options: {
           cacheName: "offline-pages",
           expiration: {
-            maxEntries: 32,
+            maxEntries: 64,
             maxAgeSeconds: 86400, // 24 hours
           },
         },

@@ -127,7 +127,6 @@ export default function TransactionHistoryPage() {
     
     setIsLoading(true);
     setError(null);
-    setIsShowingCached(false);
 
     try {
       const authData = localStorage.getItem("goldensquirrel_auth");
@@ -143,78 +142,77 @@ export default function TransactionHistoryPage() {
         return;
       }
 
-      if (!navigator.onLine) {
-        setIsOffline(true);
-        // Fall back to cached transactions when offline
-        await fetchTransactionsFromCache(store_id);
-        setIsLoading(false);
-        return;
-      }
-
-      const response = await fetch("/api/transactions", {
-        headers: {
-          "x-auth-data": authData,
-        },
-      });
-
-      if (!response.ok) {
-        throw new Error("Failed to fetch transactions");
-      }
-
-      const data = await response.json();
-      const transactionsWithChange = (data.transactions || []).map((t: Transaction) => ({
-        ...t,
-        calculated_change: t.amount_paid && t.total_amount ? t.amount_paid - t.total_amount : 0
-      }));
-      setTransactions(transactionsWithChange);
-      setIsShowingCached(false);
-
-      // Cache transactions locally for offline use
-      if (data.transactions && data.transactions.length > 0) {
-        const toCache: CachedTransaction[] = data.transactions.map((t: any) => ({
-          id: t.id,
-          store_id: store_id,
-          transaction_number: t.transaction_number,
-          subtotal: t.subtotal,
-          total_amount: t.total_amount,
-          amount_paid: t.amount_paid,
-          change_given: t.change_given || 0,
-          created_at: t.created_at,
-          whatsapp_sent_to: t.whatsapp_sent_to,
-          user_id: t.user_id,
-          user_name: t.user_name,
-          transaction_items: (t.transaction_items || []).map((item: any) => ({
-            id: item.id,
-            product_name: item.product_name,
-            quantity: item.quantity,
-            unit_price: item.unit_price,
-            total_price: item.total_price,
-            currency: item.currency,
-          })),
+      // ALWAYS load cached transactions first for instant display
+      const cached = await getCachedTransactions(store_id);
+      if (cached.length > 0) {
+        const withChange = cached.map((t) => ({
+          ...t,
+          calculated_change: t.amount_paid && t.total_amount ? t.amount_paid - t.total_amount : 0,
         }));
-        cacheTransactions(toCache).catch((err) =>
-          console.error("[Transactions] Failed to cache transactions:", err)
-        );
+        setTransactions(withChange);
+        setIsShowingCached(true);
+      }
+
+      // Then try to fetch fresh data from API if online
+      if (navigator.onLine) {
+        const response = await fetch("/api/transactions", {
+          headers: {
+            "x-auth-data": authData,
+          },
+        });
+
+        if (!response.ok) {
+          throw new Error("Failed to fetch transactions");
+        }
+
+        const data = await response.json();
+        const transactionsWithChange = (data.transactions || []).map((t: Transaction) => ({
+          ...t,
+          calculated_change: t.amount_paid && t.total_amount ? t.amount_paid - t.total_amount : 0
+        }));
+        setTransactions(transactionsWithChange);
+        setIsShowingCached(false);
+
+        // Cache transactions locally for offline use
+        if (data.transactions && data.transactions.length > 0) {
+          const toCache: CachedTransaction[] = data.transactions.map((t: any) => ({
+            id: t.id,
+            store_id: store_id,
+            transaction_number: t.transaction_number,
+            subtotal: t.subtotal,
+            total_amount: t.total_amount,
+            amount_paid: t.amount_paid,
+            change_given: t.change_given || 0,
+            created_at: t.created_at,
+            whatsapp_sent_to: t.whatsapp_sent_to,
+            user_id: t.user_id,
+            user_name: t.user_name,
+            transaction_items: (t.transaction_items || []).map((item: any) => ({
+              id: item.id,
+              product_name: item.product_name,
+              quantity: item.quantity,
+              unit_price: item.unit_price,
+              total_price: item.total_price,
+              currency: item.currency,
+            })),
+          }));
+          cacheTransactions(toCache).catch((err) =>
+            console.error("[Transactions] Failed to cache transactions:", err)
+          );
+        }
+      } else {
+        setIsOffline(true);
       }
     } catch (err: any) {
       console.error("Error fetching transactions:", err);
-      if (!navigator.onLine) {
-        setIsOffline(true);
-        // Try falling back to cache on network error too
-        const authData = localStorage.getItem("goldensquirrel_auth");
-        if (authData) {
-          const parsed = JSON.parse(authData);
-          if (parsed.store_id) {
-            await fetchTransactionsFromCache(parsed.store_id);
-          }
-        }
-      } else {
+      // If we already loaded from cache, don't show error
+      if (transactions.length === 0) {
         setError(err.message || "Failed to load transactions");
       }
     } finally {
       setIsLoading(false);
     }
-  }, [user, router, fetchTransactionsFromCache]);
+  }, [user, router]);
 
   useEffect(() => {
     fetchTransactions();

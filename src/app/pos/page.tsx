@@ -107,8 +107,8 @@ export default function POSPage() {
           const authData = localStorage.getItem("goldensquirrel_auth");
           const licenseExpiresAt = authData ? JSON.parse(authData)?.license_expires_at : null;
 
-          // Check license expiration
-          if (licenseExpiresAt) {
+          // Check license expiration - only when online, never block offline
+          if (licenseExpiresAt && navigator.onLine) {
             const licenseExpires = new Date(licenseExpiresAt);
             const now = new Date();
             if (licenseExpires < now) {
@@ -124,9 +124,6 @@ export default function POSPage() {
           setMerchant({ id: store_id });
           setStoreId(store_id);
           syncEngine.setStoreId(store_id);
-
-          // Check if we're online
-          const isOnline = navigator.onLine;
 
           // Helper to map cached products to Product type
           const mapCachedToProducts = (cached: CachedProduct[]): Product[] =>
@@ -145,48 +142,35 @@ export default function POSPage() {
               variant_name: p.variant_name || undefined,
             }));
 
-          if (isOnline) {
-            // ONLINE: Fetch from Supabase and sync to local cache
+          // ALWAYS load from local cache first for instant display
+          const cached = await getCachedProducts(store_id);
+          if (cached && cached.length > 0) {
+            if (isMounted) {
+              setProducts(mapCachedToProducts(cached));
+            }
+          }
+
+          // Then try to fetch fresh data from Supabase if online
+          if (navigator.onLine) {
             const { data: productsData, error } = await supabase
               .from("products")
               .select("*")
               .eq("store_id", store_id)
               .order("name");
 
-            if (error) {
-              // If Supabase fails, fall back to local cache
-              console.warn("[POS] Supabase fetch failed, using local cache:", error.message);
-              const cached = await getCachedProducts(store_id);
-              if (isMounted) {
-                setProducts(cached ? mapCachedToProducts(cached) : []);
-              }
-            } else {
-              if (isMounted) {
-                setProducts(productsData || []);
-              }
-              // Initialize/refresh local cache in background
-              syncEngine.initialize(store_id);
+            if (!error && productsData && isMounted) {
+              setProducts(productsData);
             }
-          } else {
-            // OFFLINE: Read from local IndexedDB cache
-            console.log("[POS] Offline mode - reading from local cache");
-            const cached = await getCachedProducts(store_id);
-            if (cached && cached.length > 0) {
-              if (isMounted) {
-                setProducts(mapCachedToProducts(cached));
-                toast.info("Offline mode - showing cached products");
-              }
-            } else {
-              if (isMounted) {
-                setProducts([]);
-                toast.error("No cached products available offline. Please connect to the internet to sync.");
-              }
-            }
+            // Initialize/refresh local cache in background (non-blocking)
+            syncEngine.initialize(store_id).catch(() => {});
+          } else if (!cached || cached.length === 0) {
+            // Offline with no cache - show empty state gracefully
+            console.log("[POS] Offline with no cached products");
           }
         }
       } catch (error) {
         console.error("Error loading data:", error);
-        // Try local cache as fallback
+        // Try local cache as fallback with empty store_id
         try {
           const cached = await getCachedProducts("");
           const mapCachedToProducts = (cached: CachedProduct[]): Product[] =>
@@ -208,7 +192,6 @@ export default function POSPage() {
             setProducts(mapCachedToProducts(cached));
           }
         } catch {}
-        toast.error("Failed to load products");
       } finally {
         if (isMounted) {
           setIsLoading(false);
