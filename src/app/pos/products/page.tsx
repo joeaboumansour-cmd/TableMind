@@ -189,9 +189,19 @@ export default function StoreProductsPage() {
     }
   }, [user]);
 
-  // Redirect if no user (and auth has finished loading)
+  // Helper: check if user auth exists in localStorage (works offline)
+  function hasAuthInStorage(): boolean {
+    try {
+      return !!localStorage.getItem("goldensquirrel_user") || 
+             !!localStorage.getItem("goldensquirrel_auth");
+    } catch { return false; }
+  }
+
+  // Redirect to login only if there's truly no auth data in localStorage.
+  // Never redirect during the brief mount cycle when user state hasn't resolved yet.
   useEffect(() => {
     if (!user && !authLoading) {
+      if (hasAuthInStorage()) return; // Wait for user state to resolve
       router.replace("/login");
     }
   }, [user, authLoading, router]);

@@ -38,11 +38,20 @@ interface TransactionItem {
   total_price: number;
 }
 
+// Helper: check if user auth exists in localStorage (works offline)
+function hasAuthInStorage(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    return !!localStorage.getItem("goldensquirrel_user") || 
+           !!localStorage.getItem("goldensquirrel_auth");
+  } catch { return false; }
+}
+
 export default function ReceiptPage() {
   const router = useRouter();
   const params = useParams();
   const transactionNumber = params.id as string;
-  // Permission check
+  // Permission check - only when online, never block offline
   usePermissionGuard("receipts");
 
   const [transaction, setTransaction] = useState<Transaction | null>(null);
@@ -52,39 +61,68 @@ export default function ReceiptPage() {
   useEffect(() => {
     const fetchTransaction = async () => {
       try {
-        // Get store auth
+        // Get store auth - but NEVER redirect to /login just because authData is missing.
+        // Auth is in localStorage, user state will resolve.
         const authData = localStorage.getItem("goldensquirrel_auth");
-        if (!authData) {
-          router.push("/login");
+        const storeUser = localStorage.getItem("goldensquirrel_user");
+        
+        let store_id: string | null = null;
+        if (authData) {
+          store_id = JSON.parse(authData).store_id;
+        } else if (storeUser) {
+          store_id = JSON.parse(storeUser).storeId;
+        }
+
+        if (!store_id) {
+          // Only redirect if there's truly no auth data in localStorage
+          if (!hasAuthInStorage()) {
+            router.push("/login");
+            return;
+          }
+          // Has auth but no store_id - try to render what we can
+          setIsLoading(false);
           return;
         }
 
-        const { store_id } = JSON.parse(authData);
+        // Try fetching from Supabase if online
+        if (navigator.onLine) {
+          const { data: txnData, error: txnError } = await supabase
+            .from("transactions")
+            .select("*")
+            .eq("transaction_number", transactionNumber)
+            .eq("store_id", store_id)
+            .single();
 
-        // Fetch transaction for this store
-        const { data: txnData, error: txnError } = await supabase
-          .from("transactions")
-          .select("*")
-          .eq("transaction_number", transactionNumber)
-          .eq("store_id", store_id)
-          .single();
+          if (txnError) throw txnError;
+          setTransaction(txnData);
 
-        if (txnError) throw txnError;
-        setTransaction(txnData);
+          const { data: itemsData, error: itemsError } = await supabase
+            .from("transaction_items")
+            .select("*")
+            .eq("transaction_id", txnData.id)
+            .order("created_at");
 
-        // Fetch transaction items
-        const { data: itemsData, error: itemsError } = await supabase
-          .from("transaction_items")
-          .select("*")
-          .eq("transaction_id", txnData.id)
-          .order("created_at");
-
-        if (itemsError) throw itemsError;
-        setItems(itemsData || []);
+          if (itemsError) throw itemsError;
+          setItems(itemsData || []);
+        } else {
+          // Offline: try reading from cached transactions
+          const { getCachedTransactions } = await import("@/lib/db");
+          const cached = await getCachedTransactions(store_id);
+          const found = cached.find(t => t.transaction_number === transactionNumber);
+          if (found) {
+            setTransaction(found as any);
+            setItems(found.transaction_items.map((item: any) => ({
+              id: item.id,
+              product_name: item.product_name,
+              quantity: item.quantity,
+              unit_price: item.unit_price,
+              total_price: item.total_price,
+            })));
+          }
+        }
       } catch (error) {
         console.error("Error fetching transaction:", error);
-        toast.error("Transaction not found");
-        router.push("/pos");
+        // Never redirect on error - just show what we have or an empty state
       } finally {
         setIsLoading(false);
       }

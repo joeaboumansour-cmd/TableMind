@@ -38,6 +38,33 @@ import {
 } from "@/lib/db";
 import type { CachedTransaction, CachedTransactionItem } from "@/lib/db";
 
+// Helper: check if user auth exists in localStorage (works offline)
+function hasAuthInStorage(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    return !!localStorage.getItem("goldensquirrel_user") || 
+           !!localStorage.getItem("goldensquirrel_auth");
+  } catch { return false; }
+}
+
+// Helper: get storeId from localStorage (works offline)
+function getStoreIdFromStorage(): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const user = localStorage.getItem("goldensquirrel_user");
+    if (user) {
+      const parsed = JSON.parse(user);
+      if (parsed.storeId) return parsed.storeId;
+    }
+    const auth = localStorage.getItem("goldensquirrel_auth");
+    if (auth) {
+      const parsed = JSON.parse(auth);
+      return parsed.store_id || null;
+    }
+  } catch {}
+  return null;
+}
+
 interface TransactionItem {
   id: string;
   product_name: string;
@@ -71,9 +98,14 @@ export default function TransactionHistoryPage() {
   const router = useRouter();
   const { user, logout: authLogout } = useAuth();
 
-  // Redirect if no user
+  // Only redirect to login if there's truly no auth data in localStorage.
+  // Never redirect during the brief mount cycle when user state hasn't resolved yet.
+  const [authReady, setAuthReady] = useState(false);
   useEffect(() => {
     if (!user) {
+      // Check if auth actually exists in storage — if yes, don't redirect,
+      // just wait for the user state to resolve
+      if (hasAuthInStorage()) return;
       router.replace("/login");
     }
   }, [user, router]);
@@ -123,82 +155,86 @@ export default function TransactionHistoryPage() {
   }, []);
 
   const fetchTransactions = useCallback(async () => {
-    if (!user) return;
-    
     setIsLoading(true);
     setError(null);
 
     try {
-      const authData = localStorage.getItem("goldensquirrel_auth");
-      if (!authData) {
-        router.replace("/login");
-        return;
-      }
+      // Get store_id from ALL possible sources (user object, auth storage, user storage)
+      // Never redirect to /login when offline — just load from cache silently
+      let store_id: string | null = user?.storeId || getStoreIdFromStorage();
       
-      const parsed = JSON.parse(authData);
-      const store_id = parsed.store_id;
       if (!store_id) {
-        router.replace("/login");
-        return;
+        // No auth data anywhere — only then redirect
+        if (!hasAuthInStorage()) {
+          router.replace("/login");
+          return;
+        }
+        // Has auth but couldn't extract storeId — try a broad cache lookup
+        console.warn("[Transactions] Could not determine store_id, trying broad cache lookup");
       }
 
       // ALWAYS load cached transactions first for instant display
-      const cached = await getCachedTransactions(store_id);
-      if (cached.length > 0) {
-        const withChange = cached.map((t) => ({
-          ...t,
-          calculated_change: t.amount_paid && t.total_amount ? t.amount_paid - t.total_amount : 0,
-        }));
-        setTransactions(withChange);
-        setIsShowingCached(true);
+      if (store_id) {
+        const cached = await getCachedTransactions(store_id);
+        if (cached.length > 0) {
+          const withChange = cached.map((t) => ({
+            ...t,
+            calculated_change: t.amount_paid && t.total_amount ? t.amount_paid - t.total_amount : 0,
+          }));
+          setTransactions(withChange);
+          setIsShowingCached(true);
+        }
       }
 
-      // Then try to fetch fresh data from API if online
-      if (navigator.onLine) {
-        const response = await fetch("/api/transactions", {
-          headers: {
-            "x-auth-data": authData,
-          },
-        });
+      // Then try to fetch fresh data from API if online AND we have a store_id
+      if (navigator.onLine && store_id) {
+        const authData = localStorage.getItem("goldensquirrel_auth");
+        if (authData) {
+          const response = await fetch("/api/transactions", {
+            headers: {
+              "x-auth-data": authData,
+            },
+          });
 
-        if (!response.ok) {
-          throw new Error("Failed to fetch transactions");
-        }
+          if (!response.ok) {
+            throw new Error("Failed to fetch transactions");
+          }
 
-        const data = await response.json();
-        const transactionsWithChange = (data.transactions || []).map((t: Transaction) => ({
-          ...t,
-          calculated_change: t.amount_paid && t.total_amount ? t.amount_paid - t.total_amount : 0
-        }));
-        setTransactions(transactionsWithChange);
-        setIsShowingCached(false);
-
-        // Cache transactions locally for offline use
-        if (data.transactions && data.transactions.length > 0) {
-          const toCache: CachedTransaction[] = data.transactions.map((t: any) => ({
-            id: t.id,
-            store_id: store_id,
-            transaction_number: t.transaction_number,
-            subtotal: t.subtotal,
-            total_amount: t.total_amount,
-            amount_paid: t.amount_paid,
-            change_given: t.change_given || 0,
-            created_at: t.created_at,
-            whatsapp_sent_to: t.whatsapp_sent_to,
-            user_id: t.user_id,
-            user_name: t.user_name,
-            transaction_items: (t.transaction_items || []).map((item: any) => ({
-              id: item.id,
-              product_name: item.product_name,
-              quantity: item.quantity,
-              unit_price: item.unit_price,
-              total_price: item.total_price,
-              currency: item.currency,
-            })),
+          const data = await response.json();
+          const transactionsWithChange = (data.transactions || []).map((t: Transaction) => ({
+            ...t,
+            calculated_change: t.amount_paid && t.total_amount ? t.amount_paid - t.total_amount : 0
           }));
-          cacheTransactions(toCache).catch((err) =>
-            console.error("[Transactions] Failed to cache transactions:", err)
-          );
+          setTransactions(transactionsWithChange);
+          setIsShowingCached(false);
+
+          // Cache transactions locally for offline use
+          if (data.transactions && data.transactions.length > 0) {
+            const toCache: CachedTransaction[] = data.transactions.map((t: any) => ({
+              id: t.id,
+              store_id: store_id,
+              transaction_number: t.transaction_number,
+              subtotal: t.subtotal,
+              total_amount: t.total_amount,
+              amount_paid: t.amount_paid,
+              change_given: t.change_given || 0,
+              created_at: t.created_at,
+              whatsapp_sent_to: t.whatsapp_sent_to,
+              user_id: t.user_id,
+              user_name: t.user_name,
+              transaction_items: (t.transaction_items || []).map((item: any) => ({
+                id: item.id,
+                product_name: item.product_name,
+                quantity: item.quantity,
+                unit_price: item.unit_price,
+                total_price: item.total_price,
+                currency: item.currency,
+              })),
+            }));
+            cacheTransactions(toCache).catch((err) =>
+              console.error("[Transactions] Failed to cache transactions:", err)
+            );
+          }
         }
       } else {
         setIsOffline(true);
@@ -207,7 +243,7 @@ export default function TransactionHistoryPage() {
       console.error("Error fetching transactions:", err);
       // If we already loaded from cache, don't show error
       if (transactions.length === 0) {
-        setError(err.message || "Failed to load transactions");
+        setError("Could not load transactions. Please check your connection.");
       }
     } finally {
       setIsLoading(false);
@@ -338,7 +374,9 @@ export default function TransactionHistoryPage() {
     setOpenAccordion(openAccordion === id ? null : id);
   };
 
-  if (isLoading || !user) {
+  // Never block rendering with a loading spinner if auth exists in storage.
+  // If user state hasn't resolved but localStorage has data, render the page anyway.
+  if (isLoading && !hasAuthInStorage()) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
         <div className="text-center">
