@@ -119,40 +119,6 @@ export default function TransactionHistoryPage() {
   const [openAccordion, setOpenAccordion] = useState<string | null>(null);
   const [isOffline, setIsOffline] = useState(false);
   const [isShowingCached, setIsShowingCached] = useState(false);
-  
-  // Track online/offline status
-  useEffect(() => {
-    setIsOffline(!navigator.onLine);
-    const handleOnline = () => setIsOffline(false);
-    const handleOffline = () => setIsOffline(true);
-    window.addEventListener("online", handleOnline);
-    window.addEventListener("offline", handleOffline);
-    return () => {
-      window.removeEventListener("online", handleOnline);
-      window.removeEventListener("offline", handleOffline);
-    };
-  }, []);
-
-  const fetchTransactionsFromCache = useCallback(async (storeId: string) => {
-    try {
-      const cached = await getCachedTransactions(storeId);
-      if (cached.length > 0) {
-        const withChange = cached.map((t) => ({
-          ...t,
-          calculated_change: t.amount_paid && t.total_amount ? t.amount_paid - t.total_amount : 0,
-        }));
-        setTransactions(withChange);
-        setIsShowingCached(true);
-      } else {
-        setError("You are offline and no cached transactions are available.");
-        setIsShowingCached(false);
-      }
-    } catch (err) {
-      console.error("Error reading cached transactions:", err);
-      setError("Failed to read cached transactions.");
-      setIsShowingCached(false);
-    }
-  }, []);
 
   const fetchTransactions = useCallback(async () => {
     setIsLoading(true);
@@ -162,7 +128,16 @@ export default function TransactionHistoryPage() {
       // Get store_id from ALL possible sources (user object, auth storage, user storage)
       // Never redirect to /login when offline — just load from cache silently
       let store_id: string | null = user?.storeId || getStoreIdFromStorage();
-      
+
+      console.log("[Transactions] Fetching transactions:", {
+        hasUser: !!user,
+        userId: user?.id,
+        userStoreId: user?.storeId,
+        storeIdFromStorage: getStoreIdFromStorage(),
+        resolvedStoreId: store_id,
+        isOffline: !navigator.onLine
+      });
+
       if (!store_id) {
         // No auth data anywhere — only then redirect
         if (!hasAuthInStorage()) {
@@ -189,51 +164,74 @@ export default function TransactionHistoryPage() {
       // Then try to fetch fresh data from API if online AND we have a store_id
       if (navigator.onLine && store_id) {
         const authData = localStorage.getItem("goldensquirrel_auth");
+        console.log("[Transactions] Attempting API fetch:", {
+          hasAuthData: !!authData,
+          store_id
+        });
+
         if (authData) {
-          const response = await fetch("/api/transactions", {
-            headers: {
-              "x-auth-data": authData,
-            },
-          });
+          try {
+            const response = await fetch("/api/transactions", {
+              headers: {
+                "x-auth-data": authData,
+              },
+            });
 
-          if (!response.ok) {
-            throw new Error("Failed to fetch transactions");
-          }
+            console.log("[Transactions] API response:", {
+              status: response.status,
+              ok: response.ok
+            });
 
-          const data = await response.json();
-          const transactionsWithChange = (data.transactions || []).map((t: Transaction) => ({
-            ...t,
-            calculated_change: t.amount_paid && t.total_amount ? t.amount_paid - t.total_amount : 0
-          }));
-          setTransactions(transactionsWithChange);
-          setIsShowingCached(false);
+            if (!response.ok) {
+              const errorText = await response.text();
+              console.error("[Transactions] API error response:", errorText);
+              throw new Error(`Failed to fetch transactions: ${response.status}`);
+            }
 
-          // Cache transactions locally for offline use
-          if (data.transactions && data.transactions.length > 0) {
-            const toCache: CachedTransaction[] = data.transactions.map((t: any) => ({
-              id: t.id,
-              store_id: store_id,
-              transaction_number: t.transaction_number,
-              subtotal: t.subtotal,
-              total_amount: t.total_amount,
-              amount_paid: t.amount_paid,
-              change_given: t.change_given || 0,
-              created_at: t.created_at,
-              whatsapp_sent_to: t.whatsapp_sent_to,
-              user_id: t.user_id,
-              user_name: t.user_name,
-              transaction_items: (t.transaction_items || []).map((item: any) => ({
-                id: item.id,
-                product_name: item.product_name,
-                quantity: item.quantity,
-                unit_price: item.unit_price,
-                total_price: item.total_price,
-                currency: item.currency,
-              })),
+            const data = await response.json();
+            console.log("[Transactions] API returned:", data.transactions?.length || 0, "transactions");
+
+            const transactionsWithChange = (data.transactions || []).map((t: Transaction) => ({
+              ...t,
+              calculated_change: t.amount_paid && t.total_amount ? t.amount_paid - t.total_amount : 0
             }));
-            cacheTransactions(toCache).catch((err) =>
-              console.error("[Transactions] Failed to cache transactions:", err)
-            );
+            setTransactions(transactionsWithChange);
+            setIsShowingCached(false);
+
+            // Cache transactions locally for offline use
+            if (data.transactions && data.transactions.length > 0) {
+              const toCache: CachedTransaction[] = data.transactions.map((t: any) => ({
+                id: t.id,
+                store_id: store_id,
+                transaction_number: t.transaction_number,
+                subtotal: t.subtotal,
+                total_amount: t.total_amount,
+                amount_paid: t.amount_paid,
+                change_given: t.change_given || 0,
+                created_at: t.created_at,
+                whatsapp_sent_to: t.whatsapp_sent_to,
+                user_id: t.user_id,
+                user_name: t.user_name,
+                transaction_items: (t.transaction_items || []).map((item: any) => ({
+                  id: item.id,
+                  product_name: item.product_name,
+                  quantity: item.quantity,
+                  unit_price: item.unit_price,
+                  total_price: item.total_price,
+                  currency: item.currency,
+                })),
+              }));
+              cacheTransactions(toCache).catch((err) =>
+                console.error("[Transactions] Failed to cache transactions:", err)
+              );
+            }
+          } catch (apiError) {
+            console.error("[Transactions] API fetch failed:", apiError);
+            // If we already have cached data from earlier, keep showing it
+            if (transactions.length === 0) {
+              setIsShowingCached(false);
+              setIsOffline(true);
+            }
           }
         }
       } else {
@@ -250,8 +248,56 @@ export default function TransactionHistoryPage() {
     }
   }, [user, router]);
 
+  const fetchTransactionsFromCache = useCallback(async (storeId: string) => {
+    try {
+      const cached = await getCachedTransactions(storeId);
+      if (cached.length > 0) {
+        const withChange = cached.map((t) => ({
+          ...t,
+          calculated_change: t.amount_paid && t.total_amount ? t.amount_paid - t.total_amount : 0,
+        }));
+        setTransactions(withChange);
+        setIsShowingCached(true);
+      } else {
+        setError("You are offline and no cached transactions are available.");
+        setIsShowingCached(false);
+      }
+    } catch (err) {
+      console.error("Error reading cached transactions:", err);
+      setError("Failed to read cached transactions.");
+      setIsShowingCached(false);
+    }
+  }, []);
+
   useEffect(() => {
     fetchTransactions();
+  }, [fetchTransactions]);
+
+  // Track online/offline status and refresh transactions when coming back online
+  useEffect(() => {
+    setIsOffline(!navigator.onLine);
+
+    const handleOnline = () => {
+      setIsOffline(false);
+      console.log("[Transactions] Back online — refreshing transactions...");
+      // Small delay to ensure auth state has settled
+      setTimeout(() => {
+        fetchTransactions();
+      }, 500);
+    };
+
+    const handleOffline = () => {
+      setIsOffline(true);
+      console.log("[Transactions] Gone offline");
+    };
+
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
+
+    return () => {
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
+    };
   }, [fetchTransactions]);
 
   // Apply date filter and search
