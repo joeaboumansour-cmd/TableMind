@@ -77,7 +77,9 @@ function saveUserToStorage(user: StoreUser) {
 function clearUserFromStorage() {
   localStorage.removeItem("goldensquirrel_user");
   localStorage.removeItem("goldensquirrel_auth"); // legacy cleanup
-  clearCachedCredentials(); // Clear offline credentials on logout
+  // NOTE: Do NOT clear cached credentials here.
+  // They persist across logout/login cycles so the user
+  // can still log in offline after logging out.
 }
 
 export function AuthProvider({ children }: AuthProviderProps) {
