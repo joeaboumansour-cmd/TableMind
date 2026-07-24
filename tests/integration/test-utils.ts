@@ -1,4 +1,4 @@
-import { type Page } from '@playwright/test';
+import { type Page, expect } from '@playwright/test';
 
 /**
  * Injects auth state into localStorage so the app thinks we're logged in.
@@ -124,4 +124,67 @@ export async function navigateWithAuth(page: Page, url: string, cartItems?: any[
     await injectCartItems(page, cartItems);
   }
   await page.reload({ waitUntil: 'domcontentloaded', timeout: 15000 });
+}
+
+/**
+ * Click a button by its text and verify the URL changes to the expected path.
+ * This is the core "button-first" navigation assertion.
+ */
+export async function clickButtonAndVerifyUrl(page: Page, buttonText: string, expectedUrlContains: string, options?: { timeout?: number }) {
+  const timeout = options?.timeout ?? 15000;
+  const btn = page.locator(`button:has-text("${buttonText}")`).first();
+  await expect(btn).toBeVisible({ timeout });
+  await btn.click();
+  await page.waitForURL(`**${expectedUrlContains}`, { timeout });
+  expect(page.url()).toContain(expectedUrlContains);
+}
+
+/**
+ * Assert the current URL contains the expected path.
+ */
+export async function expectUrlToContain(page: Page, expected: string) {
+  expect(page.url()).toContain(expected);
+}
+
+/**
+ * Click a mobile menu item and verify navigation.
+ */
+export async function clickMobileMenuItemAndVerifyUrl(page: Page, itemText: string, expectedUrlContains: string) {
+  // Open mobile menu
+  const hamburger = page.locator('button[aria-label="Open menu"]').first();
+  await expect(hamburger).toBeVisible({ timeout: 10000 });
+  await hamburger.click();
+  await page.waitForTimeout(300);
+
+  // Click the menu item
+  const menuItem = page.locator(`button:has-text("${itemText}"), span:has-text("${itemText}")`).first();
+  await expect(menuItem).toBeVisible({ timeout: 5000 });
+  await menuItem.click();
+  await page.waitForURL(`**${expectedUrlContains}`, { timeout: 15000 });
+  expect(page.url()).toContain(expectedUrlContains);
+}
+
+/**
+ * Set the viewport to mobile size for mobile-specific tests.
+ */
+export async function setMobileViewport(page: Page) {
+  await page.setViewportSize({ width: 375, height: 812 });
+}
+
+/**
+ * Go offline by disabling network requests.
+ */
+export async function goOffline(page: Page) {
+  await page.context().setOffline(true);
+  await page.route('**/*', (route) => {
+    route.abort();
+  });
+}
+
+/**
+ * Go back online.
+ */
+export async function goOnline(page: Page) {
+  await page.context().setOffline(false);
+  await page.unrouteAll({ behavior: 'wait' });
 }
