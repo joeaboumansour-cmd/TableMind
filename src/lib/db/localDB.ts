@@ -40,6 +40,7 @@ export interface CachedProduct {
   selling_price: number;
   currency: string;
   profit_percentage: number;
+  discount_percentage: number;
   stock_quantity: number;
   min_stock_threshold: number;
   parent_id?: string | null;
@@ -317,6 +318,7 @@ export async function seedProductsIfNeeded(storeId: string): Promise<number> {
       selling_price: p.selling_price,
       currency: p.currency,
       profit_percentage: p.profit_percentage,
+      discount_percentage: (p as any).discount_percentage || 0,
       stock_quantity: p.stock_quantity,
       min_stock_threshold: p.min_stock_threshold,
       parent_id: p.parent_id || null,

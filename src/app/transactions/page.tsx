@@ -26,6 +26,7 @@ import {
 import { formatLL, formatDateTime, formatRelativeTime, formatUSD } from "@/lib/utils/format";
 import { toast } from "sonner";
 import { useAuth } from "@/lib/auth/AuthContext";
+import { useFeatureFlags } from "@/hooks/useFeatureFlags";
 import {
   Collapsible,
   CollapsibleContent,
@@ -37,6 +38,7 @@ import {
   getCachedTransactionsCount,
 } from "@/lib/db";
 import type { CachedTransaction, CachedTransactionItem } from "@/lib/db";
+import { TransactionAnalytics } from "@/components/TransactionAnalytics";
 
 // Helper: check if user auth exists in localStorage (works offline)
 function hasAuthInStorage(): boolean {
@@ -97,6 +99,7 @@ type DateFilter = "all" | "hour" | "today" | "week" | "month" | "90days";
 export default function TransactionHistoryPage() {
   const router = useRouter();
   const { user, logout: authLogout } = useAuth();
+  const { isEnabled } = useFeatureFlags();
 
   // Only redirect to login if there's truly no auth data in localStorage.
   // Never redirect during the brief mount cycle when user state hasn't resolved yet.
@@ -119,6 +122,7 @@ export default function TransactionHistoryPage() {
   const [openAccordion, setOpenAccordion] = useState<string | null>(null);
   const [isOffline, setIsOffline] = useState(false);
   const [isShowingCached, setIsShowingCached] = useState(false);
+  const [viewMode, setViewMode] = useState<"transactions" | "analytics">("transactions");
 
   const fetchTransactions = useCallback(async () => {
     setIsLoading(true);
@@ -433,6 +437,8 @@ export default function TransactionHistoryPage() {
     );
   }
 
+  const showAnalytics = isEnabled("transaction_analytics");
+
   return (
     <div className="min-h-screen bg-background">
       <header className="sticky top-0 z-50 bg-background border-b">
@@ -443,15 +449,30 @@ export default function TransactionHistoryPage() {
                 <ArrowLeft className="h-5 w-5" />
               </Button>
               <div>
-                <h1 className="font-bold text-lg">Transaction History</h1>
+                <h1 className="font-bold text-lg">
+                  {viewMode === "analytics" ? "Transaction Analytics" : "Transaction History"}
+                </h1>
                 <p className="text-sm text-muted-foreground">
-                 {filteredTransactions.length} transaction{filteredTransactions.length !== 1 ? "s" : ""}
+                  {viewMode === "analytics"
+                    ? "PnL, revenue, and audit metrics"
+                    : `${filteredTransactions.length} transaction${filteredTransactions.length !== 1 ? "s" : ""}`}
                 </p>
               </div>
             </div>
-            <Button variant="outline" size="sm" onClick={fetchTransactions} disabled={isLoading} title="Refresh">
-              <RefreshCw className={`h-4 w-4 ${isLoading ? "animate-spin" : ""}`} />
-            </Button>
+            <div className="flex items-center gap-2">
+              {showAnalytics && (
+                <Button
+                  variant={viewMode === "analytics" ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setViewMode(viewMode === "analytics" ? "transactions" : "analytics")}
+                >
+                  {viewMode === "analytics" ? "📋 List" : "📊 Analytics"}
+                </Button>
+              )}
+              <Button variant="outline" size="sm" onClick={fetchTransactions} disabled={isLoading} title="Refresh">
+                <RefreshCw className={`h-4 w-4 ${isLoading ? "animate-spin" : ""}`} />
+              </Button>
+            </div>
           </div>
           
            {/* Search Bar - search by transaction #, phone, user, or amount */}
@@ -523,27 +544,31 @@ export default function TransactionHistoryPage() {
           </div>
         )}
 
-        {filteredTransactions.length === 0 && !error ? (
-          <Card>
-            <CardContent className="flex flex-col items-center justify-center py-12">
-              <Receipt className="h-12 w-12 text-muted-foreground mb-4" />
-              <h3 className="font-semibold text-lg mb-2">No Transactions Found</h3>
-              <p className="text-muted-foreground text-center mb-4">
-                {searchQuery || dateFilter !== "all" ? "No matching transactions found." : "No transactions found."}
-              </p>
-              {!searchQuery && dateFilter === "all" && (
-                <Button onClick={() => router.push("/pos")}>Start New Transaction</Button>
-              )}
-            </CardContent>
-          </Card>
-        ) : (
-          <div className="space-y-4">
-            {filteredTransactions.map((transaction) => (
-              <Collapsible
-                key={transaction.id}
-                open={openAccordion === transaction.id}
-                onOpenChange={() => toggleAccordion(transaction.id)}
-              >
+         {viewMode === "analytics" && showAnalytics ? (
+           <TransactionAnalytics dateFilter={dateFilter} storeId={user?.storeId || ""} />
+         ) : (
+          <>
+         {filteredTransactions.length === 0 && !error ? (
+           <Card>
+             <CardContent className="flex flex-col items-center justify-center py-12">
+               <Receipt className="h-12 w-12 text-muted-foreground mb-4" />
+               <h3 className="font-semibold text-lg mb-2">No Transactions Found</h3>
+               <p className="text-muted-foreground text-center mb-4">
+                 {searchQuery || dateFilter !== "all" ? "No matching transactions found." : "No transactions found."}
+               </p>
+               {!searchQuery && dateFilter === "all" && (
+                 <Button onClick={() => router.push("/pos")}>Start New Transaction</Button>
+               )}
+             </CardContent>
+           </Card>
+         ) : (
+           <div className="space-y-4">
+             {filteredTransactions.map((transaction) => (
+               <Collapsible
+                 key={transaction.id}
+                 open={openAccordion === transaction.id}
+                 onOpenChange={() => toggleAccordion(transaction.id)}
+               >
                 <Card className={`transition-all ${openAccordion === transaction.id ? "ring-2 ring-primary" : ""}`}>
                   <CollapsibleTrigger asChild>
                     <div className="cursor-pointer">
@@ -669,9 +694,11 @@ export default function TransactionHistoryPage() {
                 </Card>
               </Collapsible>
             ))}
-          </div>
-        )}
+           </div>
+         )}
+        </>
+       )}
       </div>
-    </div>
-  );
-}
+     </div>
+    );
+  }

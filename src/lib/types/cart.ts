@@ -13,6 +13,14 @@ export interface CartItem {
   total_price_usd: number;
   stock_quantity: number;
   currency: 'LL' | 'USD';
+  // Discount fields
+  discount_percentage: number;
+  original_unit_price: number;
+  original_total_price: number;
+  original_unit_price_usd: number;
+  original_total_price_usd: number;
+  unit_price_discount_amount: number;
+  total_discount_amount: number;
 }
 
 export interface Cart {
@@ -39,6 +47,10 @@ export interface CartActions {
   getSubtotalUsd: () => number;
   getTotal: () => number;
   getTotalUsd: () => number;
+  getTotalDiscount: () => number;
+  getTotalDiscountUsd: () => number;
+  getTotalOriginal: () => number;
+  getTotalOriginalUsd: () => number;
   getItemCount: () => number;
   isEmpty: () => boolean;
 }

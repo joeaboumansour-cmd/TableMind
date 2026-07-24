@@ -8,7 +8,7 @@
 
 ## 1. Overview
 
-TableMind POS is a multi-tenant PWA serving different types of stores (retail, fashion boutiques, general stores). Different store types need different features. This document describes a **tiered feature flag system** that allows the admin to enable/disable features per store, with presets for common store types.
+TableMind POS is a multi-tenant PWA serving different types of stores. This document describes a **store-level feature flag system** that allows the admin to enable/disable features per store.
 
 ### Two Layers of Control
 
@@ -29,20 +29,17 @@ All features are defined in a central registry: `src/lib/features.ts`. Each feat
 
 ```typescript
 interface FeatureDefinition {
-  key: string;                    // Unique identifier (e.g., "size_variants")
-  label: string;                  // Human-readable name (e.g., "Size Variants")
+  key: string;                    // Unique identifier (e.g., "product_discount")
+  label: string;                  // Human-readable name (e.g., "Product Discount %")
   description: string;            // What it does
-  category: FeatureCategory;      // "core" | "fashion" | "retail" | "premium"
+  category: FeatureCategory;      // "core"
   default: boolean;               // Default state for new stores
   dependencies?: string[];        // Other features this requires
 }
 ```
 
-**Categories**:
-- `core` — Universal features every store needs (POS, inventory, transactions)
-- `fashion` — Features specific to fashion stores (size variants, seasonal collections, lookbook)
-- `retail` — Features specific to retail stores (wholesale pricing, bulk scanning)
-- `premium` — Advanced features (AI reports, e-commerce sync)
+**Current categories**:
+- `core` — Universal features every store needs (POS, inventory, transactions, receipts, product_discount)
 
 ### 2.2 Feature Presets
 
@@ -50,17 +47,15 @@ Presets are pre-configured bundles of features for common store types. They solv
 
 ```typescript
 interface FeaturePreset {
-  key: string;                    // e.g., "fashion"
-  name: string;                   // e.g., "Fashion Boutique"
-  description: string;            // e.g., "Fashion-focused with size/color variants"
+  key: string;                    // e.g., "general"
+  name: string;                   // e.g., "General Store"
+  description: string;            // e.g., "Standard features for all stores"
   features: Record<string, boolean>;  // Feature key -> enabled/disabled
 }
 ```
 
 Available presets:
-- `retail` — Standard retail with bulk scanning and wholesale pricing
-- `fashion` — Fashion boutique with size/color variants, seasonal collections, lookbook
-- `general` — Minimal feature set for small general stores
+- `general` — Standard features for all stores
 
 **When a new store is created**, the admin selects a preset. The preset's feature configuration is stored in `stores.features`.
 
@@ -69,7 +64,7 @@ Available presets:
 Feature flags are stored as a JSONB column on the `stores` table:
 
 ```sql
-ALTER TABLE stores 
+ALTER TABLE stores
   ADD COLUMN IF NOT EXISTS features JSONB DEFAULT '{}',
   ADD COLUMN IF NOT EXISTS store_type TEXT DEFAULT 'general';
 ```
@@ -80,16 +75,12 @@ Example `features` value:
   "pos": true,
   "inventory": true,
   "transactions": true,
-  "size_variants": true,
-  "color_variants": true,
-  "seasonal_collections": false,
-  "lookbook_view": true,
-  "wholesale_pricing": false,
-  "bulk_scanning": false
+  "receipts": true,
+  "product_discount": true
 }
 ```
 
-The `store_type` column stores the preset key (e.g., `"fashion"`) for reference.
+The `store_type` column stores the preset key (e.g., `"general"`) for reference.
 
 ---
 
@@ -120,11 +111,22 @@ src/
 │   └── api/
 │       ├── admin/
 │       │   └── stores/
-│       │       └── route.ts     # Modified: add feature flag update endpoints
+│       │       └── features/
+│       │           └── route.ts # New: feature flag API for stores
 │       └── ...                  # Existing API routes
 supabase/
 └── migrations/
     └── 016_store_feature_flags.sql  # New: adds features JSONB column to stores
+src/
+├── components/
+│   ├── TransactionAnalytics.tsx    # New: analytics dashboard component
+│   └── charts/
+│       └── TransactionCharts.tsx   # New: recharts visualizations
+└── app/
+    └── api/
+        └── transactions/
+            └── analytics/
+                └── route.ts        # New: analytics aggregations API
 ```
 
 ---
@@ -157,7 +159,6 @@ export interface FeatureDefinition {
 }
 
 export const FEATURES: Record<string, FeatureDefinition> = {
-  // === Core (universal) ===
   pos: {
     key: "pos",
     label: "Point of Sale",
@@ -186,59 +187,18 @@ export const FEATURES: Record<string, FeatureDefinition> = {
     category: "core",
     default: true,
   },
-
-  // === Fashion-specific ===
-  size_variants: {
-    key: "size_variants",
-    label: "Size Variants",
-    description: "Track inventory by clothing sizes (S/M/L, numeric sizes)",
-    category: "fashion",
-    default: false,
+  product_discount: {
+    key: "product_discount",
+    label: "Product Discount %",
+    description: "Set percentage discounts per product (applied at POS)",
+    category: "core",
+    default: true,
   },
-  color_variants: {
-    key: "color_variants",
-    label: "Color Variants",
-    description: "Track inventory by color",
-    category: "fashion",
-    default: false,
-  },
-  seasonal_collections: {
-    key: "seasonal_collections",
-    label: "Seasonal Collections",
-    description: "Group products by season (Spring/Summer, Fall/Winter)",
-    category: "fashion",
-    default: false,
-  },
-  lookbook_view: {
-    key: "lookbook_view",
-    label: "Lookbook View",
-    description: "Visual product showcase for fashion items",
-    category: "fashion",
-    default: false,
-  },
-
-  // === Retail-specific ===
-  wholesale_pricing: {
-    key: "wholesale_pricing",
-    label: "Wholesale Pricing",
-    description: "Tiered pricing for bulk orders",
-    category: "retail",
-    default: false,
-  },
-  bulk_scanning: {
-    key: "bulk_scanning",
-    label: "Bulk Scanning",
-    description: "Scan multiple items at once for faster checkout",
-    category: "retail",
-    default: false,
-  },
-
-  // === Premium ===
-  advanced_reports: {
-    key: "advanced_reports",
-    label: "Advanced Reports",
-    description: "AI-powered insights and sales forecasting",
-    category: "premium",
+  transaction_analytics: {
+    key: "transaction_analytics",
+    label: "Transaction Analytics",
+    description: "Dashboard with PnL, revenue, and audit metrics",
+    category: "core",
     default: false,
   },
 };
@@ -256,55 +216,14 @@ export const FEATURE_PRESETS: Record<string, FeaturePreset> = {
   general: {
     key: "general",
     name: "General Store",
-    description: "Minimal feature set for small shops",
+    description: "Standard features for all stores",
     features: {
       pos: true,
       inventory: true,
       transactions: true,
       receipts: true,
-      size_variants: false,
-      color_variants: false,
-      seasonal_collections: false,
-      lookbook_view: false,
-      wholesale_pricing: false,
-      bulk_scanning: false,
-      advanced_reports: false,
-    },
-  },
-  retail: {
-    key: "retail",
-    name: "Retail Store",
-    description: "Standard retail with bulk scanning and wholesale pricing",
-    features: {
-      pos: true,
-      inventory: true,
-      transactions: true,
-      receipts: true,
-      size_variants: false,
-      color_variants: false,
-      seasonal_collections: false,
-      lookbook_view: false,
-      wholesale_pricing: true,
-      bulk_scanning: true,
-      advanced_reports: false,
-    },
-  },
-  fashion: {
-    key: "fashion",
-    name: "Fashion Boutique",
-    description: "Fashion-focused with size/color variants and lookbook",
-    features: {
-      pos: true,
-      inventory: true,
-      transactions: true,
-      receipts: true,
-      size_variants: true,
-      color_variants: true,
-      seasonal_collections: true,
-      lookbook_view: true,
-      wholesale_pricing: false,
-      bulk_scanning: false,
-      advanced_reports: false,
+      product_discount: true,
+      transaction_analytics: false,
     },
   },
 };
@@ -340,21 +259,18 @@ export function getEnabledFeatures(flags: Record<string, boolean>): string[] {
 -- ADD COLUMNS TO STORES TABLE
 -- ============================================================================
 
-ALTER TABLE stores 
+ALTER TABLE stores
   ADD COLUMN IF NOT EXISTS features JSONB DEFAULT '{}',
   ADD COLUMN IF NOT EXISTS store_type TEXT DEFAULT 'general';
 
-COMMENT ON COLUMN stores.features IS 'Feature flags for this store (e.g., {"size_variants": true})';
-COMMENT ON COLUMN stores.store_type IS 'Store type preset: retail, fashion, general';
+COMMENT ON COLUMN stores.features IS 'Feature flags for this store';
+COMMENT ON COLUMN stores.store_type IS 'Store type preset: general';
 
 -- ============================================================================
 -- INDEX FOR QUERYING
 -- ============================================================================
 
--- GIN index for efficient JSONB feature queries
 CREATE INDEX IF NOT EXISTS idx_stores_features_gin ON stores USING GIN (features);
-
--- Index for filtering by store type
 CREATE INDEX IF NOT EXISTS idx_stores_type ON stores(store_type);
 
 -- ============================================================================
@@ -417,16 +333,6 @@ interface FeatureFlagsState {
   isLoading: boolean;
 }
 
-/**
- * Hook to read and check store-level feature flags.
- *
- * Loads flags from localStorage first (instant, offline-capable),
- * then syncs from the database in the background.
- *
- * Usage:
- *   const { isEnabled, isDisabled } = useFeatureFlags();
- *   if (isEnabled('size_variants')) { ... }
- */
 export function useFeatureFlags(): {
   isEnabled: (featureKey: string) => boolean;
   isDisabled: (featureKey: string) => boolean;
@@ -444,10 +350,8 @@ export function useFeatureFlags(): {
 
   const storeId = user?.storeId;
 
-  // Load from localStorage (offline-first)
   const loadFromCache = useCallback(() => {
     if (!storeId) return null;
-
     try {
       const cached = localStorage.getItem(`store_features_${storeId}`);
       if (cached) {
@@ -463,10 +367,8 @@ export function useFeatureFlags(): {
     return null;
   }, [storeId]);
 
-  // Load from database (online sync)
   const loadFromDb = useCallback(async () => {
     if (!storeId || !navigator.onLine) return null;
-
     try {
       const response = await fetch(`/api/admin/stores/${storeId}/features`);
       if (!response.ok) return null;
@@ -475,7 +377,6 @@ export function useFeatureFlags(): {
       const flags = data.features || {};
       const storeType = data.store_type || "general";
 
-      // Cache to localStorage
       localStorage.setItem(
         `store_features_${storeId}`,
         JSON.stringify({ flags, storeType })
@@ -487,24 +388,20 @@ export function useFeatureFlags(): {
     }
   }, [storeId]);
 
-  // Initialize
   useEffect(() => {
     if (!storeId) {
       setState({ flags: {}, storeType: "general", isLoading: false });
       return;
     }
 
-    // 1. Load from cache immediately
     const cached = loadFromCache();
     if (cached) {
       setState({ flags: cached.flags, storeType: cached.storeType, isLoading: false });
     } else {
-      // 2. No cache — use preset defaults
       const defaults = getDefaultFeaturesForPreset("general");
       setState({ flags: defaults, storeType: "general", isLoading: false });
     }
 
-    // 3. Sync from database in background
     loadFromDb().then((dbData) => {
       if (dbData) {
         setState((prev) => ({
@@ -517,9 +414,7 @@ export function useFeatureFlags(): {
   }, [storeId, loadFromCache, loadFromDb]);
 
   const isEnabled = useCallback(
-    (featureKey: string): boolean => {
-      return state.flags[featureKey] === true;
-    },
+    (featureKey: string): boolean => state.flags[featureKey] === true,
     [state.flags]
   );
 
@@ -562,25 +457,6 @@ interface FeatureFlagGuardProps {
   fallback?: React.ReactNode;
 }
 
-/**
- * Wraps content that requires a specific store-level feature flag.
- * If the feature is disabled for the current store, shows fallback or null.
- *
- * This is the store-level gate. Employee-level permissions are handled
- * by the existing PermissionGuard.
- *
- * Usage:
- *   <FeatureFlagGuard feature="size_variants">
- *     <SizeVariantSelector />
- *   </FeatureFlagGuard>
- *
- *   <FeatureFlagGuard
- *     feature="bulk_scanning"
- *     fallback={<Button disabled>Bulk Scan (upgrade required)</Button>}
- *   >
- *     <Button onClick={handleBulkScan}>Bulk Scan</Button>
- *   </FeatureFlagGuard>
- */
 export function FeatureFlagGuard({
   feature,
   children,
@@ -598,9 +474,6 @@ export function FeatureFlagGuard({
   return <>{children}</>;
 }
 
-/**
- * Hook version for inline checks
- */
 export function useFeatureFlag(feature: string): boolean {
   const { isEnabled } = useFeatureFlags();
   return isEnabled(feature);
@@ -611,38 +484,20 @@ export function useFeatureFlag(feature: string): boolean {
 
 **File**: `src/app/admin/page.tsx` (modify existing)
 
-Add a "Features" button next to each store (next to the existing "Employees" button). When clicked, opens a dialog showing:
-
-1. The store's current preset (dropdown to change: General, Retail, Fashion)
-2. A list of all features with toggle switches (mirroring the existing employee permission toggle UI)
+Add a "Features" button next to each store. When clicked, opens a dialog showing:
+1. The store's current preset
+2. A list of all features with toggle switches
 3. Save button to persist changes to `stores.features`
 
-The dialog reuses the existing `Switch` component and `SECTION_KEYS` pattern from the employee management section.
-
 **New API endpoint**: `PATCH /api/admin/stores/{id}/features`
-- Body: `{ store_type: "fashion", features: { "size_variants": true, ... } }`
+- Body: `{ store_type: "general", features: { "product_discount": true, ... } }`
 - Updates `stores.features` and `stores.store_type` columns
 
 ### 4.6 Step 6: Modify Store Creation — Select Preset
 
 **File**: `src/app/admin/page.tsx` (modify existing store creation dialog)
 
-Add a "Store Type" dropdown to the "Create New Store" dialog:
-
-```tsx
-<Select value={storeType} onValueChange={setStoreType}>
-  <SelectTrigger>
-    <SelectValue placeholder="Select store type" />
-  </SelectTrigger>
-  <SelectContent>
-    <SelectItem value="general">General Store</SelectItem>
-    <SelectItem value="retail">Retail Store</SelectItem>
-    <SelectItem value="fashion">Fashion Boutique</SelectItem>
-  </SelectContent>
-</Select>
-```
-
-When creating the store, apply the preset's features:
+Add a "Store Type" dropdown to the "Create New Store" dialog. When creating the store, apply the preset's features:
 
 ```typescript
 const features = getDefaultFeaturesForPreset(storeType);
@@ -668,100 +523,55 @@ Wrap any feature-specific buttons/components in `FeatureFlagGuard`:
 ```tsx
 import { FeatureFlagGuard } from "@/lib/auth/featureGuard";
 
-// In the POS header:
 <FeatureFlagGuard feature="transactions">
   <Button variant="ghost" size="sm" onClick={() => router.push("/transactions")}>
     <History className="h-4 w-4 mr-1" />
     History
   </Button>
 </FeatureFlagGuard>
-
-// New feature-specific buttons:
-<FeatureFlagGuard feature="bulk_scanning">
-  <Button variant="ghost" size="sm" onClick={handleBulkScan}>
-    <Scan className="h-4 w-4 mr-1" />
-    Bulk Scan
-  </Button>
-</FeatureFlagGuard>
 ```
 
-### 4.8 Step 8: New Feature Implementation Pattern
+---
 
-When adding a **new feature** (e.g., "size_variants"):
+## 5. Future Feature Addition Playbook
 
-1. **Register the feature** in `src/lib/features.ts`:
+Use this exact checklist when adding any new feature in the future:
+
+1. **Register in `src/lib/features.ts`**:
    ```typescript
-   size_variants: {
-     key: "size_variants",
-     label: "Size Variants",
-     description: "Track inventory by clothing sizes",
-     category: "fashion",
+   new_feature: {
+     key: "new_feature",
+     label: "New Feature",
+     description: "What it does",
+     category: "core",
      default: false,
    },
    ```
 
-2. **Add to presets** in `FEATURE_PRESETS`:
+2. **Add to preset(s) in `FEATURE_PRESETS`**:
    ```typescript
-   fashion: {
-     ...
+   general: {
      features: {
        ...
-       size_variants: true,  // Enable for fashion stores
+       new_feature: true,
      },
    },
    ```
 
-3. **Create the feature component**:
-   ```tsx
-   // src/components/pos/SizeVariantSelector.tsx
-   export function SizeVariantSelector({ product }: { product: Product }) {
-     // Feature-specific UI
-   }
-   ```
+3. **Create the feature component/module** under `src/components/` or `src/app/...`
 
-4. **Wrap in FeatureFlagGuard** wherever it's used:
-   ```tsx
-   <FeatureFlagGuard feature="size_variants">
-     <SizeVariantSelector product={product} />
-   </FeatureFlagGuard>
-   ```
+4. **Wrap UI in `<FeatureFlagGuard feature="new_feature">`** wherever it renders
 
-5. **Guard API routes** (if the feature has backend logic):
+5. **Guard API routes** if the feature needs backend logic:
    ```typescript
-   // In API route
-   import { isFeatureEnabled } from "@/lib/features";
-   if (!(await checkFeature(storeId, "size_variants"))) {
+   if (!(await checkFeature(storeId, "new_feature"))) {
      return NextResponse.json({ error: "Feature not enabled" }, { status: 403 });
    }
    ```
 
-6. **Add tests** for the feature module.
+6. **Add tests** for the feature module
 
----
-
-## 5. Testing Strategy
-
-### 5.1 Unit Testing
-Each feature module is tested in isolation:
-- Test the feature component renders correctly
-- Test the feature's business logic
-- Test with the feature flag enabled and disabled
-
-### 5.2 Preset Testing
-Each preset is a known-good combination. Test:
-- All features in the preset work together
-- No conflicts between features in the same preset
-
-### 5.3 Integration Testing
-Test feature interactions only between features that appear in the same preset:
-- Fashion preset: `size_variants` + `color_variants` + `seasonal_collections` + `lookbook_view`
-- Retail preset: `wholesale_pricing` + `bulk_scanning`
-
-### 5.4 Rollout Strategy
-- New features default to `false` (off)
-- Enable for one store first (canary deployment)
-- Monitor for issues
-- Expand to more stores
+7. **Never reference removed features** — if you see `size_variants`, `bulk_scanning`, etc. in old docs or code, treat them as deleted and do not reintroduce them without explicit user request
 
 ---
 
@@ -775,11 +585,11 @@ Test feature interactions only between features that appear in the same preset:
 
 4. **Offline-first loading** — flags load from localStorage instantly, sync from DB in background. Critical for PWA use case.
 
-5. **Admin-managed** — only the admin can toggle features per store. Store owners cannot modify their own feature set.
+5. **Admin-managed** — only the admin can toggle features per store.
 
-6. **Mirror existing patterns** — `FeatureFlagGuard` mirrors `PermissionGuard`, `features.ts` mirrors `permissions.ts`. Minimal learning curve.
+6. **Mirror existing patterns** — `FeatureFlagGuard` mirrors `PermissionGuard`, `features.ts` mirrors `permissions.ts`.
 
-7. **Feature flags are store-level gates, not employee permissions** — if a feature is off for a store, no one in that store can access it. Employee permissions (existing `SECTIONS` system) then control who within the store can use enabled features.
+7. **Feature flags are store-level gates, not employee permissions** — if a feature is off for a store, no one in that store can access it.
 
 ---
 
@@ -787,7 +597,7 @@ Test feature interactions only between features that appear in the same preset:
 
 ### Adding a new feature:
 1. Add to `FEATURES` in `src/lib/features.ts`
-2. Add to appropriate preset(s) in `FEATURE_PRESETS`
+2. Add to preset(s) in `FEATURE_PRESETS`
 3. Create feature component
 4. Wrap in `<FeatureFlagGuard feature="key">`
 5. Add tests
@@ -795,18 +605,18 @@ Test feature interactions only between features that appear in the same preset:
 ### Checking if a feature is enabled (in component):
 ```tsx
 const { isEnabled } = useFeatureFlags();
-if (isEnabled('size_variants')) { ... }
+if (isEnabled('product_discount')) { ... }
 ```
 
 ### Checking if a feature is enabled (inline):
 ```tsx
-const hasFeature = useFeatureFlag('size_variants');
+const hasFeature = useFeatureFlag('product_discount');
 ```
 
 ### Guarding a component:
 ```tsx
-<FeatureFlagGuard feature="bulk_scanning" fallback={<Button disabled>Bulk Scan</Button>}>
-  <BulkScanButton />
+<FeatureFlagGuard feature="product_discount" fallback={<Button disabled>Discounts</Button>}>
+  <DiscountButton />
 </FeatureFlagGuard>
 ```
 
@@ -823,7 +633,6 @@ When this system is first deployed:
 1. Run migration `016_store_feature_flags.sql` — adds `features` and `store_type` columns with defaults (`{}` and `"general"`)
 2. Backfill existing stores: set `store_type` based on their characteristics, populate `features` from the `general` preset
 3. Existing stores continue to work with the `general` preset (core features only)
-4. Admin can then upgrade stores to `retail` or `fashion` presets as needed
 
 ---
 
@@ -831,21 +640,25 @@ When this system is first deployed:
 
 | File | Purpose | Status |
 |------|---------|--------|
-| `src/lib/features.ts` | Feature definitions, presets, types | **New** |
-| `src/hooks/useFeatureFlags.ts` | Hook to read/check flags | **New** |
-| `src/lib/auth/featureGuard.tsx` | FeatureFlagGuard component | **New** |
-| `supabase/migrations/016_store_feature_flags.sql` | DB migration | **New** |
-| `src/app/admin/page.tsx` | Modified: add feature toggle UI | **Modify** |
-| `src/app/api/admin/stores/[id]/features/route.ts` | API for feature management | **New** |
-| `src/app/pos/page.tsx` | Modified: wrap feature-specific UI | **Modify** |
+| `src/lib/features.ts` | Feature definitions, presets, types | **Implemented** |
+| `src/hooks/useFeatureFlags.ts` | Hook to read/check flags | **Implemented** |
+| `src/lib/auth/featureGuard.tsx` | FeatureFlagGuard component | **Implemented** |
+| `supabase/migrations/016_store_feature_flags.sql` | DB migration | **Implemented** |
+| `src/app/admin/page.tsx` | Modified: add feature toggle UI | **Implemented** |
+| `src/app/api/admin/stores/[id]/features/route.ts` | API for feature management | **Implemented** |
+| `src/app/pos/page.tsx` | Modified: wrap feature-specific UI | **Implemented** |
+| `src/components/TransactionAnalytics.tsx` | Transaction analytics dashboard | **Implemented** |
+| `src/components/charts/TransactionCharts.tsx` | Recharts visualizations | **Implemented** |
+| `src/app/api/transactions/analytics/route.ts` | Analytics aggregations API | **Implemented** |
+| `src/components/ui/tabs.tsx` | Tabs UI for analytics/list toggle | **Implemented** |
 
 ---
 
 ## 10. Glossary
 
-- **Feature**: A discrete piece of functionality (e.g., "size variants", "bulk scanning")
+- **Feature**: A discrete piece of functionality (e.g., "product_discount")
 - **Feature Flag**: A boolean toggle that controls whether a feature is enabled for a store
-- **Preset**: A pre-configured bundle of feature flags for a store type (retail, fashion, general)
+- **Preset**: A pre-configured bundle of feature flags for a store type
 - **Store-level flag**: Controls whether a feature exists for a store at all
 - **Employee-level permission**: Controls which employees can access an enabled feature (existing system)
 - **Feature Guard**: A component that wraps content and only renders it if the feature is enabled

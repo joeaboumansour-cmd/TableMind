@@ -40,6 +40,7 @@ import { formatLL, formatUSD, convertUsdToLl, convertLlToUsdForSale, SELL_RATE, 
 import BarcodeScanner from "@/components/BarcodeScanner";
 import CSVImportDialog from "@/components/CSVImportDialog";
 import { downloadCSV, productsToCSV } from "@/lib/csv/utils";
+import { FeatureFlagGuard } from "@/lib/auth/featureGuard";
 
 interface Product {
   id: string;
@@ -50,6 +51,7 @@ interface Product {
   selling_price: number;
   currency: 'LL' | 'USD';
   profit_percentage: number;
+  discount_percentage: number;
   stock_quantity: number;
   min_stock_threshold: number;
   created_at: string;
@@ -99,9 +101,14 @@ export default function StoreProductsPage() {
   const [currency, setCurrency] = useState<'LL' | 'USD'>("LL");
   const [costPrice, setCostPrice] = useState("");
   const [profitPercentage, setProfitPercentage] = useState("");
+  const [discountPercentage, setDiscountPercentage] = useState("");
   const [sellingPrice, setSellingPrice] = useState("");
   const [stockQuantity, setStockQuantity] = useState("");
   const [minStockThreshold, setMinStockThreshold] = useState("5");
+
+  // Product discount
+  const [discountEnabled, setDiscountEnabled] = useState(false);
+  const [discountPercent, setDiscountPercent] = useState("0");
   
   // Product Variants
   const [variants, setVariants] = useState<Array<{ barcode: string; variantName: string }>>([]);
@@ -271,6 +278,8 @@ export default function StoreProductsPage() {
 
       let parentProductId;
 
+      const discount = parseFloat(discountPercentage) || 0;
+
       if (editingProduct) {
         // Update existing product
         const { data, error } = await supabase
@@ -282,6 +291,7 @@ export default function StoreProductsPage() {
             selling_price: selling,
             currency: currency,
             profit_percentage: profit,
+            discount_percentage: discount,
             stock_quantity: parseInt(stockQuantity),
             min_stock_threshold: parseInt(minStockThreshold),
           })
@@ -304,6 +314,7 @@ export default function StoreProductsPage() {
             selling_price: selling,
             currency: currency,
             profit_percentage: profit,
+            discount_percentage: discount,
             stock_quantity: parseInt(stockQuantity),
             min_stock_threshold: parseInt(minStockThreshold),
           })
@@ -365,6 +376,7 @@ export default function StoreProductsPage() {
     setCurrency(product.currency || "LL");
     setCostPrice(product.cost_price.toString());
     setProfitPercentage(product.profit_percentage.toString());
+    setDiscountPercentage(product.discount_percentage?.toString() || "0");
     setSellingPrice(product.selling_price.toString());
     setStockQuantity(product.stock_quantity.toString());
     setMinStockThreshold(product.min_stock_threshold.toString());
@@ -398,6 +410,7 @@ export default function StoreProductsPage() {
     setCurrency("LL");
     setCostPrice("");
     setProfitPercentage("");
+    setDiscountPercentage("");
     setSellingPrice("");
     setStockQuantity("");
     setMinStockThreshold("5");
@@ -876,6 +889,30 @@ const filteredProducts = products.filter(
                       )}
                     </p>
                   </div>
+                  <FeatureFlagGuard feature="product_discount">
+                    <div className="space-y-2">
+                      <Label htmlFor="discountPercentage" className="text-sm">Discount %</Label>
+                      <Input
+                        id="discountPercentage"
+                        type="number"
+                        step="0.1"
+                        min="0"
+                        max="100"
+                        placeholder="0"
+                        value={discountPercentage}
+                        onChange={(e) => setDiscountPercentage(e.target.value)}
+                        className="h-9"
+                        inputMode="decimal"
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        {discountPercentage && parseFloat(discountPercentage) > 0 ? (
+                          <>Product will be sold at {parseFloat(discountPercentage).toFixed(1)}% off the selling price</>
+                        ) : (
+                          <>No discount applied (0% by default)</>
+                        )}
+                      </p>
+                    </div>
+                  </FeatureFlagGuard>
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-2">
                       <Label htmlFor="stockQuantity" className="text-sm">Stock Quantity</Label>
@@ -1002,6 +1039,11 @@ const filteredProducts = products.filter(
                       <Badge variant={product.profit_percentage >= 0 ? "default" : "destructive"} className="text-xs">
                         {product.profit_percentage.toFixed(1)}% profit
                       </Badge>
+                      {product.discount_percentage > 0 && (
+                        <Badge variant="default" className="text-xs bg-green-500">
+                          -{product.discount_percentage}%
+                        </Badge>
+                      )}
                       <span className="text-muted-foreground">
                         Stock: {product.stock_quantity}
                       </span>
@@ -1081,13 +1123,19 @@ const filteredProducts = products.filter(
                   <p className="font-medium">{selectedProduct.profit_percentage.toFixed(1)}%</p>
                 </div>
                 <div>
+                  <Label className="text-xs text-muted-foreground">Discount</Label>
+                  <p className="font-medium">{selectedProduct.discount_percentage > 0 ? `${selectedProduct.discount_percentage}% OFF` : "None"}</p>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
                   <Label className="text-xs text-muted-foreground">Stock</Label>
                   <p className="font-medium">{selectedProduct.stock_quantity}</p>
                 </div>
-              </div>
-              <div>
-                <Label className="text-xs text-muted-foreground">Min Stock Alert</Label>
-                <p className="font-medium">{selectedProduct.min_stock_threshold}</p>
+                <div>
+                  <Label className="text-xs text-muted-foreground">Min Stock Alert</Label>
+                  <p className="font-medium">{selectedProduct.min_stock_threshold}</p>
+                </div>
               </div>
               <div>
                 <Label className="text-xs text-muted-foreground">Added</Label>

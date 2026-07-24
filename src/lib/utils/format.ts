@@ -195,3 +195,10 @@ export function formatTransactionNumber(
 ): string {
   return `${prefix}-${String(number).padStart(padding, '0')}`;
 }
+
+/**
+ * Format a number as percentage
+ */
+export function formatPercent(value: number, decimals: number = 1): string {
+  return `${value.toFixed(decimals)}%`;
+}

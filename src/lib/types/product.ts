@@ -9,6 +9,7 @@ export interface Product {
   selling_price: number;
   currency: 'LL' | 'USD';
   profit_percentage: number;
+  discount_percentage: number;
   stock_quantity: number;
   min_stock_threshold: number;
   parent_id?: string;
@@ -22,6 +23,7 @@ export interface ProductInput {
   selling_price?: number;
   currency?: 'LL' | 'USD';
   profit_percentage?: number;
+  discount_percentage?: number;
   stock_quantity?: number;
   min_stock_threshold?: number;
 }
@@ -33,6 +35,7 @@ export interface ProductUpdate {
   selling_price?: number;
   currency?: 'LL' | 'USD';
   profit_percentage?: number;
+  discount_percentage?: number;
   stock_quantity?: number;
   min_stock_threshold?: number;
 }

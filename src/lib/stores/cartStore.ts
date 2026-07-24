@@ -39,18 +39,38 @@ export const useCartStore = create<CartStore>()(
           unitPriceUsd = convertLlToUsdForReturn(product.selling_price);
         }
 
+        // Calculate discount
+        const discountPercentage = product.discount_percentage || 0;
+        let discountedUnitPriceLl = unitPriceLl;
+        let discountedUnitPriceUsd = unitPriceUsd;
+
+        if (discountPercentage > 0) {
+          discountedUnitPriceLl = unitPriceLl * (1 - discountPercentage / 100);
+          discountedUnitPriceUsd = unitPriceUsd * (1 - discountPercentage / 100);
+        }
+
+        const unitPriceDiscountAmount = unitPriceLl - discountedUnitPriceLl;
+
         // Add new item at the top of the cart
         const newItem: CartItem = {
           product_id: product.id,
           product_name: product.name,
           barcode: product.barcode,
           quantity,
-          unit_price: unitPriceLl,
-          total_price: quantity * unitPriceLl,
-          unit_price_usd: unitPriceUsd,
-          total_price_usd: quantity * unitPriceUsd,
+          unit_price: discountedUnitPriceLl,
+          total_price: quantity * discountedUnitPriceLl,
+          unit_price_usd: discountedUnitPriceUsd,
+          total_price_usd: quantity * discountedUnitPriceUsd,
           stock_quantity: product.stock_quantity,
           currency: product.currency || 'LL',
+          // Discount fields
+          discount_percentage: discountPercentage,
+          original_unit_price: unitPriceLl,
+          original_total_price: quantity * unitPriceLl,
+          original_unit_price_usd: unitPriceUsd,
+          original_total_price_usd: quantity * unitPriceUsd,
+          unit_price_discount_amount: unitPriceDiscountAmount,
+          total_discount_amount: quantity * unitPriceDiscountAmount,
         };
         set({ items: [newItem, ...items] });
         return true;
@@ -76,6 +96,9 @@ export const useCartStore = create<CartStore>()(
                   quantity,
                   total_price: quantity * item.unit_price,
                   total_price_usd: quantity * item.unit_price_usd,
+                  original_total_price: quantity * item.original_unit_price,
+                  original_total_price_usd: quantity * item.original_unit_price_usd,
+                  total_discount_amount: quantity * item.unit_price_discount_amount,
                 }
               : item
           ),
@@ -131,6 +154,26 @@ export const useCartStore = create<CartStore>()(
         return get().getSubtotalUsd();
       },
 
+      getTotalDiscount: () => {
+        const { items } = get();
+        return items.reduce((sum, item) => sum + item.total_discount_amount, 0);
+      },
+
+      getTotalDiscountUsd: () => {
+        const { items } = get();
+        return items.reduce((sum, item) => sum + (item.original_total_price_usd - item.total_price_usd), 0);
+      },
+
+      getTotalOriginal: () => {
+        const { items } = get();
+        return items.reduce((sum, item) => sum + item.original_total_price, 0);
+      },
+
+      getTotalOriginalUsd: () => {
+        const { items } = get();
+        return items.reduce((sum, item) => sum + item.original_total_price_usd, 0);
+      },
+
       getItemCount: () => {
         const { items } = get();
         return items.reduce((count, item) => count + item.quantity, 0);
@@ -152,6 +195,14 @@ export const useCartStore = create<CartStore>()(
           persistedState.items = persistedState.items.map((item: any) => ({
             ...item,
             stock_quantity: item.stock_quantity ?? 9999,
+            // Add discount fields for backward compatibility with existing cart data
+            discount_percentage: item.discount_percentage ?? 0,
+            original_unit_price: item.original_unit_price ?? item.unit_price,
+            original_total_price: item.original_total_price ?? item.total_price,
+            original_unit_price_usd: item.original_unit_price_usd ?? item.unit_price_usd,
+            original_total_price_usd: item.original_total_price_usd ?? item.total_price_usd,
+            unit_price_discount_amount: item.unit_price_discount_amount ?? 0,
+            total_discount_amount: item.total_discount_amount ?? 0,
           }));
         }
         return persistedState as any;

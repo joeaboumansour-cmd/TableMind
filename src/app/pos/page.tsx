@@ -37,6 +37,7 @@ import {
   seedProductsIfNeeded,
 } from "@/lib/db";
 import type { CachedProduct } from "@/lib/db";
+import { useFeatureFlag } from "@/lib/auth/featureGuard";
 
 const supabase = createClient();
 
@@ -147,6 +148,7 @@ export default function POSPage() {
               selling_price: p.selling_price,
               currency: (p.currency === "USD" ? "USD" : "LL") as "LL" | "USD",
               profit_percentage: p.profit_percentage,
+              discount_percentage: p.discount_percentage || 0,
               stock_quantity: p.stock_quantity,
               min_stock_threshold: p.min_stock_threshold,
               parent_id: p.parent_id || undefined,
@@ -202,6 +204,7 @@ export default function POSPage() {
               selling_price: p.selling_price,
               currency: (p.currency === "USD" ? "USD" : "LL") as "LL" | "USD",
               profit_percentage: p.profit_percentage,
+              discount_percentage: p.discount_percentage || 0,
               stock_quantity: p.stock_quantity,
               min_stock_threshold: p.min_stock_threshold,
               parent_id: p.parent_id || undefined,
@@ -254,7 +257,7 @@ export default function POSPage() {
     if (product) {
       // Handle product variants with price inheritance
       let resolvedProduct = {...product};
-      
+
       // If this is a variant child product, inherit values from parent (O(1) lookup)
       if (product.parent_id) {
         const parent = barcodeIndexRef.current.get(product.parent_id);
@@ -268,6 +271,14 @@ export default function POSPage() {
             currency: parent.currency,
           };
         }
+      }
+
+      // If product discount feature is disabled, force discount to 0
+      if (!useFeatureFlag("product_discount")) {
+        resolvedProduct = {
+          ...resolvedProduct,
+          discount_percentage: 0,
+        };
       }
 
       // Check if item already exists in cart
@@ -510,7 +521,7 @@ export default function POSPage() {
             ) : (
               <div className="space-y-3">
                 {items.map((item) => (
-<div
+  <div
   key={item.product_id}
   id={`cart-item-${item.product_id}`}
   className={`p-1 rounded-lg transition-all duration-300 ${
@@ -524,12 +535,32 @@ export default function POSPage() {
     <p className="font-semibold text-base leading-tight">
       {item.product_name}
     </p>
-    <p className="text-xs text-muted-foreground text-center">
-      {formatLL(item.unit_price)} each
-    </p>
-    <p className="text-xs text-muted-foreground text-center">
-      {formatUSD(item.unit_price_usd)} each
-    </p>
+    {item.discount_percentage > 0 ? (
+      <>
+        <p className="text-xs text-muted-foreground text-center">
+          <span className="line-through">{formatLL(item.original_unit_price)}</span>{' '}
+          <span className="text-green-600 font-semibold">{formatLL(item.unit_price)}</span> each
+        </p>
+        <p className="text-xs text-muted-foreground text-center">
+          <span className="line-through">{formatUSD(item.original_unit_price_usd)}</span>{' '}
+          <span className="text-green-600 font-semibold">{formatUSD(item.unit_price_usd)}</span> each
+        </p>
+        <div className="flex justify-center mt-1">
+          <Badge variant="default" className="text-xs bg-green-500">
+            -{item.discount_percentage}%
+          </Badge>
+        </div>
+      </>
+    ) : (
+      <>
+        <p className="text-xs text-muted-foreground text-center">
+          {formatLL(item.unit_price)} each
+        </p>
+        <p className="text-xs text-muted-foreground text-center">
+          {formatUSD(item.unit_price_usd)} each
+        </p>
+      </>
+    )}
   </div>
 
   {/* Quantity and Price Row */}
@@ -584,29 +615,42 @@ export default function POSPage() {
             <div className="flex-shrink-0 p-4 pt-3 border-t">
               {/* Clear All + Total */}
               <div className="space-y-3">
-                <div className="flex justify-between items-center">
-                  <Button
-                    variant="destructive"
-                    size="sm"
-                    className="flex items-center gap-2"
-                    onClick={() => {
-                      if (window.confirm("Are you sure you want to clear all items from the cart?")) {
-                        clearCart();
-                        toast.success("Cart cleared");
-                      }
-                    }}
-                  >
-                    <Trash2 className="h-4 w-4" />
-                    Clear All
-                  </Button>
-                  <span className="text-right">
-                    <div className="text-2xl font-bold text-amber-500">
-                      {formatLL(getTotal())}
+                <div className="space-y-2">
+                  <div className="flex justify-between items-center">
+                    <Button
+                      variant="destructive"
+                      size="sm"
+                      className="flex items-center gap-2"
+                      onClick={() => {
+                        if (window.confirm("Are you sure you want to clear all items from the cart?")) {
+                          clearCart();
+                          toast.success("Cart cleared");
+                        }
+                      }}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                      Clear All
+                    </Button>
+                    <div className="text-right">
+                      {/* Show discount breakdown if any items have discounts */}
+                      {useCartStore.getState().getTotalDiscount() > 0 && (
+                        <>
+                          <div className="text-sm text-muted-foreground">
+                            Subtotal: {formatLL(useCartStore.getState().getTotalOriginal())}
+                          </div>
+                          <div className="text-sm text-red-500">
+                            Discount: -{formatLL(useCartStore.getState().getTotalDiscount())}
+                          </div>
+                        </>
+                      )}
+                      <div className="text-2xl font-bold text-amber-500">
+                        {formatLL(getTotal())}
+                      </div>
+                      <div className="text-s text-muted-foreground">
+                        {formatUSD(getTotalUsd())}
+                      </div>
                     </div>
-                    <div className="text-s text-muted-foreground">
-                      {formatUSD(getTotalUsd())}
-                    </div>
-                  </span>
+                  </div>
                 </div>
               </div>
             </div>

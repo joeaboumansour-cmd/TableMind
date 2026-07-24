@@ -46,6 +46,7 @@ import {
 import { toast } from "sonner";
 import { formatDateTime } from "@/lib/utils/format";
 import { SECTIONS, SectionKey } from "@/lib/auth/permissions";
+import { FEATURES, FEATURE_PRESETS, FeatureKey, getDefaultFeaturesForPreset, mergeFeaturesWithDefaults } from "@/lib/features";
 
 const supabase = createClient();
 
@@ -66,6 +67,10 @@ interface Employee {
   created_at: string;
 }
 
+interface StoreFeatures {
+  [key: string]: boolean;
+}
+
 // Section toggle order for display
 const SECTION_KEYS: SectionKey[] = ["pos", "inventory", "transactions", "receipts"];
 
@@ -81,6 +86,9 @@ export default function AdminPage() {
   const [storeUsername, setStoreUsername] = useState("");
   const [storePassword, setStorePassword] = useState("");
   const [licenseDate, setLicenseDate] = useState("");
+  const [storeType, setStoreType] = useState("general");
+  const [presetFeatures, setPresetFeatures] = useState<StoreFeatures>({});
+  const [showPresetPreview, setShowPresetPreview] = useState(false);
 
   // Employee management
   const [isEmployeeDialogOpen, setIsEmployeeDialogOpen] = useState(false);
@@ -88,6 +96,15 @@ export default function AdminPage() {
   const [selectedStoreName, setSelectedStoreName] = useState("");
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [isLoadingEmployees, setIsLoadingEmployees] = useState(false);
+
+  // Feature flag management
+  const [isFeatureDialogOpen, setIsFeatureDialogOpen] = useState(false);
+  const [featureStoreId, setFeatureStoreId] = useState<string | null>(null);
+  const [featureStoreName, setFeatureStoreName] = useState("");
+  const [featureStoreType, setFeatureStoreType] = useState("general");
+  const [featureFlags, setFeatureFlags] = useState<StoreFeatures>({});
+  const [isSavingFeatures, setIsSavingFeatures] = useState(false);
+  const [isLoadingFeatures, setIsLoadingFeatures] = useState(false);
 
   // Employee form
   const [editingEmployee, setEditingEmployee] = useState<Employee | null>(null);
@@ -132,12 +149,15 @@ export default function AdminPage() {
     setIsSubmitting(true);
 
     try {
+      const features = getDefaultFeaturesForPreset(storeType);
       const { data, error } = await supabase
         .from("stores")
         .insert({
           username: storeUsername,
           password_hash: storePassword,
           license_expires_at: new Date(licenseDate).toISOString(),
+          store_type: storeType,
+          features: features,
         })
         .select()
         .single();
@@ -149,6 +169,7 @@ export default function AdminPage() {
       setStoreUsername("");
       setStorePassword("");
       setLicenseDate("");
+      setStoreType("general");
       fetchStores();
     } catch (error: any) {
       console.error("Error creating store:", error);
@@ -360,6 +381,74 @@ export default function AdminPage() {
     }
   };
 
+  // ------ Feature Flag Management ------
+  const openFeatureDialog = async (storeId: string, storeName: string) => {
+    setFeatureStoreId(storeId);
+    setFeatureStoreName(storeName);
+    setIsFeatureDialogOpen(true);
+    setIsLoadingFeatures(true);
+    setFeatureStoreType("general");
+    setFeatureFlags({});
+
+    try {
+      const response = await fetch(`/api/admin/stores/features?store_id=${storeId}`);
+      if (response.ok) {
+        const data = await response.json();
+        setFeatureFlags(mergeFeaturesWithDefaults(data.features));
+        setFeatureStoreType(data.store_type || "general");
+      } else {
+        // Default to general preset
+        setFeatureFlags(getDefaultFeaturesForPreset("general"));
+        setFeatureStoreType("general");
+      }
+    } catch (error) {
+      console.error("Error fetching features:", error);
+      setFeatureFlags(getDefaultFeaturesForPreset("general"));
+      setFeatureStoreType("general");
+    } finally {
+      setIsLoadingFeatures(false);
+    }
+  };
+
+  const handlePresetChange = (presetKey: string) => {
+    setFeatureStoreType(presetKey);
+    setFeatureFlags(getDefaultFeaturesForPreset(presetKey));
+  };
+
+  const toggleFeatureFlag = (key: string) => {
+    setFeatureFlags(prev => ({
+      ...prev,
+      [key]: !prev[key],
+    }));
+  };
+
+  const handleSaveFeatures = async () => {
+    if (!featureStoreId) return;
+    setIsSavingFeatures(true);
+
+    try {
+      const response = await fetch("/api/admin/stores/features", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          store_id: featureStoreId,
+          features: featureFlags,
+          store_type: featureStoreType,
+        }),
+      });
+
+      if (!response.ok) throw new Error("Failed to save");
+
+      toast.success("Features updated successfully!");
+      setIsFeatureDialogOpen(false);
+    } catch (error) {
+      console.error("Error saving features:", error);
+      toast.error("Failed to update features");
+    } finally {
+      setIsSavingFeatures(false);
+    }
+  };
+
   const handleDeleteEmployee = async (employee: Employee) => {
     if (!confirm(`Delete employee "${employee.display_name || employee.username}"? This cannot be undone.`)) {
       return;
@@ -516,6 +605,26 @@ export default function AdminPage() {
                       required
                     />
                   </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="storeType">Store Type (Feature Preset)</Label>
+                    <select
+                      id="storeType"
+                      value={storeType}
+                      onChange={(e) => setStoreType(e.target.value)}
+                      className="w-full h-9 px-3 rounded-md border border-input bg-background text-sm"
+                    >
+                      {Object.values(FEATURE_PRESETS).map((preset) => (
+                        <option key={preset.key} value={preset.key}>
+                          {preset.name} — {preset.description}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="text-xs text-muted-foreground">
+                      {FEATURE_PRESETS[storeType]?.features ? (
+                        <>Features: {Object.entries(FEATURE_PRESETS[storeType].features).filter(([_, v]) => v).map(([k]) => k).join(", ")}</>
+                      ) : null}
+                    </p>
+                  </div>
                 </div>
                 <DialogFooter>
                   <Button type="button" variant="outline" onClick={() => setIsStoreDialogOpen(false)}>
@@ -594,6 +703,14 @@ export default function AdminPage() {
                             <Button
                               variant="outline"
                               size="sm"
+                              onClick={() => openFeatureDialog(store.id, store.username)}
+                              title="Manage features"
+                            >
+                              <span className="text-xs">Features</span>
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
                               onClick={() => openEmployeeDialog(store.id, store.username)}
                               title="Manage employees"
                             >
@@ -626,6 +743,83 @@ export default function AdminPage() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Feature Management Dialog */}
+      <Dialog open={isFeatureDialogOpen} onOpenChange={setIsFeatureDialogOpen}>
+        <DialogContent className="max-w-lg mx-4 max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Features — {featureStoreName}</DialogTitle>
+            <DialogDescription>
+              Manage store-level feature flags. Select a preset or customize individual features.
+            </DialogDescription>
+          </DialogHeader>
+
+          {isLoadingFeatures ? (
+            <div className="text-center py-8">
+              <Loader2 className="h-6 w-6 animate-spin mx-auto text-muted-foreground" />
+            </div>
+          ) : (
+            <div className="space-y-4 py-2">
+              {/* Preset Selector */}
+              <div className="space-y-2">
+                <Label className="text-xs font-medium">Preset</Label>
+                <select
+                  value={featureStoreType}
+                  onChange={(e) => handlePresetChange(e.target.value)}
+                  className="w-full h-9 px-3 rounded-md border border-input bg-background text-sm"
+                >
+                  {Object.values(FEATURE_PRESETS).map((preset) => (
+                    <option key={preset.key} value={preset.key}>
+                      {preset.name}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-xs text-muted-foreground">
+                  {FEATURE_PRESETS[featureStoreType]?.description}
+                </p>
+              </div>
+
+              <Separator />
+
+              {/* Feature Toggles */}
+              <div className="space-y-1">
+                <Label className="text-xs mb-2 block font-medium">Features</Label>
+                {Object.entries(FEATURES).map(([key, def]) => (
+                  <div key={key} className="flex items-center justify-between py-1.5 px-2 rounded-md hover:bg-muted/50">
+                    <div>
+                      <span className="text-sm font-medium">{def.label}</span>
+                      <p className="text-xs text-muted-foreground">{def.description}</p>
+                      <Badge variant="outline" className="text-[10px] mt-0.5 px-1 py-0">
+                        {def.category}
+                      </Badge>
+                    </div>
+                    <Switch
+                      checked={featureFlags[key] === true}
+                      onCheckedChange={() => toggleFeatureFlag(key)}
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <DialogFooter className="gap-2">
+            <Button variant="outline" size="sm" onClick={() => setIsFeatureDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button size="sm" onClick={handleSaveFeatures} disabled={isSavingFeatures || isLoadingFeatures}>
+              {isSavingFeatures ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                  Saving...
+                </>
+              ) : (
+                "Save Features"
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Employee Management Dialog */}
       <Dialog open={isEmployeeDialogOpen} onOpenChange={(open) => {

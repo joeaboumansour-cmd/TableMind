@@ -46,6 +46,8 @@ function CheckoutContent() {
     getSubtotalUsd,
     getTotal,
     getTotalUsd,
+    getTotalDiscount,
+    getTotalOriginal,
     clearCart,
   } = useCartStore();
 
@@ -450,6 +452,19 @@ function CheckoutContent() {
                   <Separator className="my-4" />
 
                   <div className="space-y-2">
+                    {/* Show discount breakdown if any */}
+                    {getTotalDiscount() > 0 && (
+                      <>
+                        <div className="flex justify-between text-sm text-muted-foreground">
+                          <span>Subtotal</span>
+                          <span>{formatLL(getTotalOriginal())}</span>
+                        </div>
+                        <div className="flex justify-between text-sm text-red-500">
+                          <span>Discount</span>
+                          <span>-{formatLL(getTotalDiscount())}</span>
+                        </div>
+                      </>
+                    )}
                     <div className="flex justify-between text-lg font-bold">
                       <span>Total</span>
                       <span className="text-right">

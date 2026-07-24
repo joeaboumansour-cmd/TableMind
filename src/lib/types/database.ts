@@ -48,6 +48,7 @@ export interface Database {
           selling_price: number;
           currency: string;
           profit_percentage: number;
+          discount_percentage: number;
           stock_quantity: number;
           min_stock_threshold: number;
         };
@@ -60,6 +61,7 @@ export interface Database {
           selling_price?: number;
           currency?: string;
           profit_percentage?: number;
+          discount_percentage?: number;
           stock_quantity?: number;
           min_stock_threshold?: number;
         };
@@ -72,6 +74,7 @@ export interface Database {
           selling_price?: number;
           currency?: string;
           profit_percentage?: number;
+          discount_percentage?: number;
           stock_quantity?: number;
           min_stock_threshold?: number;
         };
