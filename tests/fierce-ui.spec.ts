@@ -18,6 +18,7 @@ test.describe('Fierce UI — POS Page Button Navigation & URL Verification', () 
   });
 
   test('POS page shows empty cart with scan prompt when no items', async ({ page }) => {
+    await setMobileViewport(page);
     await navigateWithAuth(page, '/pos');
     await expect(page.locator('text=Scan items to add')).toBeVisible({ timeout: 15000 });
     await expect(page.locator('text=Use the camera above to scan barcodes')).toBeVisible();
@@ -69,6 +70,7 @@ test.describe('Fierce UI — POS Page Button Navigation & URL Verification', () 
   });
 
   test('Scanner toggle button is visible and clickable', async ({ page }) => {
+    await setMobileViewport(page);
     await navigateWithAuth(page, '/pos');
     const toggleBtn = page.locator('button:has-text("Scanner")').first();
     await expect(toggleBtn).toBeVisible({ timeout: 15000 });
@@ -78,6 +80,7 @@ test.describe('Fierce UI — POS Page Button Navigation & URL Verification', () 
   });
 
   test('Scanner state persists in localStorage after refresh', async ({ page }) => {
+    await setMobileViewport(page);
     await navigateWithAuth(page, '/pos');
     const toggleBtn = page.locator('button:has-text("Scanner")').first();
     await toggleBtn.click();

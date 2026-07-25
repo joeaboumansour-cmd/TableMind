@@ -33,12 +33,15 @@ import {
    Download,
    Upload,
    Layers,
+   Star,
  } from "lucide-react";
  import { toast } from "sonner";
 import { useAuth } from "@/lib/auth/AuthContext";
 import { formatLL, formatUSD, convertUsdToLl, convertLlToUsdForSale, SELL_RATE, RETURN_RATE, convertLlToUsdForReturn } from "@/lib/utils/format";
 import BarcodeScanner from "@/components/BarcodeScanner";
+import { isDesktop } from "@/lib/device";
 import CSVImportDialog from "@/components/CSVImportDialog";
+import { getFrequentlyUsedProductIds, addFrequentlyUsedProduct, removeFrequentlyUsedProduct, isFrequentlyUsed } from "@/lib/frequentlyUsed";
 import { downloadCSV, productsToCSV } from "@/lib/csv/utils";
 import { FeatureFlagGuard } from "@/lib/auth/featureGuard";
 
@@ -82,6 +85,10 @@ export default function StoreProductsPage() {
   );
   // O(1) barcode product index
   const [barcodeIndex, setBarcodeIndex] = useState<Map<string, Product>>(new Map());
+  // Desktop mode for hardware scanner (no camera)
+  const [isDesktopMode, setIsDesktopMode] = useState(false);
+  // Force re-render when star is toggled (localStorage change)
+  const [freqVersion, setFreqVersion] = useState(0);
 
   // Track online/offline status for UI
   useEffect(() => {
@@ -93,6 +100,13 @@ export default function StoreProductsPage() {
       window.removeEventListener("online", handleOnline);
       window.removeEventListener("offline", handleOffline);
     };
+  }, []);
+
+  // Detect desktop mode — skip camera, use compact barcode input
+  useEffect(() => {
+    if (isDesktop()) {
+      setIsDesktopMode(true);
+    }
   }, []);
 
   // Form state
@@ -1055,6 +1069,29 @@ const filteredProducts = products.filter(
                     <Button
                       variant="ghost"
                       size="sm"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        const storeId = user?.storeId || "";
+                        if (isFrequentlyUsed(storeId, product.id)) {
+                          removeFrequentlyUsedProduct(storeId, product.id);
+                          toast.info(`${product.name} removed from quick access`);
+                        } else {
+                          addFrequentlyUsedProduct(storeId, product.id);
+                          toast.success(`${product.name} added to quick access`);
+                        }
+                        setFreqVersion(v => v + 1);
+                      }}
+                      className="h-8 w-8 p-0"
+                    >
+                      <Star className={`h-4 w-4 ${
+                        isFrequentlyUsed(user?.storeId || "", product.id)
+                          ? "fill-yellow-400 text-yellow-400"
+                          : "text-gray-400"
+                      }`} />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
                       onClick={() => {
                         setSelectedProduct(product);
                         setShowInfoDialog(true);
@@ -1191,6 +1228,7 @@ const filteredProducts = products.filter(
               }}
               onClose={() => setShowScanSearch(false)}
               isActive={showScanSearch}
+              desktopMode={isDesktopMode}
             />
           </DialogContent>
         </Dialog>
@@ -1210,6 +1248,7 @@ const filteredProducts = products.filter(
               onScan={handleBarcodeScanFromCamera}
               onClose={() => setShowBarcodeScanner(false)}
               isActive={showBarcodeScanner}
+              desktopMode={isDesktopMode}
             />
           </DialogContent>
         </Dialog>

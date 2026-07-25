@@ -1,14 +1,16 @@
 import { test, expect } from '@playwright/test';
-import { navigateWithAuth, DEFAULT_CART_ITEMS } from './test-utils';
+import { navigateWithAuth, DEFAULT_CART_ITEMS, setMobileViewport } from './test-utils';
 
 test.describe('POS to Checkout Integration', () => {
   test('POS page loads with scanner toggle', async ({ page }) => {
+    await setMobileViewport(page);
     await navigateWithAuth(page, 'http://localhost:3000/pos');
     const scannerBtn = page.locator('button:has-text("Scanner")').first();
     await expect(scannerBtn).toBeVisible({ timeout: 15000 });
   });
 
   test('POS page shows empty cart with scan prompt when no items', async ({ page }) => {
+    await setMobileViewport(page);
     await navigateWithAuth(page, 'http://localhost:3000/pos');
     await expect(page.locator('text=Scan items to add')).toBeVisible({ timeout: 15000 });
     await expect(page.locator('text=Use the camera above to scan barcodes')).toBeVisible();

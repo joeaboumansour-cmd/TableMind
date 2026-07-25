@@ -8,6 +8,7 @@ import {
   DEFAULT_CART_ITEMS,
   DISCOUNT_CART_ITEMS,
   DEFAULT_FEATURE_FLAGS,
+  setMobileViewport,
 } from './integration/test-utils';
 
 // ============================================================================
@@ -89,6 +90,7 @@ test.describe('Feature Flags — Product Discount', () => {
     // This test verifies the scan handler behavior indirectly:
     // When discount feature is ON, scanning a product with discount_percentage > 0
     // should keep the discount. We verify by checking the cart store.
+    await setMobileViewport(page);
     await navigateWithFlags(page, '/pos', { product_discount: true });
     // Verify the page loaded with the feature ON
     await expect(page.locator('text=GoldenSquirrel').first()).toBeVisible({ timeout: 15000 });
@@ -100,6 +102,7 @@ test.describe('Feature Flags — Product Discount', () => {
   test('Scanning a product with discount when feature is OFF forces discount to 0', async ({ page }) => {
     // When discount feature is OFF, the scan handler forces discount_percentage to 0.
     // We verify by checking the cart store after adding a product.
+    await setMobileViewport(page);
     await navigateWithFlags(page, '/pos', { product_discount: false });
     await expect(page.locator('text=GoldenSquirrel').first()).toBeVisible({ timeout: 15000 });
     // The scanner should be active

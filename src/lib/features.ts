@@ -62,6 +62,13 @@ export const FEATURES: Record<string, FeatureDefinition> = {
     category: "core",
     default: false,
   },
+  desktop_shortcuts: {
+    key: "desktop_shortcuts",
+    label: "Desktop Shortcuts",
+    description: "Quick-access buttons for products without barcodes + frequently used items on desktop POS (replaces camera view)",
+    category: "retail",
+    default: true,
+  },
 };
 
 export type FeatureKey = keyof typeof FEATURES;
@@ -74,7 +81,7 @@ export interface FeaturePreset {
 }
 
 export const FEATURE_PRESETS: Record<string, FeaturePreset> = {
-  general: {
+    general: {
     key: "general",
     name: "General Store",
     description: "Standard features for all stores",
@@ -85,6 +92,7 @@ export const FEATURE_PRESETS: Record<string, FeaturePreset> = {
       receipts: true,
       product_discount: false,
       transaction_analytics: false,
+      desktop_shortcuts: true,
     },
   },
 };

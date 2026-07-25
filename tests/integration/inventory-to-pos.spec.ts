@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { navigateWithAuth, injectAuth } from './test-utils';
+import { navigateWithAuth, injectAuth, setMobileViewport } from './test-utils';
 
 test.describe('Inventory to POS Integration', () => {
   test('POS page loads with auth and shows header', async ({ page }) => {
@@ -25,6 +25,7 @@ test.describe('Inventory to POS Integration', () => {
   });
 
   test('POS page shows empty cart state', async ({ page }) => {
+    await setMobileViewport(page);
     await navigateWithAuth(page, 'http://localhost:3000/pos');
 
     await expect(page.locator('text=Scan items to add')).toBeVisible({ timeout: 15000 });

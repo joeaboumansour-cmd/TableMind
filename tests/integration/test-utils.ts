@@ -39,6 +39,7 @@ export const DEFAULT_FEATURE_FLAGS: Record<string, boolean> = {
   receipts: true,
   product_discount: true,
   transaction_analytics: false,
+  desktop_shortcuts: true,
 };
 
 /**
@@ -277,9 +278,17 @@ export async function clickMobileMenuItemAndVerifyUrl(page: Page, itemText: stri
 
 /**
  * Set the viewport to mobile size for mobile-specific tests.
+ * Also overrides navigator.userAgent via init script so isDesktop() detection returns false.
  */
 export async function setMobileViewport(page: Page) {
   await page.setViewportSize({ width: 375, height: 812 });
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, "userAgent", {
+      get() {
+        return "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1";
+      },
+    });
+  });
 }
 
 /**

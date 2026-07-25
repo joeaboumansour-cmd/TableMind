@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import React, { useEffect, useRef, useState, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -67,6 +67,12 @@ interface BarcodeScannerProps {
   onScan: (barcode: string) => void;
   onClose?: () => void;
   isActive?: boolean;
+  /** When true, skips camera initialization and renders a compact barcode input
+   *  with auto-focus (for desktop hardware scanners). Children are rendered
+   *  as quick-access buttons below the input. */
+  desktopMode?: boolean;
+  /** Rendered in desktop mode below the barcode input (e.g. saved product buttons). */
+  children?: React.ReactNode;
 }
 
 // ============================================================
@@ -133,7 +139,7 @@ function isValidBarcode(raw: string): boolean {
 // MAIN COMPONENT
 // ============================================================
 
-export default function BarcodeScanner({ onScan, onClose, isActive = true }: BarcodeScannerProps) {
+export default function BarcodeScanner({ onScan, onClose, isActive = true, desktopMode = false, children }: BarcodeScannerProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const videoContainerRef = useRef<HTMLDivElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -146,6 +152,7 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const quaggaRef = useRef<any>(null);
   const quaggaInitRef = useRef(false);
+  const barcodeInputRef = useRef<HTMLInputElement | null>(null);
 
   const [isScanning, setIsScanning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -298,6 +305,7 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
   // ---- Start camera ----
   const startCamera = useCallback(async () => {
     if (!isMountedRef.current) return;
+    if (desktopMode) return; // Skip camera in desktop mode
     try {
       setError(null);
 
@@ -410,7 +418,7 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
       if (err.name?.includes("NotAllowed") || err.name?.includes("Permission")) setError("Camera permission denied.");
       else if (err.name?.includes("NotFound")) setError("No camera found.");
     }
-  }, [captureLoop, startQuagga]);
+  }, [captureLoop, startQuagga, desktopMode]);
 
   // ---- Stop ----
   const stopEverything = useCallback(() => {
@@ -429,18 +437,73 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true }: Bar
   // ---- Lifecycle ----
   useEffect(() => {
     isMountedRef.current = isActive;
-    if (isActive) startCamera(); else stopEverything();
+    if (isActive) {
+      if (desktopMode) {
+        setTimeout(() => barcodeInputRef.current?.focus(), 0);
+      } else {
+        startCamera();
+      }
+    } else {
+      stopEverything();
+    }
     return () => { isMountedRef.current = false; stopEverything(); };
-  }, [isActive, startCamera, stopEverything]);
+  }, [isActive, startCamera, stopEverything, desktopMode]);
 
   // ---- Manual ----
   const handleManualSubmit = useCallback((value: string) => {
     const trimmed = value.trim();
-    if (trimmed) onScan(trimmed);
+    if (trimmed) {
+      // In desktop mode, skip dedup — hardware scanners don't fire false duplicates
+      if (desktopMode) {
+        onScan(trimmed);
+      } else {
+        reportBarcode(trimmed);
+      }
+    }
     setManualBarcode("");
-  }, [onScan]);
+    // Re-focus for next scan (desktop mode only)
+    if (desktopMode) {
+      setTimeout(() => barcodeInputRef.current?.focus(), 0);
+    }
+  }, [onScan, reportBarcode, desktopMode]);
 
   if (!isActive) return null;
+
+  // Desktop mode: compact barcode input + saved product buttons (no camera)
+  if (desktopMode) {
+    return (
+      <Card className="w-full border-amber-200/50 shadow-lg overflow-hidden flex flex-col">
+        <CardContent className="p-0 flex-1 flex flex-col overflow-hidden">
+          <div className="p-2 dark:bg-zinc-900 flex flex-col gap-2 flex-1 overflow-hidden">
+            <div className="flex gap-2 flex-shrink-0">
+              <Input
+                ref={barcodeInputRef}
+                placeholder="Scan barcode..."
+                value={manualBarcode}
+                onChange={e => setManualBarcode(e.target.value)}
+                onKeyDown={e => e.key === "Enter" && handleManualSubmit(manualBarcode)}
+                className="h-8 flex-1"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                autoFocus
+              />
+              <Button size="sm" onClick={() => handleManualSubmit(manualBarcode)}>Add</Button>
+            </div>
+            {children && (
+              <div className="flex-1 overflow-y-auto min-h-0">
+                {children}
+              </div>
+            )}
+            {onClose && (
+              <Button variant="ghost" size="sm" onClick={onClose} className="text-zinc-500 flex-shrink-0">
+                Cancel
+              </Button>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
 
   return (
     <Card className="w-full border-amber-200/50 shadow-lg overflow-hidden">

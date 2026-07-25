@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { navigateWithAuth, DEFAULT_CART_ITEMS } from './test-utils';
+import { navigateWithAuth, DEFAULT_CART_ITEMS, setMobileViewport } from './test-utils';
 
 test.describe('Offline Flow Integration', () => {
   test('POS page loads when authenticated', async ({ page }) => {
@@ -8,6 +8,7 @@ test.describe('Offline Flow Integration', () => {
   });
 
   test('POS page shows scanner toggle', async ({ page }) => {
+    await setMobileViewport(page);
     await navigateWithAuth(page, 'http://localhost:3000/pos');
     const scannerBtn = page.locator('button:has-text("Scanner")').first();
     await expect(scannerBtn).toBeVisible({ timeout: 15000 });

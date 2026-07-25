@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
@@ -37,13 +37,17 @@ import {
   seedProductsIfNeeded,
 } from "@/lib/db";
 import type { CachedProduct } from "@/lib/db";
-import { useFeatureFlag } from "@/lib/auth/featureGuard";
+import { useFeatureFlags } from "@/hooks/useFeatureFlags";
+import { isDesktop } from "@/lib/device";
+import { getFrequentlyUsedProductIds, addFrequentlyUsedProduct, removeFrequentlyUsedProduct, isFrequentlyUsed } from "@/lib/frequentlyUsed";
 
 const supabase = createClient();
 
 export default function POSPage() {
   const router = useRouter();
   const { user, logout: authLogout, canAccess, isLoading: authLoading } = useAuth();
+  const { isEnabled } = useFeatureFlags();
+  const [isDesktopMode, setIsDesktopMode] = useState(false);
   const [isScannerActive, setIsScannerActive] = useState(() => {
     if (typeof window !== 'undefined' && 'localStorage' in window) {
       const saved = localStorage.getItem("scanner_active");
@@ -85,6 +89,13 @@ export default function POSPage() {
       setCanViewTransactions(canAccess("transactions"));
     }
   }, [user, canAccess]);
+
+  // Detect desktop mode for hardware scanner + saved product buttons
+  useEffect(() => {
+    if (isDesktop() && isEnabled("desktop_shortcuts")) {
+      setIsDesktopMode(true);
+    }
+  }, [isEnabled]);
 
   // Helper: check if user auth exists in localStorage (works offline)
   function hasAuthInStorage(): boolean {
@@ -251,79 +262,76 @@ export default function POSPage() {
     barcodeIndexRef.current = idIndex;
   }, [products]);
 
-  // Handle barcode scan from camera
-  const handleBarcodeScan = (barcode: string) => {
-    const product = barcodeIndex.get(barcode);
-    if (product) {
-      // Handle product variants with price inheritance
-      let resolvedProduct = {...product};
+  // Add a product to the cart (used by both barcode scan and saved product buttons)
+  const handleProductAdd = useCallback((product: Product) => {
+    let resolvedProduct = {...product};
 
-      // If this is a variant child product, inherit values from parent (O(1) lookup)
-      if (product.parent_id) {
-        const parent = barcodeIndexRef.current.get(product.parent_id);
-        if (parent) {
-          resolvedProduct = {
-            ...resolvedProduct,
-            name: product.variant_name ? `${parent.name} - ${product.variant_name}` : parent.name,
-            cost_price: parent.cost_price,
-            selling_price: parent.selling_price,
-            profit_percentage: parent.profit_percentage,
-            currency: parent.currency,
-          };
-        }
-      }
-
-      // If product discount feature is disabled, force discount to 0
-      if (!useFeatureFlag("product_discount")) {
+    // If this is a variant child product, inherit values from parent (O(1) lookup)
+    if (product.parent_id) {
+      const parent = barcodeIndexRef.current.get(product.parent_id);
+      if (parent) {
         resolvedProduct = {
           ...resolvedProduct,
-          discount_percentage: 0,
+          name: product.variant_name ? `${parent.name} - ${product.variant_name}` : parent.name,
+          cost_price: parent.cost_price,
+          selling_price: parent.selling_price,
+          profit_percentage: parent.profit_percentage,
+          currency: parent.currency,
         };
       }
+    }
 
-      // Check if item already exists in cart
-      const existingItem = items.find(item => item.product_id === product.id);
+    // If product discount feature is disabled, force discount to 0
+    if (!isEnabled("product_discount")) {
+      resolvedProduct = {
+        ...resolvedProduct,
+        discount_percentage: 0,
+      };
+    }
 
-      if (existingItem) {
-        // Item exists - highlight it instead of increasing quantity
+    // Check if item already exists in cart
+    const existingItem = items.find(item => item.product_id === product.id);
+
+    if (existingItem) {
+      // Desktop mode: increment quantity on repeat scan (hardware scanner = intentional)
+      // Mobile mode: show "already in cart" (camera can fire false duplicates)
+      if (isDesktopMode) {
+        incrementQuantity(product.id);
+        playSuccessSound();
+        toast.success(`${resolvedProduct.name} qty increased to ${existingItem.quantity + 1}`);
+      } else {
         setHighlightedItemId(product.id);
-
-        // Clear previous timeout if exists
-        if (highlightTimeoutRef.current) {
-          clearTimeout(highlightTimeoutRef.current);
-        }
-
-        // Set timeout to remove highlight after 2 seconds
-        highlightTimeoutRef.current = setTimeout(() => {
-          setHighlightedItemId(null);
-        }, 2000);
-
+        if (highlightTimeoutRef.current) clearTimeout(highlightTimeoutRef.current);
+        highlightTimeoutRef.current = setTimeout(() => setHighlightedItemId(null), 2000);
         toast.info(`${resolvedProduct.name} is already in cart`);
-
-        // Scroll the existing cart item into view
         setTimeout(() => {
           const el = document.getElementById(`cart-item-${product.id}`);
           if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
         }, 50);
-      } else {
-        // Item doesn't exist - add it (idempotent: returns true only if actually added)
-        const added = addItem(resolvedProduct);
-        if (added) {
-          // Play success sound ONLY after product has been successfully identified AND added to cart
-          playSuccessSound();
-          toast.success(`Added ${resolvedProduct.name}`);
-        } else {
-          // Lost the race to a duplicate emission — highlight instead
-          setHighlightedItemId(product.id);
-          if (highlightTimeoutRef.current) clearTimeout(highlightTimeoutRef.current);
-          highlightTimeoutRef.current = setTimeout(() => setHighlightedItemId(null), 2000);
-          toast.info(`${resolvedProduct.name} is already in cart`);
-          setTimeout(() => {
-            const el = document.getElementById(`cart-item-${product.id}`);
-            if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
-          }, 50);
-        }
       }
+    } else {
+      const added = addItem(resolvedProduct);
+      if (added) {
+        playSuccessSound();
+        toast.success(`Added ${resolvedProduct.name}`);
+      } else {
+        setHighlightedItemId(product.id);
+        if (highlightTimeoutRef.current) clearTimeout(highlightTimeoutRef.current);
+        highlightTimeoutRef.current = setTimeout(() => setHighlightedItemId(null), 2000);
+        toast.info(`${resolvedProduct.name} is already in cart`);
+        setTimeout(() => {
+          const el = document.getElementById(`cart-item-${product.id}`);
+          if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+        }, 50);
+      }
+    }
+  }, [items, addItem, incrementQuantity, isEnabled, isDesktopMode]);
+
+  // Handle barcode scan from camera
+  const handleBarcodeScan = (barcode: string) => {
+    const product = barcodeIndex.get(barcode);
+    if (product) {
+      handleProductAdd(product);
     } else {
       toast.error("Product not found");
     }
@@ -377,6 +385,25 @@ export default function POSPage() {
       fetch("/transactions", { method: "HEAD", cache: "force-cache" }).catch(() => {});
     }
   }, [router, user]);
+
+  // Compute saved products for desktop mode (products without barcodes + frequently used)
+  // Must be before any early returns to maintain hooks order
+  const savedProducts = useMemo(() => {
+    if (!user?.storeId) return [];
+    const noBarcodeProducts = products.filter(p => !p.barcode);
+    const frequentlyUsedIds = getFrequentlyUsedProductIds(user.storeId);
+    const frequentlyUsedProducts = frequentlyUsedIds
+      .map(id => products.find(p => p.id === id))
+      .filter(Boolean) as Product[];
+    // Combine, deduplicating by ID
+    const combined = [...noBarcodeProducts, ...frequentlyUsedProducts];
+    const seen = new Set<string>();
+    return combined.filter(p => {
+      if (seen.has(p.id)) return false;
+      seen.add(p.id);
+      return true;
+    });
+  }, [products, user?.storeId]);
 
   if (isLoading || authLoading) {
     return (
@@ -484,192 +511,378 @@ export default function POSPage() {
         </div>
       </header>
 
-      {/* Main Content - Non-scrollable */}
-      <div className="flex-1 flex flex-col overflow-hidden p-4 gap-3">
-        {/* Barcode Scanner - Always Open - Compact */}
-        <div className="flex-shrink-0">
-          <div className="flex items-center justify-between mb-2">
-            <Button
-              variant={isScannerActive ? "default" : "outline"}
-              size="sm"
-              onClick={toggleScanner}
-              className="flex items-center gap-1"
-            >
-              <Scan className="h-4 w-4" />
-              {isScannerActive ? "Turn Off Scanner" : "Turn On Scanner"}
-            </Button>
-            <Badge variant={isScannerActive ? "default" : "secondary"}>
-              {isScannerActive ? "ON" : "OFF"}
-            </Badge>
-          </div>
-          <BarcodeScanner
-            onScan={handleBarcodeScan}
-            isActive={isScannerActive}
-          />
-        </div>
-
-        {/* Cart Section - Largest Element */}
-        <Card className="flex-1 flex flex-col overflow-hidden min-h-0">
-          {/* Cart Items - Scrollable */}
-          <div className="flex-1 overflow-y-auto p-4">
-            {isEmpty() ? (
-              <div className="h-full flex flex-col items-center justify-center text-muted-foreground">
-                <Scan className="h-16 w-16 mb-4 opacity-30" />
-                <p className="text-xl font-medium">Scan items to add</p>
-                <p className="text-sm mt-1">Use the camera above to scan barcodes</p>
+      {/* Main Content */}
+      {isDesktopMode ? (
+        /* ===== DESKTOP SPLIT LAYOUT ===== */
+        <div className="flex-1 flex flex-row overflow-hidden p-4 gap-4">
+          {/* Left side: Cart — 65% */}
+          <div className="flex-[65] flex flex-col overflow-hidden min-w-0">
+            <Card className="flex-1 flex flex-col overflow-hidden min-h-0">
+              {/* Cart Items - Scrollable */}
+              <div className="flex-1 overflow-y-auto p-4">
+                {isEmpty() ? (
+                  <div className="h-full flex flex-col items-center justify-center text-muted-foreground">
+                    <Scan className="h-16 w-16 mb-4 opacity-30" />
+                    <p className="text-xl font-medium">Scan items to add</p>
+                    <p className="text-sm mt-1">Use the scanner on the right</p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {items.map((item) => (
+                      <div
+                        key={item.product_id}
+                        id={`cart-item-${item.product_id}`}
+                        className={`p-1 rounded-lg transition-all duration-300 ${
+                          highlightedItemId === item.product_id
+                            ? "bg-amber-100 border-2 border-amber-500 shadow-lg scale-[1.02]"
+                            : "bg-muted/50 border-2 border-transparent"
+                        }`}
+                      >
+                        <div className="mb-2">
+                          <p className="font-semibold text-base leading-tight">
+                            {item.product_name}
+                          </p>
+                          {item.discount_percentage > 0 ? (
+                            <>
+                              <p className="text-xs text-muted-foreground text-center">
+                                <span className="line-through">{formatLL(item.original_unit_price)}</span>{' '}
+                                <span className="text-green-600 font-semibold">{formatLL(item.unit_price)}</span> each
+                              </p>
+                              <p className="text-xs text-muted-foreground text-center">
+                                <span className="line-through">{formatUSD(item.original_unit_price_usd)}</span>{' '}
+                                <span className="text-green-600 font-semibold">{formatUSD(item.unit_price_usd)}</span> each
+                              </p>
+                              <div className="flex justify-center mt-1">
+                                <Badge variant="default" className="text-xs bg-green-500">
+                                  -{item.discount_percentage}%
+                                </Badge>
+                              </div>
+                            </>
+                          ) : (
+                            <>
+                              <p className="text-xs text-muted-foreground text-center">
+                                {formatLL(item.unit_price)} each
+                              </p>
+                              <p className="text-xs text-muted-foreground text-center">
+                                {formatUSD(item.unit_price_usd)} each
+                              </p>
+                            </>
+                          )}
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <Button
+                              variant="outline"
+                              size="icon"
+                              className="h-8 w-8 rounded"
+                              onClick={() => decrementQuantity(item.product_id)}
+                            >
+                              <Minus className="h-3 w-3" />
+                            </Button>
+                            <span className="w-8 text-center text-base font-bold">
+                              {item.quantity}
+                            </span>
+                            <Button
+                              variant="outline"
+                              size="icon"
+                              className="h-8 w-8 rounded"
+                              disabled={item.quantity >= item.stock_quantity}
+                              onClick={() => {
+                                const success = incrementQuantity(item.product_id);
+                                if (!success) {
+                                  toast.error(`Cannot exceed available stock (${item.stock_quantity})`);
+                                }
+                              }}
+                            >
+                              <Plus className="h-3 w-3" />
+                            </Button>
+                          </div>
+                          <div className="text-right">
+                            <p className="font-semibold text-base text-amber-600">
+                              {formatLL(item.total_price)}
+                            </p>
+                            <p className="text-s text-muted-foreground">
+                              {formatUSD(item.total_price_usd)}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
-            ) : (
-              <div className="space-y-3">
-                {items.map((item) => (
-  <div
-  key={item.product_id}
-  id={`cart-item-${item.product_id}`}
-  className={`p-1 rounded-lg transition-all duration-300 ${
-    highlightedItemId === item.product_id
-      ? "bg-amber-100 border-2 border-amber-500 shadow-lg scale-[1.02]"
-      : "bg-muted/50 border-2 border-transparent"
-  }`}
->
-  {/* Product Name - Always Visible */}
-  <div className="mb-2">
-    <p className="font-semibold text-base leading-tight">
-      {item.product_name}
-    </p>
-    {item.discount_percentage > 0 ? (
-      <>
-        <p className="text-xs text-muted-foreground text-center">
-          <span className="line-through">{formatLL(item.original_unit_price)}</span>{' '}
-          <span className="text-green-600 font-semibold">{formatLL(item.unit_price)}</span> each
-        </p>
-        <p className="text-xs text-muted-foreground text-center">
-          <span className="line-through">{formatUSD(item.original_unit_price_usd)}</span>{' '}
-          <span className="text-green-600 font-semibold">{formatUSD(item.unit_price_usd)}</span> each
-        </p>
-        <div className="flex justify-center mt-1">
-          <Badge variant="default" className="text-xs bg-green-500">
-            -{item.discount_percentage}%
-          </Badge>
-        </div>
-      </>
-    ) : (
-      <>
-        <p className="text-xs text-muted-foreground text-center">
-          {formatLL(item.unit_price)} each
-        </p>
-        <p className="text-xs text-muted-foreground text-center">
-          {formatUSD(item.unit_price_usd)} each
-        </p>
-      </>
-    )}
-  </div>
 
-  {/* Quantity and Price Row */}
-  <div className="flex items-center justify-between">
-    {/* Quantity Controls */}
-    <div className="flex items-center gap-2">
-      <Button
-        variant="outline"
-        size="icon"
-        className="h-8 w-8 rounded"
-        onClick={() => decrementQuantity(item.product_id)}
-      >
-        <Minus className="h-3 w-3" />
-      </Button>
-      <span className="w-8 text-center text-base font-bold">
-        {item.quantity}
-      </span>
-      <Button
-        variant="outline"
-        size="icon"
-        className="h-8 w-8 rounded"
-        disabled={item.quantity >= item.stock_quantity}
-        onClick={() => {
-          const success = incrementQuantity(item.product_id);
-          if (!success) {
-            toast.error(`Cannot exceed available stock (${item.stock_quantity})`);
-          }
-        }}
-      >
-        <Plus className="h-3 w-3" />
-      </Button>
-    </div>
+              {/* Cart Footer */}
+              {!isEmpty() && (
+                <div className="flex-shrink-0 p-4 pt-3 border-t">
+                  <div className="space-y-3">
+                    <div className="space-y-2">
+                      <div className="flex justify-between items-center">
+                        <Button
+                          variant="destructive"
+                          size="sm"
+                          className="flex items-center gap-2"
+                          onClick={() => {
+                            if (window.confirm("Are you sure you want to clear all items from the cart?")) {
+                              clearCart();
+                              toast.success("Cart cleared");
+                            }
+                          }}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                          Clear All
+                        </Button>
+                        <div className="text-right">
+                          {useCartStore.getState().getTotalDiscount() > 0 && (
+                            <>
+                              <div className="text-sm text-muted-foreground">
+                                Subtotal: {formatLL(useCartStore.getState().getTotalOriginal())}
+                              </div>
+                              <div className="text-sm text-red-500">
+                                Discount: -{formatLL(useCartStore.getState().getTotalDiscount())}
+                              </div>
+                            </>
+                          )}
+                          <div className="text-2xl font-bold text-amber-500">
+                            {formatLL(getTotal())}
+                          </div>
+                          <div className="text-s text-muted-foreground">
+                            {formatUSD(getTotalUsd())}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </Card>
+          </div>
 
-  {/* Item Total */}
-  <div className="text-right">
-    <p className="font-semibold text-base text-amber-600">
-      {formatLL(item.total_price)}
-    </p>
-    <p className="text-s text-muted-foreground">
-      {formatUSD(item.total_price_usd)}
-    </p>
-  </div>
-  </div>
-</div>
-                ))}
+          {/* Right side: Scanner + Grid + Checkout — 35% */}
+          <div className="flex-[35] flex flex-col gap-4 min-w-0">
+            {/* Barcode Scanner + Grid — scrollable area */}
+            <div className="flex-1 flex flex-col overflow-hidden min-h-0">
+              <BarcodeScanner
+                onScan={handleBarcodeScan}
+                isActive={true}
+                desktopMode={true}
+              >
+                {savedProducts.length > 0 && (
+                  <div className="grid grid-cols-2 gap-3">
+                    {savedProducts.map(product => (
+                      <div key={product.id}>
+                        <Button
+                          variant="outline"
+                          className="w-full min-h-[80px] flex-col py-2 px-3 text-center justify-center"
+                          onClick={() => handleProductAdd(product)}
+                        >
+                          <span className="text-sm leading-tight font-semibold break-words">{product.name}</span>
+                          <span className="text-xs text-muted-foreground mt-1.5">
+                            {formatLL(product.selling_price)}
+                          </span>
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </BarcodeScanner>
+            </div>
+
+            {/* Checkout Button */}
+            {!isEmpty() && (
+              <div className="flex-shrink-0">
+                <Button
+                  className="w-full h-14 text-xl font-bold"
+                  size="lg"
+                  onClick={() => router.push(`/checkout?method=${isCharge ? "cash" : "card"}`)}
+                >
+                  Checkout
+                </Button>
               </div>
             )}
           </div>
+        </div>
+      ) : (
+        /* ===== MOBILE LAYOUT (vertical stack) ===== */
+        <div className="flex-1 flex flex-col overflow-hidden p-4 gap-3">
+          {/* Barcode Scanner - Always Open - Compact */}
+          <div className="flex-shrink-0">
+            <div className="flex items-center justify-between mb-2">
+              <Button
+                variant={isScannerActive ? "default" : "outline"}
+                size="sm"
+                onClick={toggleScanner}
+                className="flex items-center gap-1"
+              >
+                <Scan className="h-4 w-4" />
+                {isScannerActive ? "Turn Off Scanner" : "Turn On Scanner"}
+              </Button>
+              <Badge variant={isScannerActive ? "default" : "secondary"}>
+                {isScannerActive ? "ON" : "OFF"}
+              </Badge>
+            </div>
+            <BarcodeScanner
+              onScan={handleBarcodeScan}
+              isActive={isScannerActive}
+              desktopMode={false}
+            />
+          </div>
 
-          {/* Cart Footer */}
-          {!isEmpty() && (
-            <div className="flex-shrink-0 p-4 pt-3 border-t">
-              {/* Clear All + Total */}
-              <div className="space-y-3">
-                <div className="space-y-2">
-                  <div className="flex justify-between items-center">
-                    <Button
-                      variant="destructive"
-                      size="sm"
-                      className="flex items-center gap-2"
-                      onClick={() => {
-                        if (window.confirm("Are you sure you want to clear all items from the cart?")) {
-                          clearCart();
-                          toast.success("Cart cleared");
-                        }
-                      }}
+          {/* Cart Section - Largest Element */}
+          <Card className="flex-1 flex flex-col overflow-hidden min-h-0">
+            {/* Cart Items - Scrollable */}
+            <div className="flex-1 overflow-y-auto p-4">
+              {isEmpty() ? (
+                <div className="h-full flex flex-col items-center justify-center text-muted-foreground">
+                  <Scan className="h-16 w-16 mb-4 opacity-30" />
+                  <p className="text-xl font-medium">Scan items to add</p>
+                  <p className="text-sm mt-1">Use the camera above to scan barcodes</p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {items.map((item) => (
+                    <div
+                      key={item.product_id}
+                      id={`cart-item-${item.product_id}`}
+                      className={`p-1 rounded-lg transition-all duration-300 ${
+                        highlightedItemId === item.product_id
+                          ? "bg-amber-100 border-2 border-amber-500 shadow-lg scale-[1.02]"
+                          : "bg-muted/50 border-2 border-transparent"
+                      }`}
                     >
-                      <Trash2 className="h-4 w-4" />
-                      Clear All
-                    </Button>
-                    <div className="text-right">
-                      {/* Show discount breakdown if any items have discounts */}
-                      {useCartStore.getState().getTotalDiscount() > 0 && (
-                        <>
-                          <div className="text-sm text-muted-foreground">
-                            Subtotal: {formatLL(useCartStore.getState().getTotalOriginal())}
-                          </div>
-                          <div className="text-sm text-red-500">
-                            Discount: -{formatLL(useCartStore.getState().getTotalDiscount())}
-                          </div>
-                        </>
-                      )}
-                      <div className="text-2xl font-bold text-amber-500">
-                        {formatLL(getTotal())}
+                      <div className="mb-2">
+                        <p className="font-semibold text-base leading-tight">
+                          {item.product_name}
+                        </p>
+                        {item.discount_percentage > 0 ? (
+                          <>
+                            <p className="text-xs text-muted-foreground text-center">
+                              <span className="line-through">{formatLL(item.original_unit_price)}</span>{' '}
+                              <span className="text-green-600 font-semibold">{formatLL(item.unit_price)}</span> each
+                            </p>
+                            <p className="text-xs text-muted-foreground text-center">
+                              <span className="line-through">{formatUSD(item.original_unit_price_usd)}</span>{' '}
+                              <span className="text-green-600 font-semibold">{formatUSD(item.unit_price_usd)}</span> each
+                            </p>
+                            <div className="flex justify-center mt-1">
+                              <Badge variant="default" className="text-xs bg-green-500">
+                                -{item.discount_percentage}%
+                              </Badge>
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            <p className="text-xs text-muted-foreground text-center">
+                              {formatLL(item.unit_price)} each
+                            </p>
+                            <p className="text-xs text-muted-foreground text-center">
+                              {formatUSD(item.unit_price_usd)} each
+                            </p>
+                          </>
+                        )}
                       </div>
-                      <div className="text-s text-muted-foreground">
-                        {formatUSD(getTotalUsd())}
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <Button
+                            variant="outline"
+                            size="icon"
+                            className="h-8 w-8 rounded"
+                            onClick={() => decrementQuantity(item.product_id)}
+                          >
+                            <Minus className="h-3 w-3" />
+                          </Button>
+                          <span className="w-8 text-center text-base font-bold">
+                            {item.quantity}
+                          </span>
+                          <Button
+                            variant="outline"
+                            size="icon"
+                            className="h-8 w-8 rounded"
+                            disabled={item.quantity >= item.stock_quantity}
+                            onClick={() => {
+                              const success = incrementQuantity(item.product_id);
+                              if (!success) {
+                                toast.error(`Cannot exceed available stock (${item.stock_quantity})`);
+                              }
+                            }}
+                          >
+                            <Plus className="h-3 w-3" />
+                          </Button>
+                        </div>
+                        <div className="text-right">
+                          <p className="font-semibold text-base text-amber-600">
+                            {formatLL(item.total_price)}
+                          </p>
+                          <p className="text-s text-muted-foreground">
+                            {formatUSD(item.total_price_usd)}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Cart Footer */}
+            {!isEmpty() && (
+              <div className="flex-shrink-0 p-4 pt-3 border-t">
+                <div className="space-y-3">
+                  <div className="space-y-2">
+                    <div className="flex justify-between items-center">
+                      <Button
+                        variant="destructive"
+                        size="sm"
+                        className="flex items-center gap-2"
+                        onClick={() => {
+                          if (window.confirm("Are you sure you want to clear all items from the cart?")) {
+                            clearCart();
+                            toast.success("Cart cleared");
+                          }
+                        }}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                        Clear All
+                      </Button>
+                      <div className="text-right">
+                        {useCartStore.getState().getTotalDiscount() > 0 && (
+                          <>
+                            <div className="text-sm text-muted-foreground">
+                              Subtotal: {formatLL(useCartStore.getState().getTotalOriginal())}
+                            </div>
+                            <div className="text-sm text-red-500">
+                              Discount: -{formatLL(useCartStore.getState().getTotalDiscount())}
+                            </div>
+                          </>
+                        )}
+                        <div className="text-2xl font-bold text-amber-500">
+                          {formatLL(getTotal())}
+                        </div>
+                        <div className="text-s text-muted-foreground">
+                          {formatUSD(getTotalUsd())}
+                        </div>
                       </div>
                     </div>
                   </div>
                 </div>
               </div>
+            )}
+          </Card>
+
+          {/* Checkout Button - Outside Cart */}
+          {!isEmpty() && (
+            <div className="flex-shrink-0">
+              <Button
+                className="w-full h-14 text-xl font-bold"
+                size="lg"
+                onClick={() => router.push(`/checkout?method=${isCharge ? "cash" : "card"}`)}
+              >
+                Checkout
+              </Button>
             </div>
           )}
-        </Card>
-
-        {/* Checkout Button - Outside Cart */}
-        {!isEmpty() && (
-          <div className="flex-shrink-0">
-            <Button
-              className="w-full h-14 text-xl font-bold"
-              size="lg"
-              onClick={() => router.push(`/checkout?method=${isCharge ? "cash" : "card"}`)}
-            >
-              Checkout
-            </Button>
-          </div>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }
