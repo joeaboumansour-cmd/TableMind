@@ -14,7 +14,7 @@
         },
         {
           "name": "goldensquirrel_auth",
-          "value": "{\"store_id\":\"test-store-id\",\"username\":\"teststore\",\"license_expires_at\":\"2027-07-24T20:11:34.225Z\",\"timestamp\":1784923894225}"
+          "value": "{\"store_id\":\"test-store-id\",\"username\":\"teststore\",\"license_expires_at\":\"2027-07-25T09:03:21.908Z\",\"timestamp\":1784970201908}"
         }
       ]
     }

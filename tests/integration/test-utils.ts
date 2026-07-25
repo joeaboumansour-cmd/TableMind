@@ -29,7 +29,38 @@ export async function injectAuth(page: Page) {
 }
 
 /**
+ * Default feature flags matching the "general" preset.
+ * All core features enabled by default.
+ */
+export const DEFAULT_FEATURE_FLAGS: Record<string, boolean> = {
+  pos: true,
+  inventory: true,
+  transactions: true,
+  receipts: true,
+  product_discount: true,
+  transaction_analytics: false,
+};
+
+/**
+ * Injects feature flags into localStorage so useFeatureFlags() reads them.
+ * Override any flag by passing partial overrides (e.g. { product_discount: false }).
+ */
+export async function injectFeatureFlags(page: Page, overrides?: Record<string, boolean>) {
+  await page.evaluate(({ defaults, overrides }: { defaults: Record<string, boolean>; overrides?: Record<string, boolean> }) => {
+    const flags = { ...defaults, ...overrides };
+    localStorage.setItem('store_features_test-store-id', JSON.stringify({
+      flags,
+      storeType: 'general',
+    }));
+  }, { defaults: DEFAULT_FEATURE_FLAGS, overrides });
+}
+
+/**
  * Injects cart items into the Zustand-persisted cart store.
+ * Respects discount_percentage from the passed items (defaults to 0).
+ * When discount_percentage > 0, the unit_price/total_price values are treated
+ * as the DISCOUNTED prices, and original_unit_price/original_total_price are
+ * computed by reversing the discount (matching the cart store's addItem behavior).
  */
 export async function injectCartItems(page: Page, items: Array<{
   product_id: string;
@@ -41,21 +72,37 @@ export async function injectCartItems(page: Page, items: Array<{
   unit_price_usd: number;
   total_price_usd: number;
   stock_quantity: number;
+  discount_percentage?: number;
+  original_unit_price?: number;
+  original_total_price?: number;
+  original_unit_price_usd?: number;
+  original_total_price_usd?: number;
 }>) {
   await page.evaluate((cartItems) => {
     const cartState = {
       state: {
-        items: cartItems.map(item => ({
-          ...item,
-          currency: 'LL',
-          discount_percentage: 0,
-          original_unit_price: item.unit_price,
-          original_total_price: item.total_price,
-          original_unit_price_usd: item.unit_price_usd,
-          original_total_price_usd: item.total_price_usd,
-          unit_price_discount_amount: 0,
-          total_discount_amount: 0,
-        })),
+        items: cartItems.map(item => {
+          const discountPct = item.discount_percentage || 0;
+          const hasDiscount = discountPct > 0;
+          // Reconstruct original (pre-discount) prices from discounted prices
+          const originalUnitPrice = item.original_unit_price ?? (hasDiscount ? Math.round(item.unit_price / (1 - discountPct / 100)) : item.unit_price);
+          const originalTotalPrice = item.original_total_price ?? (hasDiscount ? Math.round(item.total_price / (1 - discountPct / 100)) : item.total_price);
+          const originalUnitPriceUsd = item.original_unit_price_usd ?? (hasDiscount ? item.unit_price_usd / (1 - discountPct / 100) : item.unit_price_usd);
+          const originalTotalPriceUsd = item.original_total_price_usd ?? (hasDiscount ? item.total_price_usd / (1 - discountPct / 100) : item.total_price_usd);
+          const unitDiscountAmount = originalUnitPrice - item.unit_price;
+          const totalDiscountAmount = originalTotalPrice - item.total_price;
+          return {
+            ...item,
+            currency: 'LL',
+            discount_percentage: discountPct,
+            original_unit_price: originalUnitPrice,
+            original_total_price: originalTotalPrice,
+            original_unit_price_usd: originalUnitPriceUsd,
+            original_total_price_usd: originalTotalPriceUsd,
+            unit_price_discount_amount: unitDiscountAmount,
+            total_discount_amount: totalDiscountAmount,
+          };
+        }),
         store_id: 'test-store-id',
       },
       version: 0,
@@ -92,6 +139,42 @@ const DEFAULT_CART_ITEMS = [
 export { DEFAULT_CART_ITEMS };
 
 /**
+ * Cart items with discounts applied — for testing discount display behavior.
+ * Test Coffee: 10% off → unit_price becomes 45,000 (50,000 - 10%), total_price becomes 90,000 (2 × 45,000)
+ * Test Tea: no discount.
+ * The injectCartItems function stores these as-is in the cart store, so total_price
+ * must already reflect the discounted amount (matching what the cart store's addItem would produce).
+ */
+const DISCOUNT_CART_ITEMS = [
+  {
+    product_id: 'test-product-1',
+    product_name: 'Test Coffee',
+    barcode: 'COFFEE001',
+    quantity: 2,
+    unit_price: 45000,       // 50,000 - 10% discount
+    total_price: 90000,      // 2 × 45,000
+    unit_price_usd: 1.50,    // 1.67 - 10% discount
+    total_price_usd: 3.00,   // 2 × 1.50
+    stock_quantity: 50,
+    discount_percentage: 10,
+  },
+  {
+    product_id: 'test-product-2',
+    product_name: 'Test Tea',
+    barcode: 'TEA001',
+    quantity: 1,
+    unit_price: 30000,
+    total_price: 30000,
+    unit_price_usd: 1.00,
+    total_price_usd: 1.00,
+    stock_quantity: 100,
+    discount_percentage: 0,
+  },
+];
+
+export { DISCOUNT_CART_ITEMS };
+
+/**
  * Mocks Supabase REST API to return empty results.
  */
 export async function mockSupabaseApi(page: Page) {
@@ -120,6 +203,34 @@ export async function navigateWithAuth(page: Page, url: string, cartItems?: any[
   await mockSupabaseApi(page);
   await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 15000 });
   await injectAuth(page);
+  if (cartItems) {
+    await injectCartItems(page, cartItems);
+  }
+  await page.reload({ waitUntil: 'domcontentloaded', timeout: 15000 });
+}
+
+/**
+ * Navigate to a page with auth, feature flags, and optionally cart items.
+ * Feature flags are injected into localStorage before the page renders,
+ * so useFeatureFlags() reads the desired state immediately.
+ *
+ * Usage:
+ *   // Test with discounts OFF
+ *   await navigateWithFlags(page, '/pos', { product_discount: false });
+ *
+ *   // Test with analytics ON and discounted cart items
+ *   await navigateWithFlags(page, '/transactions', { transaction_analytics: true }, DISCOUNT_CART_ITEMS);
+ */
+export async function navigateWithFlags(
+  page: Page,
+  url: string,
+  featureOverrides?: Record<string, boolean>,
+  cartItems?: any[]
+) {
+  await mockSupabaseApi(page);
+  await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 15000 });
+  await injectAuth(page);
+  await injectFeatureFlags(page, featureOverrides);
   if (cartItems) {
     await injectCartItems(page, cartItems);
   }

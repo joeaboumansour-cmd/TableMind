@@ -83,7 +83,7 @@ export const FEATURE_PRESETS: Record<string, FeaturePreset> = {
       inventory: true,
       transactions: true,
       receipts: true,
-      product_discount: true,
+      product_discount: false,
       transaction_analytics: false,
     },
   },
