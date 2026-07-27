@@ -286,13 +286,15 @@ export default function StoreProductsPage() {
     setIsSubmitting(true);
 
     try {
-      const cost = parseFloat(costPrice);
-      const selling = parseFloat(sellingPrice);
+      const cost = parseFloat(costPrice) || 0;
+      const selling = parseFloat(sellingPrice) || 0;
       const profit = parseFloat(profitPercentage) || 0;
 
       let parentProductId;
 
       const discount = parseFloat(discountPercentage) || 0;
+      const stockQty = parseInt(stockQuantity) || 0;
+      const minStock = parseInt(minStockThreshold) || 5;
 
       if (editingProduct) {
         // Update existing product
@@ -306,8 +308,8 @@ export default function StoreProductsPage() {
             currency: currency,
             profit_percentage: profit,
             discount_percentage: discount,
-            stock_quantity: parseInt(stockQuantity),
-            min_stock_threshold: parseInt(minStockThreshold),
+            stock_quantity: stockQty,
+            min_stock_threshold: minStock,
           })
           .eq("id", editingProduct.id)
           .select()
@@ -329,8 +331,8 @@ export default function StoreProductsPage() {
             currency: currency,
             profit_percentage: profit,
             discount_percentage: discount,
-            stock_quantity: parseInt(stockQuantity),
-            min_stock_threshold: parseInt(minStockThreshold),
+            stock_quantity: stockQty,
+            min_stock_threshold: minStock,
           })
           .select()
           .single();
@@ -852,49 +854,46 @@ const filteredProducts = products.filter(
                       <option value="USD">USD (US Dollar)</option>
                     </select>
                   </div>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <Label htmlFor="costPrice" className="text-sm">Cost Price ({currency})</Label>
-                      <Input
-                        id="costPrice"
-                        type="number"
-                        step="0.01"
-                        placeholder="0"
-                        value={costPrice}
-                        onChange={(e) => handleCostPriceChange(e.target.value)}
-                        required
-                        className="h-9"
-                        inputMode="decimal"
-                      />
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <Label htmlFor="costPrice" className="text-sm">Cost Price ({currency})</Label>
+                        <Input
+                          id="costPrice"
+                          type="number"
+                          step="0.01"
+                          placeholder="0"
+                          value={costPrice}
+                          onChange={(e) => handleCostPriceChange(e.target.value)}
+                          className="h-9"
+                          inputMode="decimal"
+                        />
                     </div>
                     <div className="space-y-2">
-                      <Label htmlFor="profitPercentage" className="text-sm">Profit %</Label>
-                      <Input
-                        id="profitPercentage"
-                        type="number"
-                        step="0.1"
-                        placeholder="0"
-                        value={profitPercentage}
-                        onChange={(e) => handleProfitPercentageChange(e.target.value)}
-                        required
-                        className="h-9"
-                        inputMode="decimal"
-                      />
+                        <Label htmlFor="profitPercentage" className="text-sm">Profit %</Label>
+                        <Input
+                          id="profitPercentage"
+                          type="number"
+                          step="0.1"
+                          placeholder="0"
+                          value={profitPercentage}
+                          onChange={(e) => handleProfitPercentageChange(e.target.value)}
+                          className="h-9"
+                          inputMode="decimal"
+                        />
                     </div>
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="sellingPrice" className="text-sm">Selling Price ({currency})</Label>
-                    <Input
-                      id="sellingPrice"
-                      type="number"
-                      step="0.01"
-                      placeholder="0"
-                      value={sellingPrice}
-                      onChange={(e) => handleSellingPriceChange(e.target.value)}
-                      required
-                      className="h-9"
-                      inputMode="decimal"
-                    />
+                      <Input
+                        id="sellingPrice"
+                        type="number"
+                        step="0.01"
+                        placeholder="0"
+                        value={sellingPrice}
+                        onChange={(e) => handleSellingPriceChange(e.target.value)}
+                        className="h-9"
+                        inputMode="decimal"
+                      />
                     <p className="text-xs text-muted-foreground">
                       {currency === 'LL' ? (
                         <>Calculated: {formatLL(parseFloat(sellingPrice) || 0)} ≈ {formatUSD((parseFloat(sellingPrice) || 0) / RETURN_RATE)}</>
@@ -930,29 +929,27 @@ const filteredProducts = products.filter(
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-2">
                       <Label htmlFor="stockQuantity" className="text-sm">Stock Quantity</Label>
-                      <Input
-                        id="stockQuantity"
-                        type="number"
-                        placeholder="0"
-                        value={stockQuantity}
-                        onChange={(e) => setStockQuantity(e.target.value)}
-                        required
-                        className="h-9"
-                        inputMode="numeric"
-                      />
+                        <Input
+                          id="stockQuantity"
+                          type="number"
+                          placeholder="0"
+                          value={stockQuantity}
+                          onChange={(e) => setStockQuantity(e.target.value)}
+                          className="h-9"
+                          inputMode="numeric"
+                        />
                     </div>
                     <div className="space-y-2">
                       <Label htmlFor="minStockThreshold" className="text-sm">Min Stock Alert</Label>
-                      <Input
-                        id="minStockThreshold"
-                        type="number"
-                        placeholder="5"
-                        value={minStockThreshold}
-                        onChange={(e) => setMinStockThreshold(e.target.value)}
-                        required
-                        className="h-9"
-                        inputMode="numeric"
-                      />
+                        <Input
+                          id="minStockThreshold"
+                          type="number"
+                          placeholder="5"
+                          value={minStockThreshold}
+                          onChange={(e) => setMinStockThreshold(e.target.value)}
+                          className="h-9"
+                          inputMode="numeric"
+                        />
                     </div>
                   </div>
                 </div>
