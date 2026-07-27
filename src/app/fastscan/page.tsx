@@ -63,7 +63,52 @@ function parsePrice(text: string): string {
 }
 
 // ============================================================
-// OCR — optimized for shelf labels (fast + accurate)
+// IMAGE PREPROCESSING — grayscale + threshold for max OCR speed
+// ============================================================
+
+function preprocessFrame(videoEl: HTMLVideoElement): string | null {
+  if (videoEl.readyState < 2) return null;
+
+  const vw = videoEl.videoWidth || 640;
+  const vh = videoEl.videoHeight || 480;
+
+  // Crop center 60% to focus on the label
+  const cropX = vw * 0.2;
+  const cropY = vh * 0.2;
+  const cropW = vw * 0.6;
+  const cropH = vh * 0.6;
+
+  // Small canvas = faster processing — 320x240 is plenty for label text
+  const canvas = document.createElement("canvas");
+  canvas.width = 320;
+  canvas.height = 240;
+
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+
+  // Draw cropped region downscaled to 320x240
+  ctx.drawImage(videoEl, cropX, cropY, cropW, cropH, 0, 0, 320, 240);
+
+  // Convert to grayscale + high contrast for best Tesseract accuracy
+  const imageData = ctx.getImageData(0, 0, 320, 240);
+  const data = imageData.data;
+  for (let i = 0; i < data.length; i += 4) {
+    // Standard luminance weight
+    const gray = data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114;
+    // Aggressive threshold — pure black or pure white (no dithering)
+    const bw = gray > 128 ? 255 : 0;
+    data[i] = bw;
+    data[i + 1] = bw;
+    data[i + 2] = bw;
+    data[i + 3] = 255; // opaque
+  }
+  ctx.putImageData(imageData, 0, 0);
+
+  return canvas.toDataURL("image/png"); // PNG not JPEG — no compression artifacts
+}
+
+// ============================================================
+// OCR — lightweight, no whitelist (catches French chars)
 // ============================================================
 
 let tesseractWorker: any = null;
@@ -87,86 +132,35 @@ interface OcrResult {
 async function runOcr(dataUrl: string): Promise<OcrResult> {
   try {
     const worker = await getTesseractWorker();
-    
-    // PSM 6 = treat as uniform block of text (ideal for shelf labels)
-    // OEM 1 = LSTM only (fast)
-    const { data } = await worker.recognize(dataUrl, {
-      // Restrict character set — no random symbols
-      // Allow: letters, digits, spaces, dots, commas, $, €, LL, USD
-      tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 .,€$USDLL/-%&",
-    }, {
-      // page segmentation: 6 = assume uniform block of text
-      // 7 = single line, 3 = fully auto
-      psm: 6,
-    });
+
+    // PSM 7 = single text line (shelf labels are usually one line)
+    // OEM 1 = LSTM only (fast neural net)
+    const { data } = await worker.recognize(dataUrl, {}, { psm: 7 });
 
     const text = data.text.trim();
     const confidence = data.confidence || 0;
 
-    // Reject low-confidence results (< 50%) — prevents garbage
-    if (!text || confidence < 50) {
+    // Reject only truly garbage results
+    if (!text || confidence < 30) {
       return { name: "", price: "", confidence };
     }
 
-    const lines = text.split("\n").map((l: string) => l.trim()).filter(Boolean);
+    const price = parsePrice(text);
+    let name = text;
 
-    let price = parsePrice(text);
-    let name = "";
-
-    for (const line of lines) {
-      const maybePrice = parsePrice(line);
-      if (maybePrice) {
-        if (!price) price = maybePrice;
-        continue;
-      }
-      if (line.length < 3 || /^\d{8,}$/.test(line)) continue;
-      name = line;
-      break;
+    // If the text contains a price, remove it to isolate the name
+    if (price) {
+      name = text.replace(price, "").replace(/[^a-zA-ZàâäéèêëîïôöùûüÀÂÄÉÈÊËÎÏÔÖÙÛÜ\s\-]/g, "").trim();
     }
 
-    // Fallback: first non-junk line
-    if (!name) {
-      for (const line of lines) {
-        if (line.length >= 3 && !/^\d{8,}$/.test(line)) {
-          name = line;
-          break;
-        }
-      }
-    }
+    // Clean up short junk
+    if (name.length < 2) name = "";
 
     return { name, price, confidence };
   } catch (err) {
     console.error("[FastScan] OCR error:", err);
     return { name: "", price: "", confidence: 0 };
   }
-}
-
-// ============================================================
-// FRAME GRABBER — crops center 50% to avoid background noise
-// ============================================================
-
-function grabFrame(videoEl: HTMLVideoElement): string | null {
-  if (videoEl.readyState < 2) return null;
-
-  const canvas = document.createElement("canvas");
-  const vw = videoEl.videoWidth || 640;
-  const vh = videoEl.videoHeight || 480;
-
-  // Crop to center 60% — removes background edges where labels aren't
-  const cropX = vw * 0.2;
-  const cropY = vh * 0.2;
-  const cropW = vw * 0.6;
-  const cropH = vh * 0.6;
-
-  canvas.width = 640;
-  canvas.height = 480;
-
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return null;
-
-  // Draw cropped region scaled to full canvas
-  ctx.drawImage(videoEl, cropX, cropY, cropW, cropH, 0, 0, 640, 480);
-  return canvas.toDataURL("image/jpeg", 0.9);
 }
 
 // ============================================================
@@ -199,11 +193,9 @@ export default function FastScanPage() {
     setLastScanBarcode(barcode);
     setLastScanStatus(`Barcode: ${barcode} — running OCR...`);
 
-    // Small delay to let camera stabilize on the label after barcode detection
-    await new Promise(r => setTimeout(r, 250));
 
     const videoEl = document.querySelector("video");
-    const frameDataUrl = videoEl ? grabFrame(videoEl) : null;
+    const frameDataUrl = videoEl ? preprocessFrame(videoEl) : null;
 
     let ocrResult: OcrResult = { name: "", price: "", confidence: 0 };
 
