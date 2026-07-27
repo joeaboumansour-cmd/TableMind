@@ -14,8 +14,6 @@ import BarcodeScanner from "@/components/BarcodeScanner";
 interface ScannedItem {
   barcode: string;
   name: string;
-  price: string;
-  scannedAt: string; // ISO timestamp
 }
 
 // ============================================================
@@ -41,140 +39,16 @@ function saveItems(items: ScannedItem[]) {
 }
 
 // ============================================================
-// PRICE PARSING — detect LL, USD, EUR, etc.
-// ============================================================
-
-function parsePrice(text: string): string {
-  const patterns = [
-    /\$?\s*[\d,]+\.\d{2}\s*(€|EUR|USD|LL)?/i,
-    /[\d,]+\.\d{2}\s*€/i,
-    /\$[\d,]+\.\d{2}/,
-    /[\d,]+\s*LL\b/i,
-    /[\d,]+\.\d{2}\s*(USD|EUR)/i,
-  ];
-
-  for (const pattern of patterns) {
-    const match = text.match(pattern);
-    if (match) {
-      return match[0].trim().replace(/,/g, "");
-    }
-  }
-  return "";
-}
-
-// ============================================================
-// IMAGE PREPROCESSING — grayscale + threshold for max OCR speed
-// ============================================================
-
-function preprocessFrame(videoEl: HTMLVideoElement): string | null {
-  if (videoEl.readyState < 2) return null;
-
-  const vw = videoEl.videoWidth || 640;
-  const vh = videoEl.videoHeight || 480;
-
-  // Crop center 60% to focus on the label
-  const cropX = vw * 0.2;
-  const cropY = vh * 0.2;
-  const cropW = vw * 0.6;
-  const cropH = vh * 0.6;
-
-  // Small canvas = faster processing — 320x240 is plenty for label text
-  const canvas = document.createElement("canvas");
-  canvas.width = 320;
-  canvas.height = 240;
-
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return null;
-
-  // Draw cropped region downscaled to 320x240
-  ctx.drawImage(videoEl, cropX, cropY, cropW, cropH, 0, 0, 320, 240);
-
-  // Convert to grayscale + high contrast for best Tesseract accuracy
-  const imageData = ctx.getImageData(0, 0, 320, 240);
-  const data = imageData.data;
-  for (let i = 0; i < data.length; i += 4) {
-    // Standard luminance weight
-    const gray = data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114;
-    // Aggressive threshold — pure black or pure white (no dithering)
-    const bw = gray > 128 ? 255 : 0;
-    data[i] = bw;
-    data[i + 1] = bw;
-    data[i + 2] = bw;
-    data[i + 3] = 255; // opaque
-  }
-  ctx.putImageData(imageData, 0, 0);
-
-  return canvas.toDataURL("image/png"); // PNG not JPEG — no compression artifacts
-}
-
-// ============================================================
-// OCR — lightweight, no whitelist (catches French chars)
-// ============================================================
-
-let tesseractWorker: any = null;
-
-async function getTesseractWorker() {
-  if (!tesseractWorker) {
-    const Tesseract = await import("tesseract.js");
-    tesseractWorker = await Tesseract.createWorker("eng", 1, {
-      logger: () => {}, // suppress progress logs
-    });
-  }
-  return tesseractWorker;
-}
-
-interface OcrResult {
-  name: string;
-  price: string;
-  confidence: number;
-}
-
-async function runOcr(dataUrl: string): Promise<OcrResult> {
-  try {
-    const worker = await getTesseractWorker();
-
-    // PSM 7 = single text line (shelf labels are usually one line)
-    // OEM 1 = LSTM only (fast neural net)
-    const { data } = await worker.recognize(dataUrl, {}, { psm: 7 });
-
-    const text = data.text.trim();
-    const confidence = data.confidence || 0;
-
-    // Reject only truly garbage results
-    if (!text || confidence < 30) {
-      return { name: "", price: "", confidence };
-    }
-
-    const price = parsePrice(text);
-    let name = text;
-
-    // If the text contains a price, remove it to isolate the name
-    if (price) {
-      name = text.replace(price, "").replace(/[^a-zA-ZàâäéèêëîïôöùûüÀÂÄÉÈÊËÎÏÔÖÙÛÜ\s\-]/g, "").trim();
-    }
-
-    // Clean up short junk
-    if (name.length < 2) name = "";
-
-    return { name, price, confidence };
-  } catch (err) {
-    console.error("[FastScan] OCR error:", err);
-    return { name: "", price: "", confidence: 0 };
-  }
-}
-
-// ============================================================
 // MAIN PAGE
 // ============================================================
 
 export default function FastScanPage() {
   const [items, setItems] = useState<ScannedItem[]>([]);
   const [isScanning, setIsScanning] = useState(true);
-  const [lastScanBarcode, setLastScanBarcode] = useState<string | null>(null);
-  const [lastScanStatus, setLastScanStatus] = useState<string>("");
-  const [editingBarcode, setEditingBarcode] = useState<string | null>(null);
-  const [editingField, setEditingField] = useState<"name" | "price" | null>(null);
-  const ocrInProgressRef = useRef(false);
+  const [currentBarcode, setCurrentBarcode] = useState("");
+  const [currentName, setCurrentName] = useState("");
+  const nameInputRef = useRef<HTMLInputElement>(null);
+  const isExistingRef = useRef(false);
 
   // Load from localStorage on mount
   useEffect(() => {
@@ -186,81 +60,66 @@ export default function FastScanPage() {
     saveItems(items);
   }, [items]);
 
-  // ---- Handle scan: barcode + frame for OCR ----
-  const handleBarcodeScan = useCallback(async (barcode: string) => {
-    if (ocrInProgressRef.current) return;
+  // ---- Handle barcode scan ----
+  const handleBarcodeScan = useCallback((barcode: string) => {
+    setCurrentBarcode(barcode);
+    setCurrentName("");
 
-    setLastScanBarcode(barcode);
-    setLastScanStatus(`Barcode: ${barcode} — running OCR...`);
-
-
-    const videoEl = document.querySelector("video");
-    const frameDataUrl = videoEl ? preprocessFrame(videoEl) : null;
-
-    let ocrResult: OcrResult = { name: "", price: "", confidence: 0 };
-
-    if (frameDataUrl) {
-      ocrInProgressRef.current = true;
-      try {
-        ocrResult = await runOcr(frameDataUrl);
-      } finally {
-        ocrInProgressRef.current = false;
-      }
+    // Check if this barcode already exists
+    const existing = items.find(item => item.barcode === barcode);
+    isExistingRef.current = !!existing;
+    if (existing) {
+      setCurrentName(existing.name);
     }
 
-    const hasResult = ocrResult.name || ocrResult.price;
-    setLastScanStatus(
-      hasResult
-        ? `✓ ${barcode} — ${ocrResult.name || "?"} ${ocrResult.price || ""} (${Math.round(ocrResult.confidence)}%)`
-        : ocrResult.confidence > 0
-          ? `✓ ${barcode} — low confidence (${Math.round(ocrResult.confidence)}%), edit manually`
-          : `✓ ${barcode} — (no text detected, edit manually)`
-    );
+    // Auto-focus the name input (keyboard pops up)
+    setTimeout(() => {
+      nameInputRef.current?.focus();
+      nameInputRef.current?.select();
+    }, 100);
+  }, [items]);
 
-    // Add/update item in table (dedup by barcode)
+  // ---- Commit the current entry ----
+  const handleCommit = useCallback(() => {
+    const barcode = currentBarcode.trim();
+    const name = currentName.trim();
+    if (!barcode) return;
+
     setItems(prev => {
       const existingIndex = prev.findIndex(item => item.barcode === barcode);
-      const newItem: ScannedItem = {
-        barcode,
-        name: ocrResult.name || prev[existingIndex]?.name || "",
-        price: ocrResult.price || prev[existingIndex]?.price || "",
-        scannedAt: new Date().toISOString(),
-      };
-
       if (existingIndex >= 0) {
+        // Update existing
         const updated = [...prev];
-        updated[existingIndex] = newItem;
+        updated[existingIndex] = { ...updated[existingIndex], name };
         return updated;
       } else {
-        return [newItem, ...prev];
+        // Add new at top
+        return [{ barcode, name }, ...prev];
       }
     });
-  }, []);
+
+    // Clear form, keep keyboard up
+    setCurrentBarcode("");
+    setCurrentName("");
+    isExistingRef.current = false;
+
+    // Re-focus name input for next scan
+    setTimeout(() => {
+      nameInputRef.current?.focus();
+    }, 50);
+  }, [currentBarcode, currentName]);
+
+  // ---- Handle Enter key in name input ----
+  const handleNameKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      handleCommit();
+    }
+  };
 
   // ---- Delete single row ----
   const handleDeleteRow = (barcode: string) => {
     setItems(prev => prev.filter(item => item.barcode !== barcode));
-  };
-
-  // ---- Inline edit helpers ----
-  const handleEditStart = (barcode: string, field: "name" | "price") => {
-    setEditingBarcode(barcode);
-    setEditingField(field);
-  };
-
-  const handleEditSave = (barcode: string, field: "name" | "price", value: string) => {
-    setItems(prev =>
-      prev.map(item =>
-        item.barcode === barcode ? { ...item, [field]: value } : item
-      )
-    );
-    setEditingBarcode(null);
-    setEditingField(null);
-  };
-
-  const handleEditCancel = () => {
-    setEditingBarcode(null);
-    setEditingField(null);
   };
 
   // ---- Clear all ----
@@ -275,12 +134,11 @@ export default function FastScanPage() {
   const handleExportCsv = () => {
     if (items.length === 0) return;
 
-    const header = "Barcode,Product Name,Price,Scanned At\n";
+    const header = "Barcode,Product Name\n";
     const rows = items
       .map(item => {
         const name = `"${item.name.replace(/"/g, '""')}"`;
-        const price = `"${item.price}"`;
-        return `${item.barcode},${name},${price},${item.scannedAt}`;
+        return `${item.barcode},${name}`;
       })
       .join("\n");
 
@@ -294,7 +152,7 @@ export default function FastScanPage() {
     URL.revokeObjectURL(url);
   };
 
-  // ---- Handle keyboard shortcut to stop/start scanner ----
+  // ---- ESC to toggle scanner ----
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
@@ -304,9 +162,6 @@ export default function FastScanPage() {
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
   }, []);
-
-  // ---- Scanner toggle ----
-  const toggleScanner = () => setIsScanning(prev => !prev);
 
   return (
     <div className="h-screen flex flex-col bg-background overflow-hidden">
@@ -350,29 +205,66 @@ export default function FastScanPage() {
         </div>
       </header>
 
-      {/* Scanner Section */}
+      {/* Scanner */}
       <div className="flex-shrink-0 px-3 pt-2 pb-1">
         <div className="flex items-center justify-between mb-1">
           <Button
             variant={isScanning ? "default" : "outline"}
             size="sm"
             className="h-7 text-xs gap-1"
-            onClick={toggleScanner}
+            onClick={() => setIsScanning(prev => !prev)}
           >
             <Scan className="h-3 w-3" />
             {isScanning ? "Scanner ON" : "Scanner OFF"}
           </Button>
-          {lastScanBarcode && (
-            <span className="text-xs text-muted-foreground truncate max-w-[200px]">
-              {lastScanStatus}
-            </span>
-          )}
+          <span className="text-[10px] text-muted-foreground">
+            Press <kbd className="px-1 py-0.5 bg-muted rounded">ESC</kbd> to toggle
+          </span>
         </div>
         <BarcodeScanner
           onScan={handleBarcodeScan}
           isActive={isScanning}
           desktopMode={false}
         />
+      </div>
+
+      {/* Input Form */}
+      <div className="flex-shrink-0 px-3 pb-2">
+        <Card className="border-amber-200/50">
+          <CardContent className="p-3 space-y-2">
+            <div className="flex items-center gap-2">
+              <Barcode className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+              <span className="font-mono text-sm truncate">
+                {currentBarcode || <span className="text-muted-foreground italic text-xs">Scan a barcode...</span>}
+              </span>
+              {isExistingRef.current && (
+                <span className="text-[10px] text-amber-600 bg-amber-50 px-1.5 py-0.5 rounded-full flex-shrink-0">
+                  updating
+                </span>
+              )}
+            </div>
+            <div className="flex gap-2">
+              <Input
+                ref={nameInputRef}
+                placeholder="Product name..."
+                value={currentName}
+                onChange={e => setCurrentName(e.target.value)}
+                onKeyDown={handleNameKeyDown}
+                className="flex-1 h-9 text-sm"
+                autoComplete="off"
+                disabled={!currentBarcode}
+              />
+              <Button
+                size="sm"
+                className="h-9 px-4"
+                onClick={handleCommit}
+                disabled={!currentBarcode || !currentName.trim()}
+              >
+                Save
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
       </div>
 
       {/* Data Table */}
@@ -383,74 +275,33 @@ export default function FastScanPage() {
               <div className="h-full flex flex-col items-center justify-center text-muted-foreground p-8 text-center">
                 <FileText className="h-12 w-12 mb-3 opacity-30" />
                 <p className="text-sm font-medium">No items collected yet</p>
-                <p className="text-xs mt-1">Point at a shelf label and scan</p>
+                <p className="text-xs mt-1">Scan a barcode, type the name, press Enter</p>
               </div>
             ) : (
               <table className="w-full text-xs">
                 <thead className="sticky top-0 bg-muted/80 backdrop-blur-sm">
                   <tr className="border-b">
-                    <th className="text-left font-semibold px-2 py-2 text-[10px] uppercase tracking-wider text-muted-foreground w-[35%]">Barcode</th>
-                    <th className="text-left font-semibold px-2 py-2 text-[10px] uppercase tracking-wider text-muted-foreground w-[40%]">Product Name</th>
-                    <th className="text-right font-semibold px-2 py-2 text-[10px] uppercase tracking-wider text-muted-foreground w-[15%]">Price</th>
-                    <th className="text-center font-semibold px-2 py-2 text-[10px] uppercase tracking-wider text-muted-foreground w-[10%]">Del</th>
+                    <th className="text-left font-semibold px-3 py-2 text-[10px] uppercase tracking-wider text-muted-foreground w-[45%]">Product Name</th>
+                    <th className="text-left font-semibold px-3 py-2 text-[10px] uppercase tracking-wider text-muted-foreground w-[45%]">Barcode</th>
+                    <th className="text-center font-semibold px-3 py-2 text-[10px] uppercase tracking-wider text-muted-foreground w-[10%]">Del</th>
                   </tr>
                 </thead>
                 <tbody>
                   {items.map(item => (
                     <tr key={item.barcode} className="border-b border-muted/50 hover:bg-muted/20 transition-colors">
-                      {/* Barcode */}
-                      <td className="px-2 py-1.5">
-                        <div className="flex items-center gap-1">
-                          <Barcode className="h-3 w-3 text-muted-foreground flex-shrink-0" />
-                          <span className="font-mono text-xs truncate">{item.barcode}</span>
-                        </div>
+                      <td className="px-3 py-2 font-medium text-sm truncate max-w-[200px]">
+                        {item.name || <span className="text-muted-foreground italic">—</span>}
                       </td>
-
-                      {/* Product Name (inline editable) */}
-                      <td
-                        className="px-2 py-1.5 cursor-text"
-                        onClick={() => handleEditStart(item.barcode, "name")}
-                      >
-                        {editingBarcode === item.barcode && editingField === "name" ? (
-                          <InlineEditor
-                            value={item.name}
-                            onSave={val => handleEditSave(item.barcode, "name", val)}
-                            onCancel={handleEditCancel}
-                          />
-                        ) : (
-                          <span className="text-xs truncate block max-w-[180px]">
-                            {item.name || <span className="text-muted-foreground italic">tap to edit</span>}
-                          </span>
-                        )}
+                      <td className="px-3 py-2">
+                        <span className="font-mono text-xs text-muted-foreground">{item.barcode}</span>
                       </td>
-
-                      {/* Price (inline editable) */}
-                      <td
-                        className="px-2 py-1.5 text-right cursor-text"
-                        onClick={() => handleEditStart(item.barcode, "price")}
-                      >
-                        {editingBarcode === item.barcode && editingField === "price" ? (
-                          <InlineEditor
-                            value={item.price}
-                            onSave={val => handleEditSave(item.barcode, "price", val)}
-                            onCancel={handleEditCancel}
-                            className="text-right"
-                          />
-                        ) : (
-                          <span className="font-semibold text-amber-600 text-xs">
-                            {item.price || <span className="text-muted-foreground font-normal italic">—</span>}
-                          </span>
-                        )}
-                      </td>
-
-                      {/* Delete row */}
-                      <td className="px-2 py-1.5 text-center">
+                      <td className="px-3 py-2 text-center">
                         <Button
                           variant="ghost"
                           size="icon"
                           className="h-6 w-6 text-red-400 hover:text-red-600 hover:bg-red-50"
                           onClick={() => handleDeleteRow(item.barcode)}
-                          title="Delete row"
+                          title="Delete"
                         >
                           <X className="h-3 w-3" />
                         </Button>
@@ -463,55 +314,6 @@ export default function FastScanPage() {
           </CardContent>
         </Card>
       </div>
-
-      {/* Prompt hint */}
-      <div className="flex-shrink-0 px-3 pb-2">
-        <p className="text-[10px] text-muted-foreground text-center">
-          Press <kbd className="px-1 py-0.5 bg-muted rounded text-[10px]">ESC</kbd> to toggle scanner
-        </p>
-      </div>
     </div>
-  );
-}
-
-// ============================================================
-// INLINE EDITOR COMPONENT
-// ============================================================
-
-function InlineEditor({
-  value,
-  onSave,
-  onCancel,
-  className = "",
-}: {
-  value: string;
-  onSave: (val: string) => void;
-  onCancel: () => void;
-  className?: string;
-}) {
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    inputRef.current?.focus();
-    inputRef.current?.select();
-  }, []);
-
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter") {
-      onSave(inputRef.current?.value ?? "");
-    } else if (e.key === "Escape") {
-      onCancel();
-    }
-  };
-
-  return (
-    <Input
-      ref={inputRef}
-      defaultValue={value}
-      onKeyDown={handleKeyDown}
-      onBlur={e => onSave(e.target.value)}
-      className={`h-7 text-xs ${className}`}
-      onClick={e => e.stopPropagation()}
-    />
   );
 }
