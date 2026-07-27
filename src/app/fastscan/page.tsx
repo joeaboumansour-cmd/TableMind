@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Download, Trash2, Scan, Barcode, FileText } from "lucide-react";
+import { Download, Trash2, Scan, Barcode, FileText, X } from "lucide-react";
 import BarcodeScanner from "@/components/BarcodeScanner";
 
 // ============================================================
@@ -45,7 +45,6 @@ function saveItems(items: ScannedItem[]) {
 // ============================================================
 
 function parsePrice(text: string): string {
-  // Match patterns like: 12.50€, $12.50, 12.50 USD, 15000 LL, 15,000 LL
   const patterns = [
     /\$?\s*[\d,]+\.\d{2}\s*(€|EUR|USD|LL)?/i,
     /[\d,]+\.\d{2}\s*€/i,
@@ -57,17 +56,14 @@ function parsePrice(text: string): string {
   for (const pattern of patterns) {
     const match = text.match(pattern);
     if (match) {
-      let price = match[0].trim();
-      // Normalize
-      price = price.replace(/,/g, "");
-      return price;
+      return match[0].trim().replace(/,/g, "");
     }
   }
   return "";
 }
 
 // ============================================================
-// OCR — runs on a camera frame
+// OCR — optimized for shelf labels (fast + accurate)
 // ============================================================
 
 let tesseractWorker: any = null;
@@ -75,7 +71,9 @@ let tesseractWorker: any = null;
 async function getTesseractWorker() {
   if (!tesseractWorker) {
     const Tesseract = await import("tesseract.js");
-    tesseractWorker = await Tesseract.createWorker("eng");
+    tesseractWorker = await Tesseract.createWorker("eng", 1, {
+      logger: () => {}, // suppress progress logs
+    });
   }
   return tesseractWorker;
 }
@@ -83,36 +81,50 @@ async function getTesseractWorker() {
 interface OcrResult {
   name: string;
   price: string;
+  confidence: number;
 }
 
 async function runOcr(dataUrl: string): Promise<OcrResult> {
   try {
     const worker = await getTesseractWorker();
-    const { data } = await worker.recognize(dataUrl);
+    
+    // PSM 6 = treat as uniform block of text (ideal for shelf labels)
+    // OEM 1 = LSTM only (fast)
+    const { data } = await worker.recognize(dataUrl, {
+      // Restrict character set — no random symbols
+      // Allow: letters, digits, spaces, dots, commas, $, €, LL, USD
+      tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 .,€$USDLL/-%&",
+    }, {
+      // page segmentation: 6 = assume uniform block of text
+      // 7 = single line, 3 = fully auto
+      psm: 6,
+    });
+
     const text = data.text.trim();
+    const confidence = data.confidence || 0;
 
-    if (!text) return { name: "", price: "" };
+    // Reject low-confidence results (< 50%) — prevents garbage
+    if (!text || confidence < 50) {
+      return { name: "", price: "", confidence };
+    }
 
-    // Split lines, take first meaningful line as the product name
     const lines = text.split("\n").map((l: string) => l.trim()).filter(Boolean);
 
     let price = parsePrice(text);
     let name = "";
 
-    // Assume the first line that doesn't look like a price is the product name
     for (const line of lines) {
       const maybePrice = parsePrice(line);
       if (maybePrice) {
         if (!price) price = maybePrice;
         continue;
       }
-      // Skip short junk or pure numbers
       if (line.length < 3 || /^\d{8,}$/.test(line)) continue;
       name = line;
       break;
     }
 
-    // If no name found, use first meaningful line
+    // Fallback: first non-junk line
     if (!name) {
       for (const line of lines) {
         if (line.length >= 3 && !/^\d{8,}$/.test(line)) {
@@ -122,11 +134,39 @@ async function runOcr(dataUrl: string): Promise<OcrResult> {
       }
     }
 
-    return { name, price };
+    return { name, price, confidence };
   } catch (err) {
     console.error("[FastScan] OCR error:", err);
-    return { name: "", price: "" };
+    return { name: "", price: "", confidence: 0 };
   }
+}
+
+// ============================================================
+// FRAME GRABBER — crops center 50% to avoid background noise
+// ============================================================
+
+function grabFrame(videoEl: HTMLVideoElement): string | null {
+  if (videoEl.readyState < 2) return null;
+
+  const canvas = document.createElement("canvas");
+  const vw = videoEl.videoWidth || 640;
+  const vh = videoEl.videoHeight || 480;
+
+  // Crop to center 60% — removes background edges where labels aren't
+  const cropX = vw * 0.2;
+  const cropY = vh * 0.2;
+  const cropW = vw * 0.6;
+  const cropH = vh * 0.6;
+
+  canvas.width = 640;
+  canvas.height = 480;
+
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+
+  // Draw cropped region scaled to full canvas
+  ctx.drawImage(videoEl, cropX, cropY, cropW, cropH, 0, 0, 640, 480);
+  return canvas.toDataURL("image/jpeg", 0.9);
 }
 
 // ============================================================
@@ -159,22 +199,13 @@ export default function FastScanPage() {
     setLastScanBarcode(barcode);
     setLastScanStatus(`Barcode: ${barcode} — running OCR...`);
 
-    // Grab a frame from any video element on the page
+    // Small delay to let camera stabilize on the label after barcode detection
+    await new Promise(r => setTimeout(r, 250));
+
     const videoEl = document.querySelector("video");
-    let frameDataUrl: string | null = null;
+    const frameDataUrl = videoEl ? grabFrame(videoEl) : null;
 
-    if (videoEl && videoEl.readyState >= 2) {
-      const canvas = document.createElement("canvas");
-      canvas.width = 640;
-      canvas.height = 480;
-      const ctx = canvas.getContext("2d");
-      if (ctx) {
-        ctx.drawImage(videoEl, 0, 0, 640, 480);
-        frameDataUrl = canvas.toDataURL("image/jpeg", 0.8);
-      }
-    }
-
-    let ocrResult: OcrResult = { name: "", price: "" };
+    let ocrResult: OcrResult = { name: "", price: "", confidence: 0 };
 
     if (frameDataUrl) {
       ocrInProgressRef.current = true;
@@ -185,9 +216,13 @@ export default function FastScanPage() {
       }
     }
 
-    setLastScanStatus(ocrResult.name || ocrResult.price
-      ? `✓ ${barcode} — ${ocrResult.name || "?"} ${ocrResult.price || ""}`
-      : `✓ ${barcode} — (no text detected, edit manually)`
+    const hasResult = ocrResult.name || ocrResult.price;
+    setLastScanStatus(
+      hasResult
+        ? `✓ ${barcode} — ${ocrResult.name || "?"} ${ocrResult.price || ""} (${Math.round(ocrResult.confidence)}%)`
+        : ocrResult.confidence > 0
+          ? `✓ ${barcode} — low confidence (${Math.round(ocrResult.confidence)}%), edit manually`
+          : `✓ ${barcode} — (no text detected, edit manually)`
     );
 
     // Add/update item in table (dedup by barcode)
@@ -209,6 +244,11 @@ export default function FastScanPage() {
       }
     });
   }, []);
+
+  // ---- Delete single row ----
+  const handleDeleteRow = (barcode: string) => {
+    setItems(prev => prev.filter(item => item.barcode !== barcode));
+  };
 
   // ---- Inline edit helpers ----
   const handleEditStart = (barcode: string, field: "name" | "price") => {
@@ -246,7 +286,6 @@ export default function FastScanPage() {
     const header = "Barcode,Product Name,Price,Scanned At\n";
     const rows = items
       .map(item => {
-        // Escape CSV fields
         const name = `"${item.name.replace(/"/g, '""')}"`;
         const price = `"${item.price}"`;
         return `${item.barcode},${name},${price},${item.scannedAt}`;
@@ -263,12 +302,6 @@ export default function FastScanPage() {
     URL.revokeObjectURL(url);
   };
 
-  // ---- Format timestamp for display ----
-  const formatTime = (iso: string) => {
-    const d = new Date(iso);
-    return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-  };
-
   // ---- Handle keyboard shortcut to stop/start scanner ----
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
@@ -280,7 +313,7 @@ export default function FastScanPage() {
     return () => window.removeEventListener("keydown", handleKey);
   }, []);
 
-  // ---- Scanner toggle for pausing while editing ----
+  // ---- Scanner toggle ----
   const toggleScanner = () => setIsScanning(prev => !prev);
 
   return (
@@ -364,10 +397,10 @@ export default function FastScanPage() {
               <table className="w-full text-xs">
                 <thead className="sticky top-0 bg-muted/80 backdrop-blur-sm">
                   <tr className="border-b">
-                    <th className="text-left font-semibold px-2 py-2 text-[10px] uppercase tracking-wider text-muted-foreground w-[30%]">Barcode</th>
+                    <th className="text-left font-semibold px-2 py-2 text-[10px] uppercase tracking-wider text-muted-foreground w-[35%]">Barcode</th>
                     <th className="text-left font-semibold px-2 py-2 text-[10px] uppercase tracking-wider text-muted-foreground w-[40%]">Product Name</th>
                     <th className="text-right font-semibold px-2 py-2 text-[10px] uppercase tracking-wider text-muted-foreground w-[15%]">Price</th>
-                    <th className="text-right font-semibold px-2 py-2 text-[10px] uppercase tracking-wider text-muted-foreground w-[15%]">Time</th>
+                    <th className="text-center font-semibold px-2 py-2 text-[10px] uppercase tracking-wider text-muted-foreground w-[10%]">Del</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -418,11 +451,17 @@ export default function FastScanPage() {
                         )}
                       </td>
 
-                      {/* Timestamp */}
-                      <td className="px-2 py-1.5 text-right">
-                        <span className="text-[10px] text-muted-foreground">
-                          {formatTime(item.scannedAt)}
-                        </span>
+                      {/* Delete row */}
+                      <td className="px-2 py-1.5 text-center">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-6 w-6 text-red-400 hover:text-red-600 hover:bg-red-50"
+                          onClick={() => handleDeleteRow(item.barcode)}
+                          title="Delete row"
+                        >
+                          <X className="h-3 w-3" />
+                        </Button>
                       </td>
                     </tr>
                   ))}
@@ -461,7 +500,6 @@ function InlineEditor({
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    // Focus and select on mount
     inputRef.current?.focus();
     inputRef.current?.select();
   }, []);
