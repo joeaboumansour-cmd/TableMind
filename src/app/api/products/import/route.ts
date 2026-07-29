@@ -55,13 +55,6 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (products.length > 1000) {
-      return NextResponse.json(
-        { error: 'Maximum 1000 products allowed per import' },
-        { status: 400 }
-      );
-    }
-
     // Initialize Supabase client
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
     const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
