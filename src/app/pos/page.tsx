@@ -180,7 +180,8 @@ export default function POSPage() {
               .from("products")
               .select("*")
               .eq("store_id", store_id)
-              .order("name");
+              .order("name")
+              .limit(100000);
 
             if (!error && productsData && isMounted) {
               setProducts(productsData);

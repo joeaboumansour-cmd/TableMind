@@ -251,7 +251,8 @@ export default function StoreProductsPage() {
         .from("products")
         .select("*")
         .eq("store_id", storeId)
-        .order("name");
+        .order("name")
+        .limit(100000);
 
       if (error) throw error;
       setProducts(data || []);
