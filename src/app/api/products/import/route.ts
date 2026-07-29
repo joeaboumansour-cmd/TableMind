@@ -24,6 +24,11 @@ interface ImportError {
 // Maximum rows per batch
 const BATCH_SIZE = 50;
 
+export const config = {
+  runtime: 'nodejs',
+  maxDuration: 300, // 5 minutes for large imports
+};
+
 export async function POST(request: NextRequest) {
   try {
     const { 

@@ -134,10 +134,11 @@ export default function CSVImportDialog({
     setImportProgress({ current: 0, total: parsedData.length });
 
     try {
-      const BATCH_SIZE = 1000;
+      // Use smaller batches for reliability
+      const BATCH_SIZE = 100;
       const batches: ProductCSVRow[][] = [];
       
-      // Split products into batches of 1000
+      // Split products into batches
       for (let i = 0; i < parsedData.length; i += BATCH_SIZE) {
         batches.push(parsedData.slice(i, i + BATCH_SIZE));
       }
@@ -148,56 +149,81 @@ export default function CSVImportDialog({
       let totalCreated = 0;
       const allErrors: Array<{ row: number; message: string }> = [];
 
+      console.log(`Starting import of ${parsedData.length} products in ${batches.length} batches`);
+
       // Process each batch
       for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
         const batch = batches[batchIndex];
-        const batchStartRow = batchIndex * BATCH_SIZE + 1; // 1-based row number
+        const batchStartRow = batchIndex * BATCH_SIZE + 1;
 
+        console.log(`Processing batch ${batchIndex + 1}/${batches.length} (${batch.length} products)`);
         toast.info(`Importing batch ${batchIndex + 1} of ${batches.length}...`);
 
-        const response = await fetch("/api/products/import", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            products: batch,
-            mode: importMode,
-            storeId,
-            fileName: file?.name,
-            fileSize: file?.size,
-          }),
-        });
+        // Add timeout to detect silent failures
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 60000); // 60 second timeout
 
-        if (!response.ok) {
-          const errorResult = await response.json();
-          throw new Error(errorResult.error || `Batch ${batchIndex + 1} failed`);
-        }
-
-        const result = await response.json();
-
-        // Aggregate results
-        totalSuccessful += result.summary.successful;
-        totalFailed += result.summary.failed;
-        totalUpdated += result.summary.updated;
-        totalCreated += result.summary.created;
-        
-        // Adjust error row numbers to reflect actual CSV position
-        if (result.errors) {
-          result.errors.forEach((err: { row: number; message: string }) => {
-            allErrors.push({
-              row: err.row + batchStartRow - 1, // Adjust to actual CSV row
-              message: err.message,
-            });
+        try {
+          const response = await fetch("/api/products/import", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              products: batch,
+              mode: importMode,
+              storeId,
+              fileName: file?.name,
+              fileSize: file?.size,
+            }),
+            signal: controller.signal,
           });
-        }
 
-        // Update progress
-        setImportProgress({
-          current: Math.min((batchIndex + 1) * BATCH_SIZE, parsedData.length),
-          total: parsedData.length,
-        });
+          clearTimeout(timeoutId);
+
+          console.log(`Batch ${batchIndex + 1} response status:`, response.status);
+
+          if (!response.ok) {
+            const errorResult = await response.json();
+            console.error(`Batch ${batchIndex + 1} error:`, errorResult);
+            throw new Error(errorResult.error || `Batch ${batchIndex + 1} failed`);
+          }
+
+          const result = await response.json();
+          console.log(`Batch ${batchIndex + 1} result:`, result.summary);
+
+          // Aggregate results
+          totalSuccessful += result.summary.successful;
+          totalFailed += result.summary.failed;
+          totalUpdated += result.summary.updated;
+          totalCreated += result.summary.created;
+          
+          // Collect errors
+          if (result.errors) {
+            result.errors.forEach((err: { row: number; message: string }) => {
+              allErrors.push({
+                row: err.row + batchStartRow - 1,
+                message: err.message,
+              });
+            });
+          }
+
+          // Update progress
+          setImportProgress({
+            current: Math.min((batchIndex + 1) * BATCH_SIZE, parsedData.length),
+            total: parsedData.length,
+          });
+        } catch (error: any) {
+          clearTimeout(timeoutId);
+          if (error.name === 'AbortError') {
+            console.error(`Batch ${batchIndex + 1} timed out after 60 seconds`);
+            throw new Error(`Import timed out on batch ${batchIndex + 1}. The server may be overloaded.`);
+          }
+          throw error;
+        }
       }
+
+      console.log(`Import complete:`, { totalSuccessful, totalFailed, totalUpdated, totalCreated });
 
       const summary = {
         total: parsedData.length,
