@@ -63,6 +63,7 @@ export default function CSVImportDialog({
   const [importResult, setImportResult] = useState<ImportResult | null>(null);
   const [showErrors, setShowErrors] = useState(false);
   const [dragActive, setDragActive] = useState(false);
+  const [importProgress, setImportProgress] = useState({ current: 0, total: 0 });
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleDrag = useCallback((e: React.DragEvent) => {
@@ -130,31 +131,85 @@ export default function CSVImportDialog({
     }
 
     setIsImporting(true);
+    setImportProgress({ current: 0, total: parsedData.length });
 
     try {
-      const response = await fetch("/api/products/import", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          products: parsedData,
-          mode: importMode,
-          storeId,
-          fileName: file?.name,
-          fileSize: file?.size,
-        }),
-      });
-
-      const result = await response.json();
-
-      if (!response.ok) {
-        throw new Error(result.error || "Import failed");
+      const BATCH_SIZE = 1000;
+      const batches: ProductCSVRow[][] = [];
+      
+      // Split products into batches of 1000
+      for (let i = 0; i < parsedData.length; i += BATCH_SIZE) {
+        batches.push(parsedData.slice(i, i + BATCH_SIZE));
       }
 
-      setImportResult(result.summary);
+      let totalSuccessful = 0;
+      let totalFailed = 0;
+      let totalUpdated = 0;
+      let totalCreated = 0;
+      const allErrors: Array<{ row: number; message: string }> = [];
+
+      // Process each batch
+      for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
+        const batch = batches[batchIndex];
+        const batchStartRow = batchIndex * BATCH_SIZE + 1; // 1-based row number
+
+        toast.info(`Importing batch ${batchIndex + 1} of ${batches.length}...`);
+
+        const response = await fetch("/api/products/import", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            products: batch,
+            mode: importMode,
+            storeId,
+            fileName: file?.name,
+            fileSize: file?.size,
+          }),
+        });
+
+        if (!response.ok) {
+          const errorResult = await response.json();
+          throw new Error(errorResult.error || `Batch ${batchIndex + 1} failed`);
+        }
+
+        const result = await response.json();
+
+        // Aggregate results
+        totalSuccessful += result.summary.successful;
+        totalFailed += result.summary.failed;
+        totalUpdated += result.summary.updated;
+        totalCreated += result.summary.created;
+        
+        // Adjust error row numbers to reflect actual CSV position
+        if (result.errors) {
+          result.errors.forEach((err: { row: number; message: string }) => {
+            allErrors.push({
+              row: err.row + batchStartRow - 1, // Adjust to actual CSV row
+              message: err.message,
+            });
+          });
+        }
+
+        // Update progress
+        setImportProgress({
+          current: Math.min((batchIndex + 1) * BATCH_SIZE, parsedData.length),
+          total: parsedData.length,
+        });
+      }
+
+      const summary = {
+        total: parsedData.length,
+        successful: totalSuccessful,
+        failed: totalFailed,
+        updated: totalUpdated,
+        created: totalCreated,
+      };
+
+      setImportResult(summary);
       toast.success(
-        `Import complete! ${result.summary.successful} products ${importMode === "upsert" ? "processed" : "imported"}`
+        `Import complete! ${totalSuccessful} products ${importMode === "upsert" ? "processed" : "imported"}`
       );
 
       onImportComplete();
@@ -163,6 +218,7 @@ export default function CSVImportDialog({
       toast.error(error.message || "Failed to import products");
     } finally {
       setIsImporting(false);
+      setImportProgress({ current: 0, total: 0 });
     }
   };
 
@@ -559,6 +615,26 @@ export default function CSVImportDialog({
             </div>
           )}
         </div>
+
+        {/* Progress Bar */}
+        {isImporting && importProgress.total > 0 && (
+          <div className="space-y-2">
+            <div className="flex items-center justify-between text-sm">
+              <span className="text-muted-foreground">Importing...</span>
+              <span className="font-medium">
+                {importProgress.current} / {importProgress.total}
+              </span>
+            </div>
+            <div className="w-full bg-muted rounded-full h-2">
+              <div
+                className="bg-primary h-2 rounded-full transition-all duration-300"
+                style={{
+                  width: `${(importProgress.current / importProgress.total) * 100}%`,
+                }}
+              />
+            </div>
+          </div>
+        )}
 
         <DialogFooter className="gap-2">
           {importResult ? (

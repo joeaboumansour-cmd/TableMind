@@ -90,9 +90,8 @@ test.describe('Desktop Mode — BarcodeScanner', () => {
     const compactInput = page.locator('input[placeholder="Scan barcode..."]');
     await expect(compactInput).toBeVisible({ timeout: 10000 });
 
-    // The input should have autoFocus attribute
-    const hasAutoFocus = await compactInput.evaluate((el: HTMLInputElement) => el.hasAttribute('autofocus'));
-    expect(hasAutoFocus).toBe(true);
+    // The input should receive focus (React autoFocus may not set HTML attribute)
+    await expect(compactInput).toBeFocused({ timeout: 5000 });
   });
 
   test('BarcodeScanner desktop mode has Add button', async ({ page }) => {

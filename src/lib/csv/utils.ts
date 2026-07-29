@@ -291,8 +291,7 @@ export function validateImportLimits(rowCount: number): { valid: boolean; messag
   if (rowCount === 0) {
     return { valid: false, message: 'CSV file is empty or has no valid data rows' };
   }
-  if (rowCount > 1000) {
-    return { valid: false, message: 'CSV file exceeds maximum limit of 1000 rows' };
-  }
+  // Note: Large files are automatically chunked into batches of 1000 on the client side
+  // The server enforces a 1000 product limit per request
   return { valid: true };
 }
