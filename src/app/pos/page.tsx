@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { createClient } from "@/lib/supabase/client";
+import { createClient, fetchAllProducts } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -176,15 +176,13 @@ export default function POSPage() {
 
           // Then try to fetch fresh data from Supabase if online
           if (navigator.onLine) {
-            const { data: productsData, error } = await supabase
-              .from("products")
-              .select("*")
-              .eq("store_id", store_id)
-              .order("name")
-              .limit(100000);
-
-            if (!error && productsData && isMounted) {
-              setProducts(productsData);
+            try {
+              const productsData = await fetchAllProducts(supabase, store_id);
+              if (isMounted) {
+                setProducts(productsData);
+              }
+            } catch (error) {
+              console.error("Error fetching products from Supabase:", error);
             }
             // Initialize/refresh local cache in background (non-blocking)
             syncEngine.initialize(store_id).catch(() => {});

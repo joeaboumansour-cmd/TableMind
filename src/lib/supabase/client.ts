@@ -29,6 +29,40 @@ function getRestaurantIdFromStorage(): string | null {
 }
 
 /**
+ * Fetch ALL products for a store using pagination.
+ * Supabase/PostgREST enforces a server-side max-rows limit (default 1000),
+ * so we must paginate through all pages using .range().
+ */
+export async function fetchAllProducts(
+  supabase: ReturnType<typeof createBrowserClient>,
+  storeId: string
+): Promise<any[]> {
+  const PAGE_SIZE = 1000;
+  let allProducts: any[] = [];
+  let from = 0;
+
+  while (true) {
+    const to = from + PAGE_SIZE - 1;
+    const { data, error } = await supabase
+      .from("products")
+      .select("*")
+      .eq("store_id", storeId)
+      .order("name")
+      .range(from, to);
+
+    if (error) throw error;
+    if (!data || data.length === 0) break;
+
+    allProducts = allProducts.concat(data);
+    if (data.length < PAGE_SIZE) break; // Last page
+
+    from += PAGE_SIZE;
+  }
+
+  return allProducts;
+}
+
+/**
  * Create a Supabase client with restaurant_id header for RLS
  * This function ALWAYS creates a fresh client to ensure correct tenant isolation
  */

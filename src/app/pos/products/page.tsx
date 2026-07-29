@@ -44,6 +44,7 @@ import CSVImportDialog from "@/components/CSVImportDialog";
 import { getFrequentlyUsedProductIds, addFrequentlyUsedProduct, removeFrequentlyUsedProduct, isFrequentlyUsed } from "@/lib/frequentlyUsed";
 import { downloadCSV, productsToCSV } from "@/lib/csv/utils";
 import { FeatureFlagGuard } from "@/lib/auth/featureGuard";
+import { fetchAllProducts } from "@/lib/supabase/client";
 
 interface Product {
   id: string;
@@ -247,14 +248,7 @@ export default function StoreProductsPage() {
         return;
       }
 
-      const { data, error } = await supabase
-        .from("products")
-        .select("*")
-        .eq("store_id", storeId)
-        .order("name")
-        .limit(100000);
-
-      if (error) throw error;
+      const data = await fetchAllProducts(supabase, storeId);
       setProducts(data || []);
       
       // Update selected product if it exists in the new data

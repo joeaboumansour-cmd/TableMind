@@ -4,7 +4,7 @@
 // and flushes queued transactions to Supabase
 // =============================================
 
-import { createClient } from "@/lib/supabase/client";
+import { createClient, fetchAllProducts } from "@/lib/supabase/client";
 import {
   cacheProducts,
   getQueuedTransactions,
@@ -153,14 +153,7 @@ class SyncEngine {
 
     try {
       const supabase = createClient();
-      const { data: products, error } = await supabase
-        .from("products")
-        .select("*")
-        .eq("store_id", this.storeId)
-        .order("name")
-        .limit(100000);
-
-      if (error) throw error;
+      const products = await fetchAllProducts(supabase, this.storeId);
 
       if (products && products.length > 0) {
         // Map to cached product format
@@ -173,6 +166,7 @@ class SyncEngine {
           selling_price: p.selling_price,
           currency: p.currency || "LL",
           profit_percentage: p.profit_percentage,
+          discount_percentage: p.discount_percentage || 0,
           stock_quantity: p.stock_quantity,
           min_stock_threshold: p.min_stock_threshold,
           parent_id: p.parent_id || null,
