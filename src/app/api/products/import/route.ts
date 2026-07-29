@@ -95,19 +95,53 @@ export async function POST(request: NextRequest) {
       created: [] as string[],
     };
 
-    // Handle replace_all mode - delete all existing products first
+    // Handle replace_all mode - delete all existing products and related data
     if (mode === 'replace_all') {
+      console.log(`Replace all mode: deleting all products for store ${storeId}`);
+      
+      // Delete transaction_items first (they reference products)
+      const { error: deleteTxnItemsError } = await supabase
+        .from('transaction_items')
+        .delete()
+        .eq('store_id', storeId);
+
+      if (deleteTxnItemsError) {
+        console.error('Failed to delete transaction_items:', deleteTxnItemsError);
+        return NextResponse.json(
+          { error: 'Failed to clear existing transactions', details: deleteTxnItemsError.message },
+          { status: 500 }
+        );
+      }
+
+      // Now delete transactions
+      const { error: deleteTxnError } = await supabase
+        .from('transactions')
+        .delete()
+        .eq('store_id', storeId);
+
+      if (deleteTxnError) {
+        console.error('Failed to delete transactions:', deleteTxnError);
+        return NextResponse.json(
+          { error: 'Failed to clear existing transactions', details: deleteTxnError.message },
+          { status: 500 }
+        );
+      }
+
+      // Finally delete all products
       const { error: deleteError } = await supabase
         .from('products')
         .delete()
         .eq('store_id', storeId);
 
       if (deleteError) {
+        console.error('Failed to delete products:', deleteError);
         return NextResponse.json(
           { error: 'Failed to clear existing products', details: deleteError.message },
           { status: 500 }
         );
       }
+
+      console.log('Successfully cleared all existing data');
     }
 
     // Get existing products for barcode/id lookup
