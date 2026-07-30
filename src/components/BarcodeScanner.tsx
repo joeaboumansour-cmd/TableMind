@@ -152,6 +152,7 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true, deskt
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const quaggaRef = useRef<any>(null);
   const quaggaInitRef = useRef(false);
+  const quaggaStreamRef = useRef<MediaStream | null>(null);
   const barcodeInputRef = useRef<HTMLInputElement | null>(null);
 
   const [isScanning, setIsScanning] = useState(false);
@@ -265,8 +266,29 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true, deskt
         });
       });
 
+      // Race-condition guard: if the scanner was toggled off (or component
+      // unmounted) while init() was in flight, abort immediately and release
+      // whatever camera Quagga may have acquired. Without this, Quagga.start()
+      // would turn the camera ON after the user turned it OFF.
+      if (!isMountedRef.current) {
+        try {
+          const p = Quagga.stop();
+          if (p && typeof (p as Promise<void>).catch === "function") {
+            (p as Promise<void>).catch(() => {});
+          }
+        } catch {}
+        quaggaRef.current = null;
+        return;
+      }
+
       quaggaInitRef.current = true;
       Quagga.start();
+
+      // Capture the live MediaStream Quagga owns so we can stop its tracks
+      // synchronously on teardown (iOS camera-release fix).
+      try {
+        quaggaStreamRef.current = Quagga.CameraAccess?.getActiveStream?.() ?? null;
+      } catch {}
 
       Quagga.onDetected((result: any) => {
         if (!isMountedRef.current) return;
@@ -291,13 +313,63 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true, deskt
   }, [captureLoop, reportBarcode]);
 
   // ---- Stop Quagga (iOS only) ----
+  // IMPORTANT: Quagga.stop() -> CameraAccess.release() stops the video tracks inside
+  // a setTimeout(0), i.e. deferred to the next tick. On iOS WKWebView/PWA, if we
+  // remove Quagga's <video> element from the DOM (via innerHTML = "") before that
+  // deferred track-stop runs, the camera hardware stays active (battery drain + heat)
+  // even though the preview disappears. iOS is strict about MediaStream track lifecycle.
+  // Fix: stop the tracks SYNCHRONOUSLY here via CameraAccess.getActiveStream() so the
+  // camera is released before stopEverything clears the container. This mirrors the
+  // Android path, which stops streamRef tracks synchronously and works correctly.
   const stopQuagga = useCallback(() => {
+    const quagga = quaggaRef.current;
+    if (!quagga) {
+      quaggaInitRef.current = false;
+      return;
+    }
+    // NOTE: do NOT guard on quaggaInitRef.current here. If stop() is called
+    // while init() is still in flight, Quagga sets an internal initAborted
+    // flag and stop() safely no-ops the framegrabber. Guarding here would
+    // skip track-stopping and let init() complete + start() the camera after
+    // the user already turned the scanner off.
     try {
-      if (quaggaRef.current) {
-        quaggaRef.current.offDetected();
-        quaggaRef.current.stop();
-        quaggaRef.current = null;
+      // 1. Remove the detected callback immediately
+      try { quagga.offDetected(); } catch {}
+
+      // 2. Synchronously stop the camera tracks — releases iOS camera hardware now.
+      //    Quagga.CameraAccess.getActiveStream() returns the live MediaStream it owns.
+      let stream: MediaStream | null = null;
+      try {
+        stream = quagga.CameraAccess?.getActiveStream?.() ?? quaggaStreamRef.current;
+      } catch {}
+      if (stream) {
+        stream.getTracks().forEach((t: MediaStreamTrack) => {
+          try { t.stop(); } catch {}
+        });
       }
+      quaggaStreamRef.current = null;
+
+      // 3. Pause + detach Quagga's internal <video> element so it releases its hold
+      //    before stopEverything removes it from the DOM.
+      try {
+        const vid = quagga.CameraAccess?.requestedVideoElement as HTMLVideoElement | null;
+        if (vid) {
+          try { vid.pause(); } catch {}
+          try { vid.srcObject = null; } catch {}
+        }
+      } catch {}
+
+      // 4. Now call Quagga.stop() for worker + internal streamRef cleanup. The tracks
+      //    are already stopped, so the deferred setTimeout(0) in release() is a no-op.
+      //    Fire-and-forget is now safe.
+      try {
+        const p = quagga.stop();
+        if (p && typeof (p as Promise<void>).catch === "function") {
+          (p as Promise<void>).catch(() => {});
+        }
+      } catch {}
+
+      quaggaRef.current = null;
     } catch {}
     quaggaInitRef.current = false;
   }, []);
