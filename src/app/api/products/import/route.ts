@@ -61,6 +61,57 @@ async function fetchAllProductsForStore(
   return allProducts;
 }
 
+/**
+ * Insert products in chunks to avoid Supabase/PostgREST's 1000-row limit on inserts.
+ * Returns array of created records with their ids and barcodes.
+ */
+async function insertProductsInChunks(
+  supabase: any,
+  products: Record<string, any>[],
+  chunkSize: number = 500
+): Promise<{ data: any[]; errors: { index: number; message: string }[] }> {
+  const allData: any[] = [];
+  const allErrors: { index: number; message: string }[] = [];
+
+  for (let i = 0; i < products.length; i += chunkSize) {
+    const chunk = products.slice(i, i + chunkSize);
+    console.log(`Inserting chunk ${Math.floor(i / chunkSize) + 1}/${Math.ceil(products.length / chunkSize)} (${chunk.length} products)`);
+
+    const { data, error } = await supabase
+      .from('products')
+      .insert(chunk)
+      .select('id, barcode');
+
+    if (error) {
+      console.error(`Chunk insert error (${chunk.length} products):`, error.message);
+      // Fall back to individual inserts for this chunk
+      for (let j = 0; j < chunk.length; j++) {
+        try {
+          const { data: singleData, error: singleError } = await supabase
+            .from('products')
+            .insert([chunk[j]])
+            .select('id, barcode')
+            .single();
+
+          if (singleError) {
+            allErrors.push({ index: i + j, message: singleError.code === '23505'
+              ? 'A product with this barcode already exists'
+              : singleError.message });
+          } else if (singleData) {
+            allData.push(singleData);
+          }
+        } catch (err: any) {
+          allErrors.push({ index: i + j, message: err.message || 'Unknown error' });
+        }
+      }
+    } else if (data) {
+      allData.push(...data);
+    }
+  }
+
+  return { data: allData, errors: allErrors };
+}
+
 export async function POST(request: NextRequest) {
   try {
     const { 
@@ -234,7 +285,7 @@ export async function POST(request: NextRequest) {
     // ─────────────────────────────────────────────────────────────
     // STEP 1: BATCH PROCESS ALL PARENT PRODUCTS
     // ─────────────────────────────────────────────────────────────
-    console.log(`Processing ${parents.length} parent products in batch...`);
+    console.log(`Processing ${parents.length} parent products...`);
 
     // Build arrays for batch operations
     const parentsToCreate: Array<{ product: ProductImportData; originalIndex: number }> = [];
@@ -262,7 +313,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Batch CREATE parent products
+    // Batch CREATE parent products (in chunks to avoid Supabase 1000-row limit)
     if (parentsToCreate.length > 0) {
       const insertData = parentsToCreate.map(({ product }) => ({
         store_id: storeId,
@@ -276,59 +327,25 @@ export async function POST(request: NextRequest) {
         min_stock_threshold: product.min_stock_threshold,
       }));
 
-      const { data: createdData, error: insertError } = await supabase
-        .from('products')
-        .insert(insertData)
-        .select('id, barcode');
+      const { data: createdData, errors: insertErrors } = await insertProductsInChunks(supabase, insertData);
 
-      if (insertError) {
-        console.error('Batch insert error:', insertError);
-        // Fall back to individual inserts with error reporting
-        for (const { product, originalIndex } of parentsToCreate) {
-          const csvRowNumber = originalIndex + 2;
-          try {
-            const { data, error } = await supabase
-              .from('products')
-              .insert([{
-                store_id: storeId,
-                name: product.name,
-                barcode: product.barcode || null,
-                cost_price: product.cost_price,
-                selling_price: product.selling_price,
-                profit_percentage: product.profit_percentage,
-                currency: product.currency,
-                stock_quantity: product.stock_quantity,
-                min_stock_threshold: product.min_stock_threshold,
-              }])
-              .select('id, barcode')
-              .single();
-
-            if (error) {
-              results.failed++;
-              results.errors.push({ row: csvRowNumber, message: error.code === '23505' 
-                ? 'A product with this barcode already exists' 
-                : error.message });
-            } else if (data) {
-              results.success++;
-              results.created.push(data.id);
-              if (data.barcode) {
-                barcodeToUuid.set(data.barcode, data.id);
-              }
-            }
-          } catch (err: any) {
-            results.failed++;
-            results.errors.push({ row: csvRowNumber, message: err.message || 'Unknown error' });
-          }
-        }
-      } else if (createdData) {
-        for (let i = 0; i < createdData.length; i++) {
-          const data = createdData[i];
+      // Track successfully created products
+      if (createdData) {
+        for (const data of createdData) {
           results.success++;
           results.created.push(data.id);
           if (data.barcode) {
             barcodeToUuid.set(data.barcode, data.id);
           }
         }
+      }
+
+      // Report errors with correct row numbers
+      for (const err of insertErrors) {
+        const originalIndex = parentsToCreate[err.index]?.originalIndex;
+        const csvRowNumber = originalIndex !== undefined ? originalIndex + 2 : 0;
+        results.failed++;
+        results.errors.push({ row: csvRowNumber, message: err.message });
       }
     }
 
@@ -383,7 +400,7 @@ export async function POST(request: NextRequest) {
     // ─────────────────────────────────────────────────────────────
     // STEP 2: BATCH PROCESS ALL VARIANT PRODUCTS
     // ─────────────────────────────────────────────────────────────
-    console.log(`Processing ${variants.length} variant products in batch...`);
+    console.log(`Processing ${variants.length} variant products...`);
 
     const variantsToCreate: Array<{ product: ProductImportData; originalIndex: number; resolvedParentId: string }> = [];
     const variantsToUpdate: Array<{ product: ProductImportData; originalIndex: number; existingId: string; resolvedParentId: string }> = [];
@@ -434,7 +451,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Batch CREATE variant products
+    // Batch CREATE variant products (in chunks)
     if (variantsToCreate.length > 0) {
       const insertData = variantsToCreate.map(({ product, resolvedParentId }) => ({
         store_id: storeId,
@@ -450,54 +467,22 @@ export async function POST(request: NextRequest) {
         variant_name: product.variant_name || null,
       }));
 
-      const { data: createdData, error: insertError } = await supabase
-        .from('products')
-        .insert(insertData)
-        .select('id');
+      const { data: createdData, errors: insertErrors } = await insertProductsInChunks(supabase, insertData);
 
-      if (insertError) {
-        console.error('Batch variant insert error:', insertError);
-        // Fall back to individual inserts
-        for (const { product, originalIndex, resolvedParentId } of variantsToCreate) {
-          const csvRowNumber = originalIndex + 2;
-          try {
-            const { data, error } = await supabase
-              .from('products')
-              .insert([{
-                store_id: storeId,
-                name: product.name,
-                barcode: product.barcode || null,
-                cost_price: 0,
-                selling_price: 0,
-                profit_percentage: 0,
-                currency: product.currency,
-                stock_quantity: product.stock_quantity,
-                min_stock_threshold: product.min_stock_threshold,
-                parent_id: resolvedParentId,
-                variant_name: product.variant_name || null,
-              }])
-              .select('id')
-              .single();
-
-            if (error) {
-              results.failed++;
-              results.errors.push({ row: csvRowNumber, message: error.code === '23505'
-                ? 'A product with this barcode already exists'
-                : error.message });
-            } else if (data) {
-              results.success++;
-              results.created.push(data.id);
-            }
-          } catch (err: any) {
-            results.failed++;
-            results.errors.push({ row: csvRowNumber, message: err.message || 'Unknown error' });
-          }
-        }
-      } else if (createdData) {
+      // Track successfully created variants
+      if (createdData) {
         for (const data of createdData) {
           results.success++;
           results.created.push(data.id);
         }
+      }
+
+      // Report errors with correct row numbers
+      for (const err of insertErrors) {
+        const originalIndex = variantsToCreate[err.index]?.originalIndex;
+        const csvRowNumber = originalIndex !== undefined ? originalIndex + 2 : 0;
+        results.failed++;
+        results.errors.push({ row: csvRowNumber, message: err.message });
       }
     }
 
@@ -558,6 +543,11 @@ export async function POST(request: NextRequest) {
       p_file_size: fileSize || 0,
       p_errors_summary: errorsSummary
     });
+
+    console.log(`Import complete: ${results.success} success, ${results.failed} failed, ${results.errors.length} errors reported`);
+    if (results.errors.length > 0) {
+      console.log('First 5 errors:', results.errors.slice(0, 5));
+    }
 
     return NextResponse.json({
       success: true,
