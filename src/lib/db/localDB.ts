@@ -81,7 +81,7 @@ export interface QueuedTransactionItem {
 
 export interface PendingWrite {
   id: string;
-  type: "transaction" | "stock_decrement";
+  type: "transaction" | "stock_decrement" | "favorite_add" | "favorite_remove";
   payload: unknown;
   created_at: string;
   retry_count: number;

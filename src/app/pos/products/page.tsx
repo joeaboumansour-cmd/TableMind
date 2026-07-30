@@ -42,7 +42,7 @@ import { formatLL, formatUSD, convertUsdToLl, convertLlToUsdForSale, SELL_RATE, 
 import BarcodeScanner from "@/components/BarcodeScanner";
 import { isDesktop } from "@/lib/device";
 import CSVImportDialog from "@/components/CSVImportDialog";
-import { getFrequentlyUsedProductIds, addFrequentlyUsedProduct, removeFrequentlyUsedProduct, isFrequentlyUsed } from "@/lib/frequentlyUsed";
+import { getFrequentlyUsedProductIds, addFrequentlyUsedProduct, removeFrequentlyUsedProduct, isFrequentlyUsed, syncFavoritesFromSupabase } from "@/lib/frequentlyUsed";
 import { downloadCSV, productsToCSV } from "@/lib/csv/utils";
 import { FeatureFlagGuard } from "@/lib/auth/featureGuard";
 import { fetchProductsCacheFirst } from "@/lib/supabase/client";
@@ -211,6 +211,11 @@ export default function StoreProductsPage() {
     if (user) {
       setStoreId(user.storeId);
       fetchProducts(user.storeId);
+      // Sync favorites from Supabase (merge remote stars into localStorage)
+      // then force re-render so star icons reflect the merged state
+      syncFavoritesFromSupabase(user.storeId).then(() => {
+        setFreqVersion(v => v + 1);
+      });
     }
   }, [user]);
 

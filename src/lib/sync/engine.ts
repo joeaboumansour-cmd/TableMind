@@ -17,6 +17,7 @@ import {
   addPendingWrite,
 } from "@/lib/db/localDB";
 import type { CachedProduct, QueuedTransaction, PendingWrite } from "@/lib/db/localDB";
+import { syncFavoritesFromSupabase, processPendingFavoriteWrites } from "@/lib/frequentlyUsed";
 
 type SyncStatus = "idle" | "syncing" | "error" | "offline";
 type SyncListener = (status: SyncStatus, pendingCount?: number) => void;
@@ -448,11 +449,19 @@ class SyncEngine {
       // Pull latest products (refreshed stock, prices, etc.)
       const pullResult = await this.pullProducts();
 
+      // Sync favorites from Supabase (pull remote favorites into localStorage)
+      if (this.storeId) {
+        await syncFavoritesFromSupabase(this.storeId);
+      }
+
       // Push queued transactions (also queues stock decrements as pending_writes)
       const pushResult = await this.pushQueuedTransactions();
 
       // Process pending stock decrements
       const pendingResult = await this.processPendingWrites();
+
+      // Process pending favorite writes (add/remove starred items)
+      const favoriteResult = await processPendingFavoriteWrites();
 
       const success = pullResult.success;
       this._status = success ? "idle" : "error";
@@ -461,15 +470,16 @@ class SyncEngine {
       console.log(
         `[Sync] Complete: pulled ${pullResult.count} products, ` +
         `pushed ${pushResult.pushed} transactions, ` +
-        `processed ${pendingResult.processed} stock decrements`
+        `processed ${pendingResult.processed} stock decrements, ` +
+        `processed ${favoriteResult.processed} favorite writes`
       );
 
       return {
         success,
         pulled: pullResult.count,
         pushed: pushResult.pushed,
-        failed: pushResult.failed + pendingResult.failed,
-        errors: [...pushResult.errors, ...pendingResult.errors],
+        failed: pushResult.failed + pendingResult.failed + favoriteResult.failed,
+        errors: [...pushResult.errors, ...pendingResult.errors, ...favoriteResult.errors],
       };
     } catch (error: any) {
       this._status = "error";
