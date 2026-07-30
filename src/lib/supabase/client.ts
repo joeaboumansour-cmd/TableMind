@@ -1,4 +1,5 @@
 import { createBrowserClient } from "@supabase/ssr";
+import { cacheProducts } from "@/lib/db/localDB";
 
 // Track current restaurant ID to detect changes
 let currentRestaurantId: string | null = null;
@@ -32,6 +33,7 @@ function getRestaurantIdFromStorage(): string | null {
  * Fetch ALL products for a store using pagination.
  * Supabase/PostgREST enforces a server-side max-rows limit (default 1000),
  * so we must paginate through all pages using .range().
+ * After fetch, writes products to IndexedDB cache for instant subsequent reads.
  */
 export async function fetchAllProducts(
   supabase: ReturnType<typeof createBrowserClient>,
@@ -59,7 +61,77 @@ export async function fetchAllProducts(
     from += PAGE_SIZE;
   }
 
+  // Write-through cache: update IndexedDB after every successful fetch
+  if (allProducts.length > 0 && typeof window !== "undefined") {
+    try {
+      await cacheProducts(
+        allProducts.map((p) => ({
+          id: p.id,
+          store_id: p.store_id,
+          name: p.name,
+          barcode: p.barcode,
+          cost_price: p.cost_price,
+          selling_price: p.selling_price,
+          currency: p.currency || "LL",
+          profit_percentage: p.profit_percentage,
+          discount_percentage: p.discount_percentage || 0,
+          stock_quantity: p.stock_quantity,
+          min_stock_threshold: p.min_stock_threshold,
+          parent_id: p.parent_id || null,
+          variant_name: p.variant_name || null,
+          updated_at: p.updated_at || new Date().toISOString(),
+        }))
+      );
+    } catch (e) {
+      console.warn("[Supabase] Failed to write-through cache:", e);
+    }
+  }
+
   return allProducts;
+}
+
+/**
+ * Fetch products cache-first: returns cached products instantly (if available),
+ * then silently refreshes from Supabase in the background.
+ * Returns fresh products but the caller can render stale cache immediately
+ * if desired by providing an onCacheHit callback.
+ */
+export async function fetchProductsCacheFirst(
+  supabase: ReturnType<typeof createBrowserClient>,
+  storeId: string,
+  onCacheHit?: (products: any[]) => void
+): Promise<any[]> {
+  // 1. Try cache first (instant, no network)
+  if (typeof window !== "undefined") {
+    try {
+      const { getCachedProducts } = await import("@/lib/db/localDB");
+      const cached = await getCachedProducts(storeId);
+      if (cached && cached.length > 0) {
+        onCacheHit?.(cached);
+        // Don't return — proceed to background refresh
+      }
+    } catch (e) {
+      console.warn("[Supabase] Cache read failed:", e);
+    }
+  }
+
+  // 2. Always refresh from network (this also writes to cache via write-through)
+  try {
+    const fresh = await fetchAllProducts(supabase, storeId);
+    return fresh;
+  } catch (error) {
+    // If network fails and we had cache, return cache silently
+    if (typeof window !== "undefined") {
+      try {
+        const { getCachedProducts } = await import("@/lib/db/localDB");
+        const cached = await getCachedProducts(storeId);
+        if (cached && cached.length > 0) {
+          return cached;
+        }
+      } catch {}
+    }
+    throw error;
+  }
 }
 
 /**

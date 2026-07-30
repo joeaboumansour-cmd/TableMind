@@ -326,12 +326,108 @@ export default function POSPage() {
     }
   }, [items, addItem, incrementQuantity, isEnabled, isDesktopMode]);
 
-  // Handle barcode scan from camera
-  const handleBarcodeScan = (barcode: string) => {
-    const product = barcodeIndex.get(barcode);
+  // Handle barcode scan from camera — O(1) local first, then live Supabase fallback to guarantee zero misses
+  const handleBarcodeScan = async (barcode: string) => {
+    const trimmed = barcode.trim();
+    if (!trimmed) {
+      toast.error("Empty barcode");
+      return;
+    }
+
+    // 1. Try local O(1) index
+    const product = barcodeIndex.get(trimmed);
     if (product) {
       handleProductAdd(product);
-    } else {
+      return;
+    }
+
+    // 2. Fallback: query Supabase directly if online — this fixes scan misses for products
+    //    that exist server-side but aren't in the local cache/state yet
+    if (!navigator.onLine) {
+      toast.error("Product not found in local data");
+      return;
+    }
+
+    const storeId = user?.storeId;
+    if (!storeId) {
+      toast.error("No store selected");
+      return;
+    }
+
+    try {
+      toast.loading("Verifying barcode...", { id: "scan-fallback" });
+
+      // Use a fresh client to ensure latest restaurant header
+      const liveClient = createClient();
+      const { data, error } = await liveClient
+        .from("products")
+        .select("*")
+        .eq("barcode", trimmed)
+        .eq("store_id", storeId)
+        .single();
+
+      if (error || !data) {
+        toast.dismiss("scan-fallback");
+        toast.error("Product not found");
+        return;
+      }
+
+      // -- Merge the live product into local state so it's available for future scans --
+      const mapped: Product = {
+        id: data.id,
+        store_id: data.store_id,
+        name: data.name,
+        barcode: data.barcode,
+        cost_price: data.cost_price,
+        selling_price: data.selling_price,
+        currency: (data.currency === "USD" ? "USD" : "LL") as "LL" | "USD",
+        profit_percentage: data.profit_percentage,
+        discount_percentage: data.discount_percentage || 0,
+        stock_quantity: data.stock_quantity,
+        min_stock_threshold: data.min_stock_threshold,
+        parent_id: data.parent_id || undefined,
+        variant_name: data.variant_name || undefined,
+      };
+
+      // Add to local products state (reacts no-op if already there)
+      setProducts((prev) => {
+        if (prev.some((p) => p.id === mapped.id)) return prev;
+        return [...prev, mapped];
+      });
+
+      // Also warm IndexedDB so the cache is never stale again
+      try {
+        const { cacheProducts: cacheSingle } = await import("@/lib/db/localDB");
+        await cacheSingle([
+          {
+            id: mapped.id,
+            store_id: mapped.store_id,
+            name: mapped.name,
+            barcode: mapped.barcode,
+            cost_price: mapped.cost_price,
+            selling_price: mapped.selling_price,
+            currency: mapped.currency,
+            profit_percentage: mapped.profit_percentage,
+            discount_percentage: mapped.discount_percentage,
+            stock_quantity: mapped.stock_quantity,
+            min_stock_threshold: mapped.min_stock_threshold,
+            parent_id: mapped.parent_id || null,
+            variant_name: mapped.variant_name || null,
+            updated_at: new Date().toISOString(),
+          } as any,
+        ]);
+      } catch (e) {
+        console.warn("[POS Scan] cache single failed:", e);
+      }
+
+      toast.dismiss("scan-fallback");
+      toast.success("Found via server — added to cart");
+
+      // 3. Add to cart
+      handleProductAdd(mapped);
+    } catch (err) {
+      console.error("[POS Scan] fallback error:", err);
+      toast.dismiss("scan-fallback");
       toast.error("Product not found");
     }
   };

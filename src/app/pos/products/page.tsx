@@ -44,7 +44,7 @@ import CSVImportDialog from "@/components/CSVImportDialog";
 import { getFrequentlyUsedProductIds, addFrequentlyUsedProduct, removeFrequentlyUsedProduct, isFrequentlyUsed } from "@/lib/frequentlyUsed";
 import { downloadCSV, productsToCSV } from "@/lib/csv/utils";
 import { FeatureFlagGuard } from "@/lib/auth/featureGuard";
-import { fetchAllProducts } from "@/lib/supabase/client";
+import { fetchProductsCacheFirst } from "@/lib/supabase/client";
 
 interface Product {
   id: string;
@@ -248,7 +248,13 @@ export default function StoreProductsPage() {
         return;
       }
 
-      const data = await fetchAllProducts(supabase, storeId);
+      // Cache-first: render instantly from IndexedDB, then refresh in background
+      const data = await fetchProductsCacheFirst(supabase, storeId, (cached) => {
+        // onCacheHit: render stale cache immediately for instant perceived load
+        setProducts(cached as Product[]);
+        setIsLoading(false);
+      });
+
       setProducts(data || []);
       
       // Update selected product if it exists in the new data
