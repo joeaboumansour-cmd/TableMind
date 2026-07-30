@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useState, useEffect, useRef, useMemo, useCallback, startTransition } from "react";
 import { useRouter } from "next/navigation";
@@ -39,7 +39,7 @@ import {
 import type { CachedProduct } from "@/lib/db";
 import { useFeatureFlags } from "@/hooks/useFeatureFlags";
 import { usePreloadProducts } from "@/hooks/usePreloadProducts";
-import { isDesktop, isIOS } from "@/lib/device";
+import { isDesktop, isIOS, isAndroid } from "@/lib/device";
 import { getFrequentlyUsedProductIds, addFrequentlyUsedProduct, removeFrequentlyUsedProduct, isFrequentlyUsed } from "@/lib/frequentlyUsed";
 
 const supabase = createClient();
@@ -63,7 +63,7 @@ export default function POSPage() {
   const [highlightedItemId, setHighlightedItemId] = useState<string | null>(null);
   const highlightTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-  // O(1) barcode lookup — rebuilt whenever products change
+  // O(1) barcode lookup â€” rebuilt whenever products change
   const [barcodeIndex, setBarcodeIndex] = useState<Map<string, Product>>(new Map());
   const barcodeIndexRef = useRef<Map<string, Product>>(new Map());
   // Check user permissions for History button
@@ -180,7 +180,7 @@ export default function POSPage() {
           if (navigator.onLine) {
             // Initialize/refresh local cache in background (non-blocking)
             // This uses incremental upsert so it's fast even with 2500 items
-            // Use startTransition to mark this as non-urgent — React will
+            // Use startTransition to mark this as non-urgent â€” React will
             // prioritize user interactions over the state update from sync
             syncEngine.initialize(store_id).then(() => {
               // After sync completes, refresh products from cache in a non-urgent transition
@@ -334,7 +334,7 @@ export default function POSPage() {
     }
   }, [items, addItem, incrementQuantity, isEnabled, isDesktopMode]);
 
-  // Handle barcode scan from camera — O(1) local first, then live Supabase fallback to guarantee zero misses
+  // Handle barcode scan from camera â€” O(1) local first, then live Supabase fallback to guarantee zero misses
   const handleBarcodeScan = async (barcode: string) => {
     const trimmed = barcode.trim();
     if (!trimmed) {
@@ -349,7 +349,7 @@ export default function POSPage() {
       return;
     }
 
-    // 2. Fallback: query Supabase directly if online — this fixes scan misses for products
+    // 2. Fallback: query Supabase directly if online â€” this fixes scan misses for products
     //    that exist server-side but aren't in the local cache/state yet
     if (!navigator.onLine) {
       toast.error("Product not found in local data");
@@ -428,7 +428,7 @@ export default function POSPage() {
       }
 
       toast.dismiss("scan-fallback");
-      toast.success("Found via server — added to cart");
+      toast.success("Found via server â€” added to cart");
 
       // 3. Add to cart
       handleProductAdd(mapped);
@@ -445,11 +445,11 @@ export default function POSPage() {
     if (typeof window !== 'undefined' && 'localStorage' in window) {
       localStorage.setItem("scanner_active", String(newState));
     }
-    // iOS/Chrome PWA: Quagga2's camera release is deferred (setTimeout(0)) and iOS
-    // WKWebView keeps the camera hardware active even after the preview disappears,
-    // causing battery drain + heat. A quick page refresh is the only reliable way to
-    // force iOS to release the camera. Only refresh when TURNING OFF (newState=false).
-    if (!newState && isIOS()) {
+    // Mobile (iOS WKWebView/PWA + Android Chrome): the browser may keep the camera
+    // hardware active even after the preview disappears,
+    // causing battery drain + heat. A page refresh is the only reliable way to
+    // force mobile browsers to release the camera. Only refresh when TURNING OFF.
+    if (!newState && (isIOS() || isAndroid())) {
       window.location.reload();
     }
   };
@@ -623,7 +623,7 @@ export default function POSPage() {
       {isDesktopMode ? (
         /* ===== DESKTOP SPLIT LAYOUT ===== */
         <div className="flex-1 flex flex-row overflow-hidden p-4 gap-4">
-          {/* Left side: Cart — 65% */}
+          {/* Left side: Cart â€” 65% */}
           <div className="flex-[65] flex flex-col overflow-hidden min-w-0">
             <Card className="flex-1 flex flex-col overflow-hidden min-h-0">
               {/* Cart Items - Scrollable */}
@@ -766,9 +766,9 @@ export default function POSPage() {
             </Card>
           </div>
 
-          {/* Right side: Scanner + Grid + Checkout — 35% */}
+          {/* Right side: Scanner + Grid + Checkout â€” 35% */}
           <div className="flex-[35] flex flex-col gap-4 min-w-0">
-            {/* Barcode Scanner + Grid — scrollable area */}
+            {/* Barcode Scanner + Grid â€” scrollable area */}
             <div className="flex-1 flex flex-col overflow-hidden min-h-0">
               <BarcodeScanner
                 onScan={handleBarcodeScan}
