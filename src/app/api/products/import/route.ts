@@ -21,13 +21,44 @@ interface ImportError {
   message: string;
 }
 
-// Maximum rows per batch
-const BATCH_SIZE = 50;
-
 export const config = {
   runtime: 'nodejs',
   maxDuration: 300, // 5 minutes for large imports
 };
+
+/**
+ * Fetch ALL products for a store using pagination.
+ * Supabase/PostgREST enforces a server-side max-rows limit (default 1000),
+ * so we must paginate through all pages using .range().
+ */
+async function fetchAllProductsForStore(
+  supabase: any,
+  storeId: string,
+  select: string = 'id, barcode'
+): Promise<any[]> {
+  const PAGE_SIZE = 1000;
+  let allProducts: any[] = [];
+  let from = 0;
+
+  while (true) {
+    const to = from + PAGE_SIZE - 1;
+    const { data, error } = await supabase
+      .from('products')
+      .select(select)
+      .eq('store_id', storeId)
+      .range(from, to);
+
+    if (error) throw error;
+    if (!data || data.length === 0) break;
+
+    allProducts = allProducts.concat(data);
+    if (data.length < PAGE_SIZE) break; // Last page
+
+    from += PAGE_SIZE;
+  }
+
+  return allProducts;
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -98,7 +129,7 @@ export async function POST(request: NextRequest) {
     // Handle replace_all mode - delete all existing products and related data
     if (mode === 'replace_all') {
       console.log(`Replace all mode: deleting all products for store ${storeId}`);
-      
+
       // Delete transaction_items first (they reference products)
       const { error: deleteTxnItemsError } = await supabase
         .from('transaction_items')
@@ -144,14 +175,16 @@ export async function POST(request: NextRequest) {
       console.log('Successfully cleared all existing data');
     }
 
-    // Get existing products for barcode/id lookup
-    const { data: existingProducts } = await supabase
-      .from('products')
-      .select('id, barcode')
-      .eq('store_id', storeId);
+    // ─────────────────────────────────────────────────────────────
+    // FETCH ALL EXISTING PRODUCTS WITH PAGINATION
+    // Supabase returns max 1000 rows per query, so we paginate
+    // ─────────────────────────────────────────────────────────────
+    console.log(`Fetching all existing products for store ${storeId}...`);
+    const existingProducts = await fetchAllProductsForStore(supabase, storeId, 'id, barcode, stock_quantity');
 
     const existingBarcodes = new Map<string, string>();
     const existingIds = new Set<string>();
+    const existingStockMap = new Map<string, number>();
     
     if (existingProducts) {
       existingProducts.forEach(p => {
@@ -159,196 +192,352 @@ export async function POST(request: NextRequest) {
           existingBarcodes.set(p.barcode, p.id);
         }
         existingIds.add(p.id);
+        existingStockMap.set(p.id, p.stock_quantity || 0);
       });
     }
+    console.log(`Found ${existingProducts.length} existing products`);
 
-    // Build a map to resolve parent_id by barcode (since CSV uses parent barcode, not UUID)
-    // This is populated as parent products are created, so variants can reference them
-    const barcodeToUuid = new Map<string, string>();
-
-    // Sort products so parents (no parent_id) are processed before variants (with parent_id)
-    // This ensures foreign key constraints are satisfied when variant children reference their parent
-    const productsWithIndex = products.map((p, idx) => ({ product: p, originalIndex: idx }));
-    const sortedProducts = [...productsWithIndex].sort((a, b) => {
-      if (a.product.parent_id && !b.product.parent_id) return 1;   // variants after parents
-      if (!a.product.parent_id && b.product.parent_id) return -1;  // parents before variants
-      return 0; // same priority, keep original order
-    });
-
+    // ─────────────────────────────────────────────────────────────
+    // BATCH PROCESSING: Separate parents and variants
+    // ─────────────────────────────────────────────────────────────
     // Track barcodes already processed in this import to detect duplicates
     const processedBarcodes = new Set<string>();
+    // Map to resolve parent barcode -> UUID for newly created parents
+    const barcodeToUuid = new Map<string, string>();
 
-    // Helper function to process a single product (used sequentially to ensure parent before child ordering)
-    async function processProduct(
-      product: ProductImportData,
-      originalIndex: number,
-      sortedIndex: number
-    ): Promise<{ success: boolean; id?: string; type?: string; error?: { row: number; message: string } }> {
-      const csvRowNumber = originalIndex + 2; // +1 for 1-based, +1 for header row
+    // Separate products into parents and variants, with original row indices
+    const parents: Array<{ product: ProductImportData; originalIndex: number }> = [];
+    const variants: Array<{ product: ProductImportData; originalIndex: number }> = [];
 
-      try {
-        // Check for duplicate barcodes within the import
-        if (product.barcode && processedBarcodes.has(product.barcode)) {
-          return {
-            success: false,
-            error: { row: csvRowNumber, message: `Duplicate barcode "${product.barcode}" in import file` }
-          };
+    for (let i = 0; i < products.length; i++) {
+      const product = products[i];
+      const csvRowNumber = i + 2; // +1 for 1-based, +1 for header row
+
+      // Check for duplicate barcodes within the import
+      if (product.barcode) {
+        if (processedBarcodes.has(product.barcode)) {
+          results.failed++;
+          results.errors.push({ row: csvRowNumber, message: `Duplicate barcode "${product.barcode}" in import file` });
+          continue;
         }
-        if (product.barcode) {
-          processedBarcodes.add(product.barcode);
-        }
+        processedBarcodes.add(product.barcode);
+      }
 
-        // Determine if we're updating or creating
-        let existingProductId: string | null = null;
-        
-        if (product.id && existingIds.has(product.id)) {
-          existingProductId = product.id;
-        } else if (product.barcode && existingBarcodes.has(product.barcode)) {
-          existingProductId = existingBarcodes.get(product.barcode) || null;
-        }
+      if (product.parent_id) {
+        variants.push({ product, originalIndex: i });
+      } else {
+        parents.push({ product, originalIndex: i });
+      }
+    }
 
-        const isVariant = !!product.parent_id;
+    // ─────────────────────────────────────────────────────────────
+    // STEP 1: BATCH PROCESS ALL PARENT PRODUCTS
+    // ─────────────────────────────────────────────────────────────
+    console.log(`Processing ${parents.length} parent products in batch...`);
 
-        // Resolve parent_id: could be a UUID or a barcode of the parent
-        let resolvedParentId: string | null = null;
-        if (isVariant) {
-          const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-          // Try direct UUID (from existing DB)
-          if (uuidRegex.test(product.parent_id!) && existingIds.has(product.parent_id!)) {
-            resolvedParentId = product.parent_id!;
-          } 
-          // Try barcode lookup in existing DB products
-          else if (existingBarcodes.has(product.parent_id!)) {
-            resolvedParentId = existingBarcodes.get(product.parent_id!)!;
-          }
-          // Try barcode lookup in products already created in this import
-          else if (barcodeToUuid.has(product.parent_id!)) {
-            resolvedParentId = barcodeToUuid.get(product.parent_id!)!;
-          }
+    // Build arrays for batch operations
+    const parentsToCreate: Array<{ product: ProductImportData; originalIndex: number }> = [];
+    const parentsToUpdate: Array<{ product: ProductImportData; originalIndex: number; existingId: string }> = [];
 
-          if (!resolvedParentId) {
-            return {
-              success: false,
-              error: { row: csvRowNumber, message: `Parent not found for barcode/UUID "${product.parent_id}". Make sure the parent product exists or comes before the variant in the CSV.` }
-            };
-          }
-        }
+    for (const { product, originalIndex } of parents) {
+      const csvRowNumber = originalIndex + 2;
 
-        const productData: Record<string, any> = {
-          name: product.name,
-          barcode: product.barcode || null,
-          currency: product.currency,
-          stock_quantity: product.stock_quantity,
-          min_stock_threshold: product.min_stock_threshold,
-        };
+      // Determine if we're updating or creating
+      let existingProductId: string | null = null;
+      
+      if (product.id && existingIds.has(product.id)) {
+        existingProductId = product.id;
+      } else if (product.barcode && existingBarcodes.has(product.barcode)) {
+        existingProductId = existingBarcodes.get(product.barcode) || null;
+      }
 
-        if (isVariant) {
-          // Variant: inherit prices from parent (store 0), set parent_id and variant_name
-          productData.parent_id = resolvedParentId;
-          productData.variant_name = product.variant_name || null;
-          productData.cost_price = 0;
-          productData.selling_price = 0;
-          productData.profit_percentage = 0;
-        } else {
-          // Parent product: store prices directly
-          productData.cost_price = product.cost_price;
-          productData.selling_price = product.selling_price;
-          productData.profit_percentage = product.profit_percentage;
-        }
+      if (existingProductId && mode !== 'create_only') {
+        parentsToUpdate.push({ product, originalIndex, existingId: existingProductId });
+      } else if (mode === 'create_only' && existingProductId) {
+        results.failed++;
+        results.errors.push({ row: csvRowNumber, message: 'Product already exists (skipped in create_only mode)' });
+      } else {
+        parentsToCreate.push({ product, originalIndex });
+      }
+    }
 
-        if (existingProductId && mode !== 'create_only') {
-          // Update existing product
-          if (mode === 'upsert') {
-            const { data: currentProduct } = await supabase
+    // Batch CREATE parent products
+    if (parentsToCreate.length > 0) {
+      const insertData = parentsToCreate.map(({ product }) => ({
+        store_id: storeId,
+        name: product.name,
+        barcode: product.barcode || null,
+        cost_price: product.cost_price,
+        selling_price: product.selling_price,
+        profit_percentage: product.profit_percentage,
+        currency: product.currency,
+        stock_quantity: product.stock_quantity,
+        min_stock_threshold: product.min_stock_threshold,
+      }));
+
+      const { data: createdData, error: insertError } = await supabase
+        .from('products')
+        .insert(insertData)
+        .select('id, barcode');
+
+      if (insertError) {
+        console.error('Batch insert error:', insertError);
+        // Fall back to individual inserts with error reporting
+        for (const { product, originalIndex } of parentsToCreate) {
+          const csvRowNumber = originalIndex + 2;
+          try {
+            const { data, error } = await supabase
               .from('products')
-              .select('stock_quantity')
-              .eq('id', existingProductId)
+              .insert([{
+                store_id: storeId,
+                name: product.name,
+                barcode: product.barcode || null,
+                cost_price: product.cost_price,
+                selling_price: product.selling_price,
+                profit_percentage: product.profit_percentage,
+                currency: product.currency,
+                stock_quantity: product.stock_quantity,
+                min_stock_threshold: product.min_stock_threshold,
+              }])
+              .select('id, barcode')
               .single();
-            
-            if (currentProduct) {
-              productData.stock_quantity = currentProduct.stock_quantity + product.stock_quantity;
+
+            if (error) {
+              results.failed++;
+              results.errors.push({ row: csvRowNumber, message: error.code === '23505' 
+                ? 'A product with this barcode already exists' 
+                : error.message });
+            } else if (data) {
+              results.success++;
+              results.created.push(data.id);
+              if (data.barcode) {
+                barcodeToUuid.set(data.barcode, data.id);
+              }
             }
+          } catch (err: any) {
+            results.failed++;
+            results.errors.push({ row: csvRowNumber, message: err.message || 'Unknown error' });
+          }
+        }
+      } else if (createdData) {
+        for (let i = 0; i < createdData.length; i++) {
+          const data = createdData[i];
+          results.success++;
+          results.created.push(data.id);
+          if (data.barcode) {
+            barcodeToUuid.set(data.barcode, data.id);
+          }
+        }
+      }
+    }
+
+    // Batch UPDATE parent products
+    if (parentsToUpdate.length > 0) {
+      for (const { product, originalIndex, existingId } of parentsToUpdate) {
+        const csvRowNumber = originalIndex + 2;
+        try {
+          const productData: Record<string, any> = {
+            name: product.name,
+            barcode: product.barcode || null,
+            cost_price: product.cost_price,
+            selling_price: product.selling_price,
+            profit_percentage: product.profit_percentage,
+            currency: product.currency,
+            min_stock_threshold: product.min_stock_threshold,
+          };
+
+          if (mode === 'upsert') {
+            // Add stock to existing stock
+            const currentStock = existingStockMap.get(existingId) || 0;
+            productData.stock_quantity = currentStock + product.stock_quantity;
+          } else {
+            productData.stock_quantity = product.stock_quantity;
           }
 
           const { error } = await supabase
             .from('products')
             .update(productData)
-            .eq('id', existingProductId);
+            .eq('id', existingId);
 
           if (error) {
-            if (error.code === '23505') {
-              return {
-                success: false,
-                error: { row: csvRowNumber, message: 'A product with this barcode already exists' }
-              };
+            results.failed++;
+            results.errors.push({ row: csvRowNumber, message: error.code === '23505'
+              ? 'A product with this barcode already exists'
+              : error.message });
+          } else {
+            results.success++;
+            results.updated.push(existingId);
+            // Track barcode for variant resolution
+            if (product.barcode) {
+              barcodeToUuid.set(product.barcode, existingId);
             }
-            return {
-              success: false,
-              error: { row: csvRowNumber, message: error.message }
-            };
           }
-
-          return { success: true, id: existingProductId, type: 'updated' };
-        } else if (mode === 'create_only' && existingProductId) {
-          // Skip existing products in create_only mode
-          return {
-            success: false,
-            error: { row: csvRowNumber, message: 'Product already exists (skipped in create_only mode)' }
-          };
-        } else {
-          // Create new product
-          const { data, error } = await supabase
-            .from('products')
-            .insert([{
-              store_id: storeId,
-              ...productData,
-            }])
-            .select('id')
-            .single();
-
-          if (error) {
-            if (error.code === '23505') {
-              return {
-                success: false,
-                error: { row: csvRowNumber, message: 'A product with this barcode already exists' }
-              };
-            }
-            return {
-              success: false,
-              error: { row: csvRowNumber, message: error.message }
-            };
-          }
-
-          // Track newly created parent product's barcode -> UUID for variant resolution
-          if (data?.id && !isVariant && product.barcode) {
-            barcodeToUuid.set(product.barcode, data.id);
-          }
-
-          return { success: true, id: data?.id, type: 'created' };
+        } catch (err: any) {
+          results.failed++;
+          results.errors.push({ row: csvRowNumber, message: err.message || 'Unknown error' });
         }
-      } catch (err: any) {
-        return {
-          success: false,
-          error: { row: csvRowNumber, message: err.message || 'Unknown error' }
-        };
       }
     }
 
-    // Process products in strict sequential order (parents first, then variants)
-    // Sequential execution is critical: variant children depend on parent products being created first
-    for (const { product, originalIndex } of sortedProducts) {
-      const result = await processProduct(product, originalIndex, 0);
+    // ─────────────────────────────────────────────────────────────
+    // STEP 2: BATCH PROCESS ALL VARIANT PRODUCTS
+    // ─────────────────────────────────────────────────────────────
+    console.log(`Processing ${variants.length} variant products in batch...`);
+
+    const variantsToCreate: Array<{ product: ProductImportData; originalIndex: number; resolvedParentId: string }> = [];
+    const variantsToUpdate: Array<{ product: ProductImportData; originalIndex: number; existingId: string; resolvedParentId: string }> = [];
+
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+    for (const { product, originalIndex } of variants) {
+      const csvRowNumber = originalIndex + 2;
+
+      // Resolve parent_id: could be a UUID or a barcode of the parent
+      let resolvedParentId: string | null = null;
       
-      if (result.success) {
-        results.success++;
-        if (result.type === 'updated') {
-          results.updated.push(result.id!);
-        } else if (result.type === 'created') {
-          results.created.push(result.id!);
-        }
-      } else if (result.error) {
+      // Try direct UUID (from existing DB)
+      if (uuidRegex.test(product.parent_id!) && existingIds.has(product.parent_id!)) {
+        resolvedParentId = product.parent_id!;
+      } 
+      // Try barcode lookup in existing DB products
+      else if (existingBarcodes.has(product.parent_id!)) {
+        resolvedParentId = existingBarcodes.get(product.parent_id!)!;
+      }
+      // Try barcode lookup in products already created in this import
+      else if (barcodeToUuid.has(product.parent_id!)) {
+        resolvedParentId = barcodeToUuid.get(product.parent_id!)!;
+      }
+
+      if (!resolvedParentId) {
         results.failed++;
-        results.errors.push(result.error);
+        results.errors.push({ row: csvRowNumber, message: `Parent not found for barcode/UUID "${product.parent_id}". Make sure the parent product exists or comes before the variant in the CSV.` });
+        continue;
+      }
+
+      // Determine if we're updating or creating
+      let existingProductId: string | null = null;
+      
+      if (product.id && existingIds.has(product.id)) {
+        existingProductId = product.id;
+      } else if (product.barcode && existingBarcodes.has(product.barcode)) {
+        existingProductId = existingBarcodes.get(product.barcode) || null;
+      }
+
+      if (existingProductId && mode !== 'create_only') {
+        variantsToUpdate.push({ product, originalIndex, existingId: existingProductId, resolvedParentId });
+      } else if (mode === 'create_only' && existingProductId) {
+        results.failed++;
+        results.errors.push({ row: csvRowNumber, message: 'Product already exists (skipped in create_only mode)' });
+      } else {
+        variantsToCreate.push({ product, originalIndex, resolvedParentId });
+      }
+    }
+
+    // Batch CREATE variant products
+    if (variantsToCreate.length > 0) {
+      const insertData = variantsToCreate.map(({ product, resolvedParentId }) => ({
+        store_id: storeId,
+        name: product.name,
+        barcode: product.barcode || null,
+        cost_price: 0,
+        selling_price: 0,
+        profit_percentage: 0,
+        currency: product.currency,
+        stock_quantity: product.stock_quantity,
+        min_stock_threshold: product.min_stock_threshold,
+        parent_id: resolvedParentId,
+        variant_name: product.variant_name || null,
+      }));
+
+      const { data: createdData, error: insertError } = await supabase
+        .from('products')
+        .insert(insertData)
+        .select('id');
+
+      if (insertError) {
+        console.error('Batch variant insert error:', insertError);
+        // Fall back to individual inserts
+        for (const { product, originalIndex, resolvedParentId } of variantsToCreate) {
+          const csvRowNumber = originalIndex + 2;
+          try {
+            const { data, error } = await supabase
+              .from('products')
+              .insert([{
+                store_id: storeId,
+                name: product.name,
+                barcode: product.barcode || null,
+                cost_price: 0,
+                selling_price: 0,
+                profit_percentage: 0,
+                currency: product.currency,
+                stock_quantity: product.stock_quantity,
+                min_stock_threshold: product.min_stock_threshold,
+                parent_id: resolvedParentId,
+                variant_name: product.variant_name || null,
+              }])
+              .select('id')
+              .single();
+
+            if (error) {
+              results.failed++;
+              results.errors.push({ row: csvRowNumber, message: error.code === '23505'
+                ? 'A product with this barcode already exists'
+                : error.message });
+            } else if (data) {
+              results.success++;
+              results.created.push(data.id);
+            }
+          } catch (err: any) {
+            results.failed++;
+            results.errors.push({ row: csvRowNumber, message: err.message || 'Unknown error' });
+          }
+        }
+      } else if (createdData) {
+        for (const data of createdData) {
+          results.success++;
+          results.created.push(data.id);
+        }
+      }
+    }
+
+    // Batch UPDATE variant products
+    if (variantsToUpdate.length > 0) {
+      for (const { product, originalIndex, existingId, resolvedParentId } of variantsToUpdate) {
+        const csvRowNumber = originalIndex + 2;
+        try {
+          const productData: Record<string, any> = {
+            name: product.name,
+            barcode: product.barcode || null,
+            parent_id: resolvedParentId,
+            variant_name: product.variant_name || null,
+            min_stock_threshold: product.min_stock_threshold,
+          };
+
+          if (mode === 'upsert') {
+            const currentStock = existingStockMap.get(existingId) || 0;
+            productData.stock_quantity = currentStock + product.stock_quantity;
+          } else {
+            productData.stock_quantity = product.stock_quantity;
+          }
+
+          const { error } = await supabase
+            .from('products')
+            .update(productData)
+            .eq('id', existingId);
+
+          if (error) {
+            results.failed++;
+            results.errors.push({ row: csvRowNumber, message: error.code === '23505'
+              ? 'A product with this barcode already exists'
+              : error.message });
+          } else {
+            results.success++;
+            results.updated.push(existingId);
+          }
+        } catch (err: any) {
+          results.failed++;
+          results.errors.push({ row: csvRowNumber, message: err.message || 'Unknown error' });
+        }
       }
     }
 

@@ -134,111 +134,68 @@ export default function CSVImportDialog({
     setImportProgress({ current: 0, total: parsedData.length });
 
     try {
-      // Use smaller batches for reliability
-      const BATCH_SIZE = 100;
-      const batches: ProductCSVRow[][] = [];
-      
-      // Split products into batches
-      for (let i = 0; i < parsedData.length; i += BATCH_SIZE) {
-        batches.push(parsedData.slice(i, i + BATCH_SIZE));
-      }
+      console.log(`Starting import of ${parsedData.length} products in a single request`);
 
-      let totalSuccessful = 0;
-      let totalFailed = 0;
-      let totalUpdated = 0;
-      let totalCreated = 0;
-      const allErrors: Array<{ row: number; message: string }> = [];
+      // Send all products in a single request - the server handles batch operations efficiently
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 300000); // 5 minute timeout for large imports
 
-      console.log(`Starting import of ${parsedData.length} products in ${batches.length} batches`);
+      try {
+        const response = await fetch("/api/products/import", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            products: parsedData,
+            mode: importMode,
+            storeId,
+            fileName: file?.name,
+            fileSize: file?.size,
+          }),
+          signal: controller.signal,
+        });
 
-      // Process each batch
-      for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
-        const batch = batches[batchIndex];
-        const batchStartRow = batchIndex * BATCH_SIZE + 1;
+        clearTimeout(timeoutId);
 
-        console.log(`Processing batch ${batchIndex + 1}/${batches.length} (${batch.length} products)`);
-        toast.info(`Importing batch ${batchIndex + 1} of ${batches.length}...`);
+        console.log(`Import response status:`, response.status);
 
-        // Add timeout to detect silent failures
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 60000); // 60 second timeout
-
-        try {
-          const response = await fetch("/api/products/import", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              products: batch,
-              mode: importMode,
-              storeId,
-              fileName: file?.name,
-              fileSize: file?.size,
-            }),
-            signal: controller.signal,
-          });
-
-          clearTimeout(timeoutId);
-
-          console.log(`Batch ${batchIndex + 1} response status:`, response.status);
-
-          if (!response.ok) {
-            const errorResult = await response.json();
-            console.error(`Batch ${batchIndex + 1} error:`, errorResult);
-            throw new Error(errorResult.error || `Batch ${batchIndex + 1} failed`);
-          }
-
-          const result = await response.json();
-          console.log(`Batch ${batchIndex + 1} result:`, result.summary);
-
-          // Aggregate results
-          totalSuccessful += result.summary.successful;
-          totalFailed += result.summary.failed;
-          totalUpdated += result.summary.updated;
-          totalCreated += result.summary.created;
-          
-          // Collect errors
-          if (result.errors) {
-            result.errors.forEach((err: { row: number; message: string }) => {
-              allErrors.push({
-                row: err.row + batchStartRow - 1,
-                message: err.message,
-              });
-            });
-          }
-
-          // Update progress
-          setImportProgress({
-            current: Math.min((batchIndex + 1) * BATCH_SIZE, parsedData.length),
-            total: parsedData.length,
-          });
-        } catch (error: any) {
-          clearTimeout(timeoutId);
-          if (error.name === 'AbortError') {
-            console.error(`Batch ${batchIndex + 1} timed out after 60 seconds`);
-            throw new Error(`Import timed out on batch ${batchIndex + 1}. The server may be overloaded.`);
-          }
-          throw error;
+        if (!response.ok) {
+          const errorResult = await response.json();
+          console.error(`Import error:`, errorResult);
+          throw new Error(errorResult.error || "Import failed");
         }
+
+        const result = await response.json();
+        console.log(`Import result:`, result.summary);
+
+        setImportProgress({
+          current: parsedData.length,
+          total: parsedData.length,
+        });
+
+        const summary = {
+          total: parsedData.length,
+          successful: result.summary.successful,
+          failed: result.summary.failed,
+          updated: result.summary.updated,
+          created: result.summary.created,
+        };
+
+        setImportResult(summary);
+        toast.success(
+          `Import complete! ${result.summary.successful} products ${importMode === "upsert" ? "processed" : "imported"}`
+        );
+
+        onImportComplete();
+      } catch (error: any) {
+        clearTimeout(timeoutId);
+        if (error.name === 'AbortError') {
+          console.error(`Import timed out after 5 minutes`);
+          throw new Error(`Import timed out. The server may be overloaded or the file is too large.`);
+        }
+        throw error;
       }
-
-      console.log(`Import complete:`, { totalSuccessful, totalFailed, totalUpdated, totalCreated });
-
-      const summary = {
-        total: parsedData.length,
-        successful: totalSuccessful,
-        failed: totalFailed,
-        updated: totalUpdated,
-        created: totalCreated,
-      };
-
-      setImportResult(summary);
-      toast.success(
-        `Import complete! ${totalSuccessful} products ${importMode === "upsert" ? "processed" : "imported"}`
-      );
-
-      onImportComplete();
     } catch (error: any) {
       console.error("Import error:", error);
       toast.error(error.message || "Failed to import products");

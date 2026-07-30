@@ -286,12 +286,12 @@ export function generateCSVTemplate(): string {
 
 /**
  * Validate import limits
+ * The server now handles large imports efficiently with batch operations and pagination,
+ * so there is no hard row limit. We only check for empty files.
  */
 export function validateImportLimits(rowCount: number): { valid: boolean; message?: string } {
   if (rowCount === 0) {
     return { valid: false, message: 'CSV file is empty or has no valid data rows' };
   }
-  // Note: Large files are automatically chunked into batches of 1000 on the client side
-  // The server enforces a 1000 product limit per request
   return { valid: true };
 }
