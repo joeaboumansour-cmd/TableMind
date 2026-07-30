@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback, startTransition } from "react";
 import { useRouter } from "next/navigation";
 import { createClient, fetchAllProducts } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
@@ -38,6 +38,7 @@ import {
 } from "@/lib/db";
 import type { CachedProduct } from "@/lib/db";
 import { useFeatureFlags } from "@/hooks/useFeatureFlags";
+import { usePreloadProducts } from "@/hooks/usePreloadProducts";
 import { isDesktop, isIOS } from "@/lib/device";
 import { getFrequentlyUsedProductIds, addFrequentlyUsedProduct, removeFrequentlyUsedProduct, isFrequentlyUsed } from "@/lib/frequentlyUsed";
 
@@ -179,7 +180,20 @@ export default function POSPage() {
           if (navigator.onLine) {
             // Initialize/refresh local cache in background (non-blocking)
             // This uses incremental upsert so it's fast even with 2500 items
-            syncEngine.initialize(store_id).catch(() => {});
+            // Use startTransition to mark this as non-urgent — React will
+            // prioritize user interactions over the state update from sync
+            syncEngine.initialize(store_id).then(() => {
+              // After sync completes, refresh products from cache in a non-urgent transition
+              if (isMounted) {
+                startTransition(async () => {
+                  const { getCachedProducts } = await import("@/lib/db/localDB");
+                  const updated = await getCachedProducts(store_id);
+                  if (updated && updated.length > 0) {
+                    setProducts(mapCachedToProducts(updated));
+                  }
+                });
+              }
+            }).catch(() => {});
           } else if (!cached || cached.length === 0) {
             // Offline with no cache - seed from static JSON for first-time offline use
             console.log("[POS] Offline with no cached products, seeding from static data...");

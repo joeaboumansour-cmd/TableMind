@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { createClient } from "@/lib/supabase/client";
@@ -75,6 +75,8 @@ export default function StoreProductsPage() {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const searchTimerRef = useRef<NodeJS.Timeout | null>(null);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [showBarcodeScanner, setShowBarcodeScanner] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
@@ -228,6 +230,21 @@ export default function StoreProductsPage() {
       router.replace("/login");
     }
   }, [user, authLoading, router]);
+
+  // ---- Debounce search query (200ms) to avoid filtering on every keystroke ----
+  useEffect(() => {
+    if (searchTimerRef.current) {
+      clearTimeout(searchTimerRef.current);
+    }
+    searchTimerRef.current = setTimeout(() => {
+      setDebouncedSearch(searchQuery);
+    }, 200);
+    return () => {
+      if (searchTimerRef.current) {
+        clearTimeout(searchTimerRef.current);
+      }
+    };
+  }, [searchQuery]);
 
   // ---- Build O(1) barcode index whenever products change ----
   useEffect(() => {
@@ -564,8 +581,8 @@ products.forEach(p => {
 
 const filteredProducts = products.filter(
   (product) =>
-    product.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    product.barcode?.toLowerCase().includes(searchQuery.toLowerCase())
+    product.name.toLowerCase().includes(debouncedSearch.toLowerCase()) ||
+    product.barcode?.toLowerCase().includes(debouncedSearch.toLowerCase())
 ).map((product: any) => {
   const isParent = parentIds.has(product.id);
   const isVariant = !!product.parent_id;
