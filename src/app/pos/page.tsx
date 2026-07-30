@@ -38,7 +38,7 @@ import {
 } from "@/lib/db";
 import type { CachedProduct } from "@/lib/db";
 import { useFeatureFlags } from "@/hooks/useFeatureFlags";
-import { isDesktop } from "@/lib/device";
+import { isDesktop, isIOS } from "@/lib/device";
 import { getFrequentlyUsedProductIds, addFrequentlyUsedProduct, removeFrequentlyUsedProduct, isFrequentlyUsed } from "@/lib/frequentlyUsed";
 
 const supabase = createClient();
@@ -342,7 +342,13 @@ export default function POSPage() {
     if (typeof window !== 'undefined' && 'localStorage' in window) {
       localStorage.setItem("scanner_active", String(newState));
     }
-    // No page reload needed — BarcodeScanner's isActive prop change triggers stop/start automatically
+    // iOS/Chrome PWA: Quagga2's camera release is deferred (setTimeout(0)) and iOS
+    // WKWebView keeps the camera hardware active even after the preview disappears,
+    // causing battery drain + heat. A quick page refresh is the only reliable way to
+    // force iOS to release the camera. Only refresh when TURNING OFF (newState=false).
+    if (!newState && isIOS()) {
+      window.location.reload();
+    }
   };
 
   // Handle logout - clear both auth keys
