@@ -46,6 +46,7 @@ async function fetchAllProductsForStore(
       .from('products')
       .select(select)
       .eq('store_id', storeId)
+      .order('id', { ascending: true })
       .range(from, to);
 
     if (error) throw error;
