@@ -126,10 +126,33 @@ db.version(2).stores({
 
 // ---- Products Cache Operations ----
 
+/**
+ * Upsert products into the local cache using Dexie's bulkPut.
+ * This is an incremental update — it inserts new products and updates
+ * existing ones by ID without clearing the entire cache first.
+ * Much faster than clear() + bulkAdd() for large datasets.
+ */
+export async function upsertProducts(products: CachedProduct[]): Promise<void> {
+  if (products.length === 0) return;
+  await db.products_cache.bulkPut(products);
+  console.log(`[LocalDB] Upserted ${products.length} products`);
+}
+
+/**
+ * Legacy alias — kept for backward compatibility.
+ * Use upsertProducts() instead for better performance.
+ */
 export async function cacheProducts(products: CachedProduct[]): Promise<void> {
-  await db.products_cache.clear();
-  await db.products_cache.bulkAdd(products);
-  console.log(`[LocalDB] Cached ${products.length} products`);
+  await upsertProducts(products);
+}
+
+/**
+ * Upsert a single product into the local cache.
+ * Used by barcode scan fallback to avoid clearing the entire cache.
+ */
+export async function upsertSingleProduct(product: CachedProduct): Promise<void> {
+  await db.products_cache.put(product);
+  console.log(`[LocalDB] Upserted single product: ${product.name} (${product.id})`);
 }
 
 export async function getCachedProducts(storeId: string): Promise<CachedProduct[]> {

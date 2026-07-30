@@ -4,6 +4,8 @@
 
 export {
   cacheProducts,
+  upsertProducts,
+  upsertSingleProduct,
   getCachedProducts,
   getCachedProductByBarcode,
   getCachedProductById,

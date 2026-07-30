@@ -140,7 +140,9 @@ class SyncEngine {
   }
 
   /**
-   * Pull latest products from Supabase into IndexedDB cache
+   * Pull latest products from Supabase into IndexedDB cache.
+   * Uses incremental sync: only fetches products updated since the last sync timestamp.
+   * On first sync (no timestamp), fetches all products.
    */
   async pullProducts(): Promise<{
     success: boolean;
@@ -153,7 +155,35 @@ class SyncEngine {
 
     try {
       const supabase = createClient();
-      const products = await fetchAllProducts(supabase, this.storeId);
+      
+      // Check if we have a last sync timestamp for incremental sync
+      const lastSyncKey = `products_last_sync_${this.storeId}`;
+      const lastSync = typeof window !== "undefined" 
+        ? localStorage.getItem(lastSyncKey) 
+        : null;
+      
+      let products: any[];
+      
+      if (lastSync) {
+        // Incremental: only fetch products updated since last sync
+        const sinceDate = new Date(parseInt(lastSync)).toISOString();
+        console.log(`[Sync] Incremental pull since ${sinceDate}`);
+        
+        // Use a single query with updated_at filter — no pagination needed for small deltas
+        const { data, error } = await supabase
+          .from("products")
+          .select("*")
+          .eq("store_id", this.storeId)
+          .gte("updated_at", sinceDate)
+          .order("name");
+
+        if (error) throw error;
+        products = data || [];
+        console.log(`[Sync] Incremental pull found ${products.length} changed products`);
+      } else {
+        // Full pull: paginate through all products
+        products = await fetchAllProducts(supabase, this.storeId);
+      }
 
       if (products && products.length > 0) {
         // Map to cached product format
@@ -176,10 +206,18 @@ class SyncEngine {
 
         await cacheProducts(cached);
         console.log(`[Sync] Pulled ${cached.length} products to local cache`);
-        return { success: true, count: cached.length };
       }
 
-      return { success: true, count: 0 };
+      // Update last sync timestamp
+      if (typeof window !== "undefined") {
+        try {
+          localStorage.setItem(lastSyncKey, Date.now().toString());
+          // Also update the global last sync for cache freshness checks
+          localStorage.setItem('products_last_sync', Date.now().toString());
+        } catch {}
+      }
+
+      return { success: true, count: products?.length || 0 };
     } catch (error: any) {
       console.error("[Sync] Failed to pull products:", error);
       return { success: false, count: 0, error: error.message };

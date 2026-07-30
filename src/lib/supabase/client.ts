@@ -1,5 +1,5 @@
 import { createBrowserClient } from "@supabase/ssr";
-import { cacheProducts } from "@/lib/db/localDB";
+import { upsertProducts } from "@/lib/db/localDB";
 
 // Track current restaurant ID to detect changes
 let currentRestaurantId: string | null = null;
@@ -64,7 +64,7 @@ export async function fetchAllProducts(
   // Write-through cache: update IndexedDB after every successful fetch
   if (allProducts.length > 0 && typeof window !== "undefined") {
     try {
-      await cacheProducts(
+      await upsertProducts(
         allProducts.map((p) => ({
           id: p.id,
           store_id: p.store_id,
@@ -82,6 +82,12 @@ export async function fetchAllProducts(
           updated_at: p.updated_at || new Date().toISOString(),
         }))
       );
+      // Update last sync timestamp
+      if (typeof window !== "undefined") {
+        try {
+          localStorage.setItem('products_last_sync', Date.now().toString());
+        } catch {}
+      }
     } catch (e) {
       console.warn("[Supabase] Failed to write-through cache:", e);
     }
@@ -90,9 +96,28 @@ export async function fetchAllProducts(
   return allProducts;
 }
 
+// Cache freshness threshold: 5 minutes
+const CACHE_FRESHNESS_MS = 5 * 60 * 1000;
+
+/**
+ * Check if the local product cache is still fresh.
+ * Uses a timestamp stored in localStorage to avoid unnecessary network fetches.
+ */
+function isCacheFresh(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    const lastSync = localStorage.getItem('products_last_sync');
+    if (!lastSync) return false;
+    return Date.now() - parseInt(lastSync) < CACHE_FRESHNESS_MS;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Fetch products cache-first: returns cached products instantly (if available),
  * then silently refreshes from Supabase in the background.
+ * If the cache is fresh (updated within 5 min), skips the network fetch entirely.
  * Returns fresh products but the caller can render stale cache immediately
  * if desired by providing an onCacheHit callback.
  */
@@ -108,14 +133,20 @@ export async function fetchProductsCacheFirst(
       const cached = await getCachedProducts(storeId);
       if (cached && cached.length > 0) {
         onCacheHit?.(cached);
-        // Don't return — proceed to background refresh
+
+        // 2. If cache is fresh (synced within 5 min), skip network fetch entirely
+        if (isCacheFresh()) {
+          console.log("[Supabase] Cache is fresh, skipping network fetch");
+          return cached;
+        }
+        // Otherwise, proceed to background refresh below
       }
     } catch (e) {
       console.warn("[Supabase] Cache read failed:", e);
     }
   }
 
-  // 2. Always refresh from network (this also writes to cache via write-through)
+  // 3. Refresh from network (this also writes to cache via write-through)
   try {
     const fresh = await fetchAllProducts(supabase, storeId);
     return fresh;

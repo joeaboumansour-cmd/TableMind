@@ -174,17 +174,11 @@ export default function POSPage() {
             }
           }
 
-          // Then try to fetch fresh data from Supabase if online
+          // Then sync in background: pull latest products + push queued transactions
+          // syncEngine.initialize() handles both pull and push in one sync cycle
           if (navigator.onLine) {
-            try {
-              const productsData = await fetchAllProducts(supabase, store_id);
-              if (isMounted) {
-                setProducts(productsData);
-              }
-            } catch (error) {
-              console.error("Error fetching products from Supabase:", error);
-            }
             // Initialize/refresh local cache in background (non-blocking)
+            // This uses incremental upsert so it's fast even with 2500 items
             syncEngine.initialize(store_id).catch(() => {});
           } else if (!cached || cached.length === 0) {
             // Offline with no cache - seed from static JSON for first-time offline use
@@ -396,28 +390,27 @@ export default function POSPage() {
       });
 
       // Also warm IndexedDB so the cache is never stale again
+      // Uses upsertSingleProduct to avoid clearing the entire cache
       try {
-        const { cacheProducts: cacheSingle } = await import("@/lib/db/localDB");
-        await cacheSingle([
-          {
-            id: mapped.id,
-            store_id: mapped.store_id,
-            name: mapped.name,
-            barcode: mapped.barcode,
-            cost_price: mapped.cost_price,
-            selling_price: mapped.selling_price,
-            currency: mapped.currency,
-            profit_percentage: mapped.profit_percentage,
-            discount_percentage: mapped.discount_percentage,
-            stock_quantity: mapped.stock_quantity,
-            min_stock_threshold: mapped.min_stock_threshold,
-            parent_id: mapped.parent_id || null,
-            variant_name: mapped.variant_name || null,
-            updated_at: new Date().toISOString(),
-          } as any,
-        ]);
+        const { upsertSingleProduct } = await import("@/lib/db/localDB");
+        await upsertSingleProduct({
+          id: mapped.id,
+          store_id: mapped.store_id,
+          name: mapped.name,
+          barcode: mapped.barcode,
+          cost_price: mapped.cost_price,
+          selling_price: mapped.selling_price,
+          currency: mapped.currency,
+          profit_percentage: mapped.profit_percentage,
+          discount_percentage: mapped.discount_percentage,
+          stock_quantity: mapped.stock_quantity,
+          min_stock_threshold: mapped.min_stock_threshold,
+          parent_id: mapped.parent_id || null,
+          variant_name: mapped.variant_name || null,
+          updated_at: new Date().toISOString(),
+        } as any);
       } catch (e) {
-        console.warn("[POS Scan] cache single failed:", e);
+        console.warn("[POS Scan] upsert single product failed:", e);
       }
 
       toast.dismiss("scan-fallback");

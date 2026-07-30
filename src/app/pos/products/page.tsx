@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -604,6 +605,15 @@ const filteredProducts = products.filter(
 });
 
 
+  // Virtual scrolling setup for product list
+  const parentRef = useRef<HTMLDivElement>(null);
+  const virtualizer = useVirtualizer({
+    count: filteredProducts.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => 160, // estimated card height in px
+    overscan: 5, // render 5 extra items offscreen for smooth scrolling
+  });
+
   // Stats calculations
   const totalProducts = products.length;
   const lowStockCount = products.filter(p => p.stock_quantity <= p.min_stock_threshold).length;
@@ -977,8 +987,8 @@ const filteredProducts = products.filter(
           </Dialog>
         </div>
 
-        {/* Mobile-Friendly Product List */}
-        <div className="flex-1 overflow-y-auto space-y-2">
+        {/* Mobile-Friendly Product List (Virtualized) */}
+        <div className="flex-1 overflow-y-auto" ref={parentRef}>
           {filteredProducts.length === 0 ? (
             <div className="text-center py-8 text-muted-foreground">
               <Package className="h-12 w-12 mx-auto mb-3 opacity-30" />
@@ -990,136 +1000,160 @@ const filteredProducts = products.filter(
               </p>
             </div>
           ) : (
-            filteredProducts.map((product) => (
-              <Card 
-                key={product.id} 
-                id={`product-${product.id}`}
-                className={`p-3 transition-all duration-500 ${
-                  highlightedProductId === product.id 
-                    ? "ring-2 ring-amber-500 bg-amber-50 shadow-lg scale-[1.02]" 
-                    : ""
-                }`}
-              >
-                <div className="flex items-start justify-between gap-3">
-                    <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-1">
-                      <h3 className="font-semibold text-sm truncate">{product._displayName}</h3>
-                      {product._typeLabel && (
-                        <Badge variant="outline" className={`text-xs px-1 py-0 ${product._typeColor}`}>
-                          {product._typeLabel}
-                        </Badge>
-                      )}
-                      <Badge variant="outline" className="text-xs px-1 py-0">
-                        {product.currency}
-                      </Badge>
-                      {product.stock_quantity <= product.min_stock_threshold && (
-                        <Badge variant="destructive" className="text-xs px-1 py-0">
-                          Low
-                        </Badge>
-                      )}
-                    </div>
-                    <div className="flex flex-col gap-1 text-xs text-muted-foreground mb-2">
-                      {product.currency === 'LL' ? (
-                        <>
-                          <div className="flex items-center justify-center gap-3">
-                            <span>Cost: {formatLL(product.cost_price)}</span>
-                            <span>•</span>
-                            <span>Sell: {formatLL(product.selling_price)}</span>
+            <div
+              style={{
+                height: `${virtualizer.getTotalSize()}px`,
+                width: "100%",
+                position: "relative",
+              }}
+            >
+              {virtualizer.getVirtualItems().map((virtualItem) => {
+                const product = filteredProducts[virtualItem.index];
+                if (!product) return null;
+                return (
+                  <div
+                    key={product.id}
+                    style={{
+                      position: "absolute",
+                      top: 0,
+                      left: 0,
+                      width: "100%",
+                      transform: `translateY(${virtualItem.start}px)`,
+                    }}
+                    ref={virtualizer.measureElement}
+                    data-index={virtualItem.index}
+                  >
+                    <Card 
+                      id={`product-${product.id}`}
+                      className={`p-3 mb-2 transition-all duration-500 ${
+                        highlightedProductId === product.id 
+                          ? "ring-2 ring-amber-500 bg-amber-50 shadow-lg scale-[1.02]" 
+                          : ""
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 mb-1">
+                            <h3 className="font-semibold text-sm truncate">{product._displayName}</h3>
+                            {product._typeLabel && (
+                              <Badge variant="outline" className={`text-xs px-1 py-0 ${product._typeColor}`}>
+                                {product._typeLabel}
+                              </Badge>
+                            )}
+                            <Badge variant="outline" className="text-xs px-1 py-0">
+                              {product.currency}
+                            </Badge>
+                            {product.stock_quantity <= product.min_stock_threshold && (
+                              <Badge variant="destructive" className="text-xs px-1 py-0">
+                                Low
+                              </Badge>
+                            )}
                           </div>
-                          <div className="flex items-center justify-center gap-3 text-[12px]">
-                            <span>Cost: {formatUSD(product.cost_price / RETURN_RATE)}</span>
-                            <span>•</span>
-                            <span>Sell: {formatUSD(product.selling_price / RETURN_RATE)}</span>
+                          <div className="flex flex-col gap-1 text-xs text-muted-foreground mb-2">
+                            {product.currency === 'LL' ? (
+                              <>
+                                <div className="flex items-center justify-center gap-3">
+                                  <span>Cost: {formatLL(product.cost_price)}</span>
+                                  <span>•</span>
+                                  <span>Sell: {formatLL(product.selling_price)}</span>
+                                </div>
+                                <div className="flex items-center justify-center gap-3 text-[12px]">
+                                  <span>Cost: {formatUSD(product.cost_price / RETURN_RATE)}</span>
+                                  <span>•</span>
+                                  <span>Sell: {formatUSD(product.selling_price / RETURN_RATE)}</span>
+                                </div>
+                              </>
+                            ) : (
+                              <>
+                                <div className="flex items-center justify-center gap-3">
+                                  <span>Cost: {formatUSD(product.cost_price)}</span>
+                                  <span>•</span>
+                                  <span>Sell: {formatUSD(product.selling_price)}</span>
+                                </div>
+                                <div className="flex items-center justify-center gap-3 text-[12px]">
+                                  <span>Cost: {formatLL(product.cost_price * SELL_RATE)}</span>
+                                  <span>•</span>
+                                  <span>Sell: {formatLL(product.selling_price * SELL_RATE)}</span>
+                                </div>
+                              </>
+                            )}
                           </div>
-                        </>
-                      ) : (
-                        <>
-                          <div className="flex items-center justify-center gap-3">
-                            <span>Cost: {formatUSD(product.cost_price)}</span>
-                            <span>•</span>
-                            <span>Sell: {formatUSD(product.selling_price)}</span>
+                          <div className="flex items-center gap-2 text-xs">
+                            <Badge variant={product.profit_percentage >= 0 ? "default" : "destructive"} className="text-xs">
+                              {product.profit_percentage.toFixed(1)}% profit
+                            </Badge>
+                            {product.discount_percentage > 0 && (
+                              <Badge variant="default" className="text-xs bg-green-500">
+                                -{product.discount_percentage}%
+                              </Badge>
+                            )}
+                            <span className="text-muted-foreground">
+                              Stock: {product.stock_quantity}
+                            </span>
                           </div>
-                          <div className="flex items-center justify-center gap-3 text-[12px]">
-                            <span>Cost: {formatLL(product.cost_price * SELL_RATE)}</span>
-                            <span>•</span>
-                            <span>Sell: {formatLL(product.selling_price * SELL_RATE)}</span>
-                          </div>
-                        </>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-2 text-xs">
-                      <Badge variant={product.profit_percentage >= 0 ? "default" : "destructive"} className="text-xs">
-                        {product.profit_percentage.toFixed(1)}% profit
-                      </Badge>
-                      {product.discount_percentage > 0 && (
-                        <Badge variant="default" className="text-xs bg-green-500">
-                          -{product.discount_percentage}%
-                        </Badge>
-                      )}
-                      <span className="text-muted-foreground">
-                        Stock: {product.stock_quantity}
-                      </span>
-                    </div>
+                        </div>
+                        
+                        {/* Action Buttons */}
+                        <div className="flex items-center gap-1">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              const storeId = user?.storeId || "";
+                              if (isFrequentlyUsed(storeId, product.id)) {
+                                removeFrequentlyUsedProduct(storeId, product.id);
+                                toast.info(`${product.name} removed from quick access`);
+                              } else {
+                                addFrequentlyUsedProduct(storeId, product.id);
+                                toast.success(`${product.name} added to quick access`);
+                              }
+                              setFreqVersion(v => v + 1);
+                            }}
+                            className="h-8 w-8 p-0"
+                          >
+                            <Star className={`h-4 w-4 ${
+                              isFrequentlyUsed(user?.storeId || "", product.id)
+                                ? "fill-yellow-400 text-yellow-400"
+                                : "text-gray-400"
+                            }`} />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => {
+                              setSelectedProduct(product);
+                              setShowInfoDialog(true);
+                            }}
+                            className="h-8 w-8 p-0"
+                          >
+                            <Info className="h-4 w-4 text-blue-500" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleEditProduct(product)}
+                            className="h-8 w-8 p-0"
+                            disabled={isOffline}
+                          >
+                            <Edit className="h-4 w-4 text-amber-500" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleDeleteProduct(product.id, product.name)}
+                            className="h-8 w-8 p-0"
+                            disabled={isOffline}
+                          >
+                            <Trash2 className="h-4 w-4 text-red-500" />
+                          </Button>
+                        </div>
+                      </div>
+                    </Card>
                   </div>
-                  
-                  {/* Action Buttons */}
-                  <div className="flex items-center gap-1">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        const storeId = user?.storeId || "";
-                        if (isFrequentlyUsed(storeId, product.id)) {
-                          removeFrequentlyUsedProduct(storeId, product.id);
-                          toast.info(`${product.name} removed from quick access`);
-                        } else {
-                          addFrequentlyUsedProduct(storeId, product.id);
-                          toast.success(`${product.name} added to quick access`);
-                        }
-                        setFreqVersion(v => v + 1);
-                      }}
-                      className="h-8 w-8 p-0"
-                    >
-                      <Star className={`h-4 w-4 ${
-                        isFrequentlyUsed(user?.storeId || "", product.id)
-                          ? "fill-yellow-400 text-yellow-400"
-                          : "text-gray-400"
-                      }`} />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => {
-                        setSelectedProduct(product);
-                        setShowInfoDialog(true);
-                      }}
-                      className="h-8 w-8 p-0"
-                    >
-                      <Info className="h-4 w-4 text-blue-500" />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => handleEditProduct(product)}
-                      className="h-8 w-8 p-0"
-                      disabled={isOffline}
-                    >
-                      <Edit className="h-4 w-4 text-amber-500" />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => handleDeleteProduct(product.id, product.name)}
-                      className="h-8 w-8 p-0"
-                      disabled={isOffline}
-                    >
-                      <Trash2 className="h-4 w-4 text-red-500" />
-                    </Button>
-                  </div>
-                </div>
-              </Card>
-            ))
+                );
+              })}
+            </div>
           )}
         </div>
       </div>
