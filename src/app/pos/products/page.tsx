@@ -723,14 +723,6 @@ const filteredProducts = products.filter(
               <span className="text-xs">low</span>
             </div>
           )}
-          <div className="flex items-center gap-1 px-2 py-1 bg-blue-50 text-blue-600 rounded-lg whitespace-nowrap">
-            <span className="text-muted-foreground text-xs">Cost:</span>
-            <span className="font-bold">{(totalCostValue)}</span>
-          </div>
-          <div className="flex items-center gap-1 px-2 py-1 bg-green-50 text-green-600 rounded-lg whitespace-nowrap">
-            <span className="text-muted-foreground text-xs">Sell:</span>
-            <span className="font-bold">{(totalSellValue)}</span>
-          </div>
         </div>
 
         {/* Search and Add */}
