@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
+import { Switch } from "@/components/ui/switch";
 import {
   ArrowLeft,
   Check,
@@ -15,15 +16,32 @@ import {
   Calculator,
   ChevronDown,
   ChevronUp,
+  X,
+  Banknote,
+  Plus,
+  Minus,
 } from "lucide-react";
 import { useCartStore } from "@/lib/stores/cartStore";
 import { queueStockDecrementsForTransaction } from "@/lib/db";
 import { toast } from "sonner";
 import { formatLL, formatUSD, SELL_RATE, RETURN_RATE } from "@/lib/utils/format";
 
-// Quick-amount presets for one-tap cash entry
-const QUICK_LL_AMOUNTS = [5000, 10000, 20000, 50000, 100000];
-const QUICK_USD_AMOUNTS = [1, 5, 10, 20, 50, 100];
+// ── Common bill / coin denominations ──
+const LL_DENOMINATIONS = [
+  { label: "5K", value: 5000 },
+  { label: "10K", value: 10000 },
+  { label: "20K", value: 20000 },
+  { label: "50K", value: 50000 },
+  { label: "100K", value: 100000 },
+];
+const USD_DENOMINATIONS = [
+  { label: "$1", value: 1 },
+  { label: "$5", value: 5 },
+  { label: "$10", value: 10 },
+  { label: "$20", value: 20 },
+  { label: "$50", value: 50 },
+  { label: "$100", value: 100 },
+];
 
 function CheckoutContent() {
   const router = useRouter();
@@ -41,7 +59,14 @@ function CheckoutContent() {
   const [changeGiven, setChangeGiven] = useState<number>(0);
   const [changeUsd, setChangeUsd] = useState<number>(0);
   const [showSummary, setShowSummary] = useState(true);
+
+  // ── "Add" / "Subtract" toggle for bill buttons ──
+  // addMode = true  → buttons increment the amount
+  // addMode = false → buttons decrement the amount
+  const [addMode, setAddMode] = useState(true);
+
   const llInputRef = useRef<HTMLInputElement>(null);
+  const usdInputRef = useRef<HTMLInputElement>(null);
 
   const {
     items,
@@ -107,26 +132,63 @@ function CheckoutContent() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [paidLL, paidUSD]);
 
-  // Generate transaction number
-  const generateTransactionNumber = () => {
-    const timestamp = Date.now().toString(36).toUpperCase();
-    const random = Math.random().toString(36).substring(2, 6).toUpperCase();
-    return `TXN-${timestamp}-${random}`;
-  };
-
-  // ── Quick-payment helpers ──
+  // ── Bill denomination helpers ──
+  // Bill buttons now ADD / SUBTRACT (both ways) from the current amount
   const handleQuickLL = (amount: number) => {
-    setAmountPaidLL(String(amount));
+    const current = parseFloat(amountPaidLL) || 0;
+    const newValue = addMode ? current + amount : Math.max(0, current - amount);
+    setAmountPaidLL(newValue > 0 ? String(newValue) : "");
   };
 
   const handleQuickUSD = (amount: number) => {
-    setAmountPaidUSD(String(amount));
+    const current = parseFloat(amountPaidUSD) || 0;
+    const newValue = addMode ? current + amount : Math.max(0, current - amount);
+    // Preserve integer display for whole-dollar values
+    setAmountPaidUSD(newValue > 0 ? (newValue % 1 === 0 ? String(newValue) : newValue.toFixed(2)) : "");
   };
 
   const handleExactTotal = () => {
     if (total <= 0) return;
     setAmountPaidLL(String(Math.ceil(total)));
     setAmountPaidUSD("");
+  };
+
+  // ── Clear all payment fields ──
+  const handleClear = () => {
+    setAmountPaidLL("");
+    setAmountPaidUSD("");
+    setAddMode(true);
+  };
+
+  // ── Increment / decrement helpers for manual input fields ──
+  const incrementLL = () => {
+    const current = parseFloat(amountPaidLL) || 0;
+    setAmountPaidLL(String(current + 1000));
+  };
+
+  const decrementLL = () => {
+    const current = parseFloat(amountPaidLL) || 0;
+    const newValue = Math.max(0, current - 1000);
+    setAmountPaidLL(newValue > 0 ? String(newValue) : "");
+  };
+
+  const incrementUSD = () => {
+    const current = parseFloat(amountPaidUSD) || 0;
+    const newValue = current + 1;
+    setAmountPaidUSD(newValue % 1 === 0 ? String(newValue) : newValue.toFixed(2));
+  };
+
+  const decrementUSD = () => {
+    const current = parseFloat(amountPaidUSD) || 0;
+    const newValue = Math.max(0, current - 1);
+    setAmountPaidUSD(newValue > 0 ? (newValue % 1 === 0 ? String(newValue) : newValue.toFixed(2)) : "");
+  };
+
+  // Generate transaction number
+  const generateTransactionNumber = () => {
+    const timestamp = Date.now().toString(36).toUpperCase();
+    const random = Math.random().toString(36).substring(2, 6).toUpperCase();
+    return `TXN-${timestamp}-${random}`;
   };
 
   // Handle payment processing — local only, no database writes
@@ -379,113 +441,251 @@ function CheckoutContent() {
 
       <div className="container mx-auto px-4 py-6">
         <div className="max-w-md mx-auto space-y-4">
-          {/* ── Payment Method — first, so cashiers enter amounts & see change fast ── */}
+          {/* ── Payment Method ── */}
           <Card>
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm font-medium">Payment Method</CardTitle>
-                <Badge variant="outline">Cash</Badge>
+                <div className="flex items-center gap-2">
+                  <Badge variant={isOffline ? "destructive" : "default"}>
+                    {isOffline ? "Offline" : "Online"}
+                  </Badge>
+                  {/* Clear button — empties both payment fields */}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 w-7 p-0 opacity-60 hover:opacity-100 hover:bg-muted"
+                    onClick={handleClear}
+                    title="Clear all payment amounts"
+                  >
+                    <X className="h-4 w-4" />
+                  </Button>
+                </div>
               </div>
             </CardHeader>
             <CardContent className="space-y-4">
+              {/* Amount Received Inputs with increment/decrement buttons */}
               <div className="grid grid-cols-2 gap-4">
+                {/* LL Input */}
                 <div>
-                  <Label htmlFor="amountLL">Amount Received (LL)</Label>
-                  <Input
-                    ref={llInputRef}
-                    id="amountLL"
-                    type="number"
-                    step="1"
-                    inputMode="numeric"
-                    value={amountPaidLL}
-                    onChange={(e) => setAmountPaidLL(e.target.value)}
-                    className="text-lg mt-1"
-                  />
+                  <Label htmlFor="amountLL" className="flex items-center gap-1">
+                    <Banknote className="h-4 w-4" />
+                    Amount Received (LL)
+                  </Label>
+                  <div className="relative mt-1">
+                    <Input
+                      ref={llInputRef}
+                      id="amountLL"
+                      type="number"
+                      step="1"
+                      inputMode="numeric"
+                      value={amountPaidLL}
+                      onChange={(e) => setAmountPaidLL(e.target.value)}
+                      className="text-lg pr-20"
+                    />
+                    <div className="absolute right-1 top-1/2 -translate-y-1/2 flex">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 w-7 p-0 rounded-r-none rounded-l"
+                        onClick={decrementLL}
+                        title="Decrease LL by 1,000"
+                      >
+                        <Minus className="h-3 w-3" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 w-7 p-0 rounded-l-none rounded-r border border-border"
+                        onClick={incrementLL}
+                        title="Increase LL by 1,000"
+                      >
+                        <Plus className="h-3 w-3" />
+                      </Button>
+                    </div>
+                  </div>
                 </div>
 
+                {/* USD Input */}
                 <div>
-                  <Label htmlFor="amountUSD">Amount Received (USD)</Label>
-                  <Input
-                    id="amountUSD"
-                    type="number"
-                    step="0.01"
-                    inputMode="decimal"
-                    value={amountPaidUSD}
-                    onChange={(e) => setAmountPaidUSD(e.target.value)}
-                    className="text-lg mt-1"
-                  />
+                  <Label htmlFor="amountUSD" className="flex items-center gap-1">
+                    <Banknote className="h-4 w-4" />
+                    Amount Received (USD)
+                  </Label>
+                  <div className="relative mt-1">
+                    <Input
+                      ref={usdInputRef}
+                      id="amountUSD"
+                      type="number"
+                      step="1"
+                      inputMode="numeric"
+                      value={amountPaidUSD}
+                      onChange={(e) => setAmountPaidUSD(e.target.value)}
+                      className="text-lg pr-20"
+                    />
+                    <div className="absolute right-1 top-1/2 -translate-y-1/2 flex">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 w-7 p-0 rounded-r-none rounded-l"
+                        onClick={decrementUSD}
+                        title="Decrease USD by 1"
+                      >
+                        <Minus className="h-3 w-3" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 w-7 p-0 rounded-l-none rounded-r border border-border"
+                        onClick={incrementUSD}
+                        title="Increase USD by 1"
+                      >
+                        <Plus className="h-3 w-3" />
+                      </Button>
+                    </div>
+                  </div>
                 </div>
               </div>
 
-              {/* Quick amount buttons */}
-              <div className="space-y-2">
-                <div className="flex items-center gap-1.5 flex-wrap">
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    className="font-semibold"
-                    onClick={handleExactTotal}
-                  >
-                    Exact
-                  </Button>
-                  {QUICK_LL_AMOUNTS.map((amt) => (
-                    <Button
-                      key={`ll-${amt}`}
-                      variant="outline"
-                      size="sm"
-                      className={paidLL === amt ? "border-primary text-primary font-semibold" : ""}
-                      onClick={() => handleQuickLL(amt)}
-                    >
-                      {formatLL(amt)}
-                    </Button>
-                  ))}
+              {/* ── Add / Subtract toggle ── */}
+              <div className="flex items-center justify-center gap-3 py-1">
+                <span
+                  className={`text-sm font-medium transition-colors ${
+                    addMode ? "text-primary" : "text-muted-foreground"
+                  }`}
+                >
+                  Add
+                </span>
+                <Switch
+                  checked={addMode}
+                  onCheckedChange={setAddMode}
+                  checkedClass="bg-green-500"
+                  uncheckedClass="bg-amber-500"
+                />
+                <span
+                  className={`text-sm font-medium transition-colors ${
+                    !addMode ? "text-primary" : "text-muted-foreground"
+                  }`}
+                >
+                  Subtract
+                </span>
+              </div>
+
+              {/* ── Bill denomination buttons (LL) ── */}
+              <div className="space-y-2.5">
+                <div className="flex items-center gap-2">
+                  <Banknote className="h-4 w-4 text-muted-foreground" />
+                  <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                    Lebanese Pounds
+                  </span>
                 </div>
-                <div className="flex items-center gap-1.5 flex-wrap">
-                  {QUICK_USD_AMOUNTS.map((amt) => (
-                    <Button
-                      key={`usd-${amt}`}
-                      variant="outline"
-                      size="sm"
-                      className={paidUSD === amt ? "border-primary text-primary font-semibold" : ""}
-                      onClick={() => handleQuickUSD(amt)}
-                    >
-                      ${amt}
-                    </Button>
-                  ))}
+                <div className="grid grid-cols-5 gap-2">
+                  {LL_DENOMINATIONS.map((denom) => {
+                    const current = parseFloat(amountPaidLL) || 0;
+                    const isActive = current === denom.value;
+                    return (
+                      <Button
+                        key={denom.value}
+                        variant={addMode ? "default" : "destructive"}
+                        size="sm"
+                        className={`text-xs font-bold py-3 h-auto transition-all ${
+                          addMode
+                            ? "bg-green-600 hover:bg-green-700 active:scale-95"
+                            : "bg-amber-500 hover:bg-amber-600 active:scale-95"
+                        } ${isActive ? "ring-2 ring-primary ring-offset-2" : ""}`}
+                        onClick={() => handleQuickLL(denom.value)}
+                        title={
+                          addMode
+                            ? `Add ${formatLL(denom.value)}`
+                            : `Subtract ${formatLL(denom.value)}`
+                        }
+                      >
+                        {denom.label}
+                      </Button>
+                    );
+                  })}
                 </div>
+              </div>
+
+              {/* ── Bill denomination buttons (USD) ── */}
+              <div className="space-y-2.5">
+                <div className="flex items-center gap-2">
+                  <Banknote className="h-4 w-4 text-muted-foreground" />
+                  <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                    US Dollars
+                  </span>
+                </div>
+                <div className="grid grid-cols-6 gap-2">
+                  {USD_DENOMINATIONS.map((denom) => {
+                    const current = parseFloat(amountPaidUSD) || 0;
+                    const isActive = current === denom.value;
+                    return (
+                      <Button
+                        key={denom.value}
+                        variant={addMode ? "default" : "destructive"}
+                        size="sm"
+                        className={`text-xs font-bold py-3 h-auto transition-all ${
+                          addMode
+                            ? "bg-blue-600 hover:bg-blue-700 active:scale-95"
+                            : "bg-amber-500 hover:bg-amber-600 active:scale-95"
+                        } ${isActive ? "ring-2 ring-primary ring-offset-2" : ""}`}
+                        onClick={() => handleQuickUSD(denom.value)}
+                        title={
+                          addMode
+                            ? `Add ${formatUSD(denom.value)}`
+                            : `Subtract ${formatUSD(denom.value)}`
+                        }
+                      >
+                        {denom.label}
+                      </Button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Quick "Exact" total button */}
+              <div className="pt-1">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  className="font-semibold w-full"
+                  onClick={handleExactTotal}
+                >
+                  Exact Total ({formatLL(total)})
+                </Button>
               </div>
 
               {/* Payment Breakdown */}
               {(paidLL > 0 || paidUSD > 0) && (
-                <div className="text-sm text-muted-foreground space-y-1 px-1">
+                <div className="text-sm space-y-1.5 px-1 pt-2 border-t border-border/50">
                   {paidLL > 0 && (
                     <div className="flex justify-between">
-                      <span>Paid in LL</span>
-                      <span>{formatLL(paidLL)}</span>
+                      <span className="text-muted-foreground">Paid in LL</span>
+                      <span className="font-medium">{formatLL(paidLL)}</span>
                     </div>
                   )}
                   {paidUSD > 0 && (
                     <div className="flex justify-between">
-                      <span>Paid in USD</span>
-                      <span>{formatUSD(paidUSD)}</span>
+                      <span className="text-muted-foreground">Paid in USD</span>
+                      <span className="font-medium">{formatUSD(paidUSD)}</span>
                     </div>
                   )}
-                  {paidUSD > 0 && (
-                    <div className="flex justify-between text-xs">
+                  {paidUSD > 0 && paidLL === 0 && (
+                    <div className="flex justify-between text-xs text-muted-foreground">
                       <span>USD rate applied</span>
                       <span>$1 = {formatLL(RETURN_RATE)}</span>
                     </div>
                   )}
-                  <div className="flex justify-between border-t border-border/50 pt-1 font-medium">
+                  <div className="flex justify-between border-t border-border/50 pt-1.5 font-medium">
                     <span>Total Paid (LL equivalent)</span>
-                    <span>{formatLL(totalPaid)}</span>
+                    <span className="text-primary">{formatLL(totalPaid)}</span>
                   </div>
                 </div>
               )}
 
               {/* Calculator hint */}
               {total > 0 && (
-                <div className="flex items-center justify-between text-sm text-muted-foreground px-1">
+                <div className="flex items-center justify-between text-sm text-muted-foreground px-1 pt-1">
                   <span className="flex items-center gap-2">
                     <Calculator className="h-4 w-4" />
                     Total:
@@ -498,7 +698,7 @@ function CheckoutContent() {
             </CardContent>
           </Card>
 
-          {/* ── Order Summary — collapsible so payment stays in focus ── */}
+          {/* ── Order Summary — collapsible ── */}
           <Card>
             <button
               type="button"
@@ -604,7 +804,10 @@ function CheckoutContent() {
               <>
                 {isChangeDue ? (
                   <div className="mb-3 p-3 bg-green-500/10 rounded-lg">
-                    <div className="text-green-600 font-semibold mb-1">Change Due</div>
+                    <div className="text-green-600 font-semibold mb-1 flex items-center gap-2">
+                      <Banknote className="h-4 w-4" />
+                      Change Due
+                    </div>
                     <div className="flex items-center justify-between gap-2">
                       <div className="flex items-baseline gap-2 min-w-0">
                         <span className="text-2xl font-bold text-green-600">
@@ -621,7 +824,10 @@ function CheckoutContent() {
                   </div>
                 ) : displayChangeLL > 0 ? (
                   <div className="mb-3 p-3 bg-amber-500/10 rounded-lg">
-                    <div className="text-amber-600 font-medium mb-1">Remaining Due</div>
+                    <div className="text-amber-600 font-medium mb-1 flex items-center gap-2">
+                      <Banknote className="h-4 w-4" />
+                      Remaining Due
+                    </div>
                     <div className="flex justify-between items-center">
                       <span className="text-2xl font-bold text-amber-600">
                         {formatLL(displayChangeLL)}
