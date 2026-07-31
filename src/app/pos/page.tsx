@@ -1,10 +1,18 @@
-﻿"use client";
+"use client";
 
 import { useState, useEffect, useRef, useMemo, useCallback, startTransition } from "react";
 import { useRouter } from "next/navigation";
 import { createClient, fetchAllProducts } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import {
@@ -21,6 +29,8 @@ import {
   History,
   Menu,
   Trash2,
+  Check,
+  Loader2,
 } from "lucide-react";
 import { useCartStore } from "@/lib/stores/cartStore";
 import { useAuth } from "@/lib/auth/AuthContext";
@@ -35,6 +45,7 @@ import {
   getCachedProductByBarcode,
   getCachedProductsCount,
   seedProductsIfNeeded,
+  queueStockDecrementsForTransaction,
 } from "@/lib/db";
 import type { CachedProduct } from "@/lib/db";
 import { useFeatureFlags } from "@/hooks/useFeatureFlags";
@@ -68,6 +79,9 @@ export default function POSPage() {
   const barcodeIndexRef = useRef<Map<string, Product>>(new Map());
   // Check user permissions for History button
   const [canViewTransactions, setCanViewTransactions] = useState(false);
+  // Quick end transaction state
+  const [isQuickEndDialogOpen, setIsQuickEndDialogOpen] = useState(false);
+  const [isQuickEndProcessing, setIsQuickEndProcessing] = useState(false);
 
   const {
     items,
@@ -460,6 +474,145 @@ export default function POSPage() {
     router.push("/login");
   };
 
+  // Generate transaction number
+  const generateTransactionNumber = () => {
+    const timestamp = Date.now().toString(36).toUpperCase();
+    const random = Math.random().toString(36).substring(2, 6).toUpperCase();
+    return `TXN-${timestamp}-${random}`;
+  };
+
+  // Quick end transaction - immediately completes the sale without checkout
+  const handleQuickEnd = async () => {
+    if (items.length === 0) return;
+
+    setIsQuickEndProcessing(true);
+
+    try {
+      const txnNumber = generateTransactionNumber();
+      const total = getTotal();
+      const totalUsd = getTotalUsd();
+
+      // Get current user info
+      const currentUser = JSON.parse(localStorage.getItem("goldensquirrel_user") || "{}");
+
+      // Build user info - always include user_name for tracking who processed the transaction
+      const userInfo: any = {};
+      if (currentUser && currentUser.username) {
+        userInfo.user_name = currentUser.displayName || currentUser.username;
+        // Only set user_id for employees (not owners, whose ID is a store_id)
+        if (!currentUser.isOwner && currentUser.id) {
+          userInfo.user_id = currentUser.id;
+        }
+      }
+
+      // Save transaction to database
+      const transactionData: any = {
+        transaction_number: txnNumber,
+        subtotal: getSubtotal(),
+        total_amount: total,
+        amount_paid: total,
+        change_given: 0,
+        payment_method: "cash",
+        usd_subtotal: getSubtotalUsd(),
+        usd_total_amount: totalUsd,
+        usd_amount_paid: totalUsd,
+        usd_change_given: 0,
+        items: items.map((item) => ({
+          product_id: item.product_id,
+          product_name: item.product_name,
+          quantity: item.quantity,
+          unit_price: item.unit_price,
+          total_price: item.total_price,
+          currency: item.currency,
+          unit_price_usd: item.unit_price_usd,
+          total_price_usd: item.total_price_usd,
+        })),
+        ...userInfo,
+      };
+
+      if (navigator.onLine) {
+        // Online: Save directly to Supabase
+        try {
+          const authData = JSON.parse(localStorage.getItem("goldensquirrel_auth") || "{}");
+
+          const response = await fetch("/api/transactions", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-auth-data": JSON.stringify({ store_id: authData.store_id }),
+            },
+            body: JSON.stringify(transactionData),
+          });
+
+          if (!response.ok) {
+            throw new Error("Failed to save transaction");
+          }
+        } catch (error) {
+          console.error("Failed to save transaction online:", error);
+          toast.error("Transaction ended but failed to save receipt");
+        }
+      } else {
+        // Offline: Queue for later sync
+        const { queueTransaction } = await import("@/lib/db/localDB");
+        const authDataOffline = JSON.parse(localStorage.getItem("goldensquirrel_auth") || "{}");
+        // Ensure store_id is never empty - try multiple fallbacks
+        const offlineStoreId = authDataOffline.store_id || "";
+        const offlineTxnData: any = {
+          id: crypto.randomUUID(),
+          store_id: offlineStoreId,
+          transaction_number: txnNumber,
+          subtotal: getSubtotal(),
+          total_amount: total,
+          amount_paid: total,
+          change_given: 0,
+          payment_method: "cash",
+          subtotal_usd: getSubtotalUsd(),
+          total_usd: totalUsd,
+          amount_paid_usd: totalUsd,
+          change_given_usd: 0,
+          items: items.map((item) => ({
+            product_id: item.product_id,
+            product_name: item.product_name,
+            quantity: item.quantity,
+            unit_price: item.unit_price,
+            total_price: item.total_price,
+            currency: item.currency,
+            unit_price_usd: item.unit_price_usd,
+            total_price_usd: item.total_price_usd,
+          })),
+          created_at: new Date().toISOString(),
+        };
+        // Add user_name for ALL users (owners included) - always set independently of user_id
+        if (currentUser && currentUser.username) {
+          offlineTxnData.user_name = currentUser.displayName || currentUser.username;
+          // Only set user_id for employees (not owners, whose ID is a store_id)
+          if (!currentUser.isOwner && currentUser.id) {
+            offlineTxnData.user_id = currentUser.id;
+          }
+        }
+        await queueTransaction(offlineTxnData);
+
+        // Queue stock decrements as pending_writes for reliable sync
+        await queueStockDecrementsForTransaction(
+          items.map((item) => ({ product_id: item.product_id, quantity: item.quantity })),
+          offlineStoreId
+        );
+
+        toast.info("Transaction saved offline - will sync when online");
+      }
+
+      // Clear cart and close dialog
+      clearCart();
+      setIsQuickEndDialogOpen(false);
+      toast.success("Transaction completed!");
+    } catch (error) {
+      console.error("Error ending transaction:", error);
+      toast.error("Failed to end transaction");
+    } finally {
+      setIsQuickEndProcessing(false);
+    }
+  };
+
   // Close mobile menu when clicking outside
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -796,16 +949,27 @@ export default function POSPage() {
               </BarcodeScanner>
             </div>
 
-            {/* Checkout Button */}
+            {/* Action Buttons: Quick Done + Checkout */}
             {!isEmpty() && (
               <div className="flex-shrink-0">
-                <Button
-                  className="w-full h-14 text-xl font-bold"
-                  size="lg"
-                  onClick={() => router.push(`/checkout?method=${isCharge ? "cash" : "card"}`)}
-                >
-                  Checkout
-                </Button>
+                <div className="grid grid-cols-2 gap-3">
+                  <Button
+                    className="h-14 text-lg font-bold bg-green-600 hover:bg-green-700"
+                    size="lg"
+                    onClick={() => setIsQuickEndDialogOpen(true)}
+                  >
+                    <Check className="h-5 w-5 mr-2" />
+                    Done
+                  </Button>
+                  <Button
+                    className="h-14 text-lg font-bold"
+                    size="lg"
+                    onClick={() => router.push(`/checkout?method=${isCharge ? "cash" : "card"}`)}
+                  >
+                    <CreditCard className="h-5 w-5 mr-2" />
+                    Checkout
+                  </Button>
+                </div>
               </div>
             )}
           </div>
@@ -977,20 +1141,69 @@ export default function POSPage() {
             )}
           </Card>
 
-          {/* Checkout Button - Outside Cart */}
+          {/* Action Buttons: Quick Done + Checkout */}
           {!isEmpty() && (
             <div className="flex-shrink-0">
-              <Button
-                className="w-full h-14 text-xl font-bold"
-                size="lg"
-                onClick={() => router.push(`/checkout?method=${isCharge ? "cash" : "card"}`)}
-              >
-                Checkout
-              </Button>
+              <div className="grid grid-cols-2 gap-3">
+                <Button
+                  className="h-14 text-lg font-bold bg-green-600 hover:bg-green-700"
+                  size="lg"
+                  onClick={() => setIsQuickEndDialogOpen(true)}
+                >
+                  <Check className="h-5 w-5 mr-2" />
+                  Done
+                </Button>
+                <Button
+                  className="h-14 text-lg font-bold"
+                  size="lg"
+                  onClick={() => router.push(`/checkout?method=${isCharge ? "cash" : "card"}`)}
+                >
+                  <CreditCard className="h-5 w-5 mr-2" />
+                  Checkout
+                </Button>
+              </div>
             </div>
           )}
         </div>
       )}
+
+      {/* Quick End Confirmation Dialog */}
+      <Dialog open={isQuickEndDialogOpen} onOpenChange={setIsQuickEndDialogOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>End Transaction?</DialogTitle>
+            <DialogDescription>
+              Complete this sale for{" "}
+              <span className="font-semibold text-foreground">{formatLL(getTotal())}</span>{" "}
+              ({formatUSD(getTotalUsd())}) with {getItemCount()} item
+              {getItemCount() !== 1 ? "s" : ""}? This will skip checkout and immediately
+              record the transaction.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="flex gap-2 sm:justify-between">
+            <Button
+              variant="outline"
+              className="flex-1"
+              onClick={() => setIsQuickEndDialogOpen(false)}
+              disabled={isQuickEndProcessing}
+            >
+              Cancel
+            </Button>
+            <Button
+              className="flex-1 bg-green-600 hover:bg-green-700"
+              onClick={handleQuickEnd}
+              disabled={isQuickEndProcessing}
+            >
+              {isQuickEndProcessing ? (
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              ) : (
+                <Check className="h-4 w-4 mr-2" />
+              )}
+              End Transaction
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
