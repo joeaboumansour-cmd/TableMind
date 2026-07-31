@@ -1,14 +1,13 @@
 "use client";
 
 import { useState, useEffect, useRef, Suspense } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { Switch } from "@/components/ui/switch";
 import {
   ArrowLeft,
   Check,
@@ -18,8 +17,6 @@ import {
   ChevronUp,
   X,
   Banknote,
-  Plus,
-  Minus,
 } from "lucide-react";
 import { useCartStore } from "@/lib/stores/cartStore";
 import { queueStockDecrementsForTransaction } from "@/lib/db";
@@ -45,28 +42,18 @@ const USD_DENOMINATIONS = [
 
 function CheckoutContent() {
   const router = useRouter();
-  const searchParams = useSearchParams();
 
   const [amountPaidLL, setAmountPaidLL] = useState<string>("");
   const [amountPaidUSD, setAmountPaidUSD] = useState<string>("");
   const [isProcessing, setIsProcessing] = useState(false);
   const [transactionComplete, setTransactionComplete] = useState(false);
-  const [isOffline, setIsOffline] = useState(
-    typeof navigator !== "undefined" ? !navigator.onLine : false
-  );
   const [transactionNumber, setTransactionNumber] = useState<string>("");
   const [paidAmount, setPaidAmount] = useState<number>(0);
   const [changeGiven, setChangeGiven] = useState<number>(0);
   const [changeUsd, setChangeUsd] = useState<number>(0);
   const [showSummary, setShowSummary] = useState(true);
 
-  // ── "Add" / "Subtract" toggle for bill buttons ──
-  // addMode = true  → buttons increment the amount
-  // addMode = false → buttons decrement the amount
-  const [addMode, setAddMode] = useState(true);
-
   const llInputRef = useRef<HTMLInputElement>(null);
-  const usdInputRef = useRef<HTMLInputElement>(null);
 
   const {
     items,
@@ -132,56 +119,23 @@ function CheckoutContent() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [paidLL, paidUSD]);
 
-  // ── Bill denomination helpers ──
-  // Bill buttons now ADD / SUBTRACT (both ways) from the current amount
+  // ── Bill denomination buttons — repeatedly click to keep adding ──
+  // Cashiers correct mistakes by editing the text field directly
   const handleQuickLL = (amount: number) => {
     const current = parseFloat(amountPaidLL) || 0;
-    const newValue = addMode ? current + amount : Math.max(0, current - amount);
-    setAmountPaidLL(newValue > 0 ? String(newValue) : "");
+    setAmountPaidLL(String(current + amount));
   };
 
   const handleQuickUSD = (amount: number) => {
     const current = parseFloat(amountPaidUSD) || 0;
-    const newValue = addMode ? current + amount : Math.max(0, current - amount);
-    // Preserve integer display for whole-dollar values
-    setAmountPaidUSD(newValue > 0 ? (newValue % 1 === 0 ? String(newValue) : newValue.toFixed(2)) : "");
-  };
-
-  const handleExactTotal = () => {
-    if (total <= 0) return;
-    setAmountPaidLL(String(Math.ceil(total)));
-    setAmountPaidUSD("");
+    const newValue = current + amount;
+    setAmountPaidUSD(newValue % 1 === 0 ? String(newValue) : newValue.toFixed(2));
   };
 
   // ── Clear all payment fields ──
   const handleClear = () => {
     setAmountPaidLL("");
     setAmountPaidUSD("");
-    setAddMode(true);
-  };
-
-  // ── Increment / decrement helpers for manual input fields ──
-  const incrementLL = () => {
-    const current = parseFloat(amountPaidLL) || 0;
-    setAmountPaidLL(String(current + 1000));
-  };
-
-  const decrementLL = () => {
-    const current = parseFloat(amountPaidLL) || 0;
-    const newValue = Math.max(0, current - 1000);
-    setAmountPaidLL(newValue > 0 ? String(newValue) : "");
-  };
-
-  const incrementUSD = () => {
-    const current = parseFloat(amountPaidUSD) || 0;
-    const newValue = current + 1;
-    setAmountPaidUSD(newValue % 1 === 0 ? String(newValue) : newValue.toFixed(2));
-  };
-
-  const decrementUSD = () => {
-    const current = parseFloat(amountPaidUSD) || 0;
-    const newValue = Math.max(0, current - 1);
-    setAmountPaidUSD(newValue > 0 ? (newValue % 1 === 0 ? String(newValue) : newValue.toFixed(2)) : "");
   };
 
   // Generate transaction number
@@ -354,18 +308,6 @@ function CheckoutContent() {
     }
   };
 
-  // Track online/offline status
-  useEffect(() => {
-    const handleOnline = () => setIsOffline(false);
-    const handleOffline = () => setIsOffline(true);
-    window.addEventListener("online", handleOnline);
-    window.addEventListener("offline", handleOffline);
-    return () => {
-      window.removeEventListener("online", handleOnline);
-      window.removeEventListener("offline", handleOffline);
-    };
-  }, []);
-
   // Handle new transaction
   const handleNewTransaction = () => {
     clearCart();
@@ -446,25 +388,21 @@ function CheckoutContent() {
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-sm font-medium">Payment Method</CardTitle>
-                <div className="flex items-center gap-2">
-                  <Badge variant={isOffline ? "destructive" : "default"}>
-                    {isOffline ? "Offline" : "Online"}
-                  </Badge>
-                  {/* Clear button — empties both payment fields */}
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-7 w-7 p-0 opacity-60 hover:opacity-100 hover:bg-muted"
-                    onClick={handleClear}
-                    title="Clear all payment amounts"
-                  >
-                    <X className="h-4 w-4" />
-                  </Button>
-                </div>
+                {/* Clear button — empties both payment fields */}
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-8 px-2 text-red-500 hover:text-red-700 hover:bg-red-500/10"
+                  onClick={handleClear}
+                  title="Clear all payment amounts"
+                >
+                  <X className="h-4 w-4 mr-1" />
+                  Clear
+                </Button>
               </div>
             </CardHeader>
             <CardContent className="space-y-4">
-              {/* Amount Received Inputs with increment/decrement buttons */}
+              {/* Amount Received Inputs — full width so cashiers can see the entire number */}
               <div className="grid grid-cols-2 gap-4">
                 {/* LL Input */}
                 <div>
@@ -472,38 +410,17 @@ function CheckoutContent() {
                     <Banknote className="h-4 w-4" />
                     Amount Received (LL)
                   </Label>
-                  <div className="relative mt-1">
-                    <Input
-                      ref={llInputRef}
-                      id="amountLL"
-                      type="number"
-                      step="1"
-                      inputMode="numeric"
-                      value={amountPaidLL}
-                      onChange={(e) => setAmountPaidLL(e.target.value)}
-                      className="text-lg pr-20"
-                    />
-                    <div className="absolute right-1 top-1/2 -translate-y-1/2 flex">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-7 w-7 p-0 rounded-r-none rounded-l"
-                        onClick={decrementLL}
-                        title="Decrease LL by 1,000"
-                      >
-                        <Minus className="h-3 w-3" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-7 w-7 p-0 rounded-l-none rounded-r border border-border"
-                        onClick={incrementLL}
-                        title="Increase LL by 1,000"
-                      >
-                        <Plus className="h-3 w-3" />
-                      </Button>
-                    </div>
-                  </div>
+                  <Input
+                    ref={llInputRef}
+                    id="amountLL"
+                    type="number"
+                    step="1"
+                    inputMode="numeric"
+                    value={amountPaidLL}
+                    onChange={(e) => setAmountPaidLL(e.target.value)}
+                    className="text-lg mt-1"
+                    placeholder="0"
+                  />
                 </div>
 
                 {/* USD Input */}
@@ -512,63 +429,17 @@ function CheckoutContent() {
                     <Banknote className="h-4 w-4" />
                     Amount Received (USD)
                   </Label>
-                  <div className="relative mt-1">
-                    <Input
-                      ref={usdInputRef}
-                      id="amountUSD"
-                      type="number"
-                      step="1"
-                      inputMode="numeric"
-                      value={amountPaidUSD}
-                      onChange={(e) => setAmountPaidUSD(e.target.value)}
-                      className="text-lg pr-20"
-                    />
-                    <div className="absolute right-1 top-1/2 -translate-y-1/2 flex">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-7 w-7 p-0 rounded-r-none rounded-l"
-                        onClick={decrementUSD}
-                        title="Decrease USD by 1"
-                      >
-                        <Minus className="h-3 w-3" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-7 w-7 p-0 rounded-l-none rounded-r border border-border"
-                        onClick={incrementUSD}
-                        title="Increase USD by 1"
-                      >
-                        <Plus className="h-3 w-3" />
-                      </Button>
-                    </div>
-                  </div>
+                  <Input
+                    id="amountUSD"
+                    type="number"
+                    step="1"
+                    inputMode="numeric"
+                    value={amountPaidUSD}
+                    onChange={(e) => setAmountPaidUSD(e.target.value)}
+                    className="text-lg mt-1"
+                    placeholder="0"
+                  />
                 </div>
-              </div>
-
-              {/* ── Add / Subtract toggle ── */}
-              <div className="flex items-center justify-center gap-3 py-1">
-                <span
-                  className={`text-sm font-medium transition-colors ${
-                    addMode ? "text-primary" : "text-muted-foreground"
-                  }`}
-                >
-                  Add
-                </span>
-                <Switch
-                  checked={addMode}
-                  onCheckedChange={setAddMode}
-                  checkedClass="bg-green-500"
-                  uncheckedClass="bg-amber-500"
-                />
-                <span
-                  className={`text-sm font-medium transition-colors ${
-                    !addMode ? "text-primary" : "text-muted-foreground"
-                  }`}
-                >
-                  Subtract
-                </span>
               </div>
 
               {/* ── Bill denomination buttons (LL) ── */}
@@ -586,19 +457,15 @@ function CheckoutContent() {
                     return (
                       <Button
                         key={denom.value}
-                        variant={addMode ? "default" : "destructive"}
+                        variant="default"
                         size="sm"
                         className={`text-xs font-bold py-3 h-auto transition-all ${
-                          addMode
-                            ? "bg-green-600 hover:bg-green-700 active:scale-95"
-                            : "bg-amber-500 hover:bg-amber-600 active:scale-95"
-                        } ${isActive ? "ring-2 ring-primary ring-offset-2" : ""}`}
+                          isActive
+                            ? "bg-green-600 hover:bg-green-700 active:scale-95 ring-2 ring-primary ring-offset-2"
+                            : "bg-green-600 hover:bg-green-700 active:scale-95"
+                        }`}
                         onClick={() => handleQuickLL(denom.value)}
-                        title={
-                          addMode
-                            ? `Add ${formatLL(denom.value)}`
-                            : `Subtract ${formatLL(denom.value)}`
-                        }
+                        title={`Add ${formatLL(denom.value)}`}
                       >
                         {denom.label}
                       </Button>
@@ -622,37 +489,21 @@ function CheckoutContent() {
                     return (
                       <Button
                         key={denom.value}
-                        variant={addMode ? "default" : "destructive"}
+                        variant="default"
                         size="sm"
                         className={`text-xs font-bold py-3 h-auto transition-all ${
-                          addMode
-                            ? "bg-blue-600 hover:bg-blue-700 active:scale-95"
-                            : "bg-amber-500 hover:bg-amber-600 active:scale-95"
-                        } ${isActive ? "ring-2 ring-primary ring-offset-2" : ""}`}
+                          isActive
+                            ? "bg-blue-600 hover:bg-blue-700 active:scale-95 ring-2 ring-primary ring-offset-2"
+                            : "bg-blue-600 hover:bg-blue-700 active:scale-95"
+                        }`}
                         onClick={() => handleQuickUSD(denom.value)}
-                        title={
-                          addMode
-                            ? `Add ${formatUSD(denom.value)}`
-                            : `Subtract ${formatUSD(denom.value)}`
-                        }
+                        title={`Add ${formatUSD(denom.value)}`}
                       >
                         {denom.label}
                       </Button>
                     );
                   })}
                 </div>
-              </div>
-
-              {/* Quick "Exact" total button */}
-              <div className="pt-1">
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  className="font-semibold w-full"
-                  onClick={handleExactTotal}
-                >
-                  Exact Total ({formatLL(total)})
-                </Button>
               </div>
 
               {/* Payment Breakdown */}
