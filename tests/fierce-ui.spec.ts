@@ -255,11 +255,30 @@ test.describe('Fierce UI — Checkout Page Payment Processing', () => {
     expect(usdValue).toBe('1');
   });
 
-  test('WhatsApp receipt input field is visible', async ({ page }) => {
+  test('Checkout page does not show WhatsApp receipt input', async ({ page }) => {
     await navigateWithAuth(page, '/checkout?method=cash', DEFAULT_CART_ITEMS);
     await page.waitForTimeout(1000);
     const whatsappInput = page.locator('input#whatsapp');
-    await expect(whatsappInput).toBeVisible({ timeout: 10000 });
+    await expect(whatsappInput).toHaveCount(0);
+  });
+
+  test('Checkout page shows quick amount buttons', async ({ page }) => {
+    await navigateWithAuth(page, '/checkout?method=cash', DEFAULT_CART_ITEMS);
+    await page.waitForTimeout(1000);
+    const exactBtn = page.locator('button:has-text("Exact")').first();
+    await expect(exactBtn).toBeVisible({ timeout: 10000 });
+  });
+
+  test('Exact quick button fills LL amount with total', async ({ page }) => {
+    await navigateWithAuth(page, '/checkout?method=cash', DEFAULT_CART_ITEMS);
+    await page.waitForTimeout(1000);
+    const exactBtn = page.locator('button:has-text("Exact")').first();
+    await expect(exactBtn).toBeVisible({ timeout: 10000 });
+    await exactBtn.click();
+    const llInput = page.locator('input#amountLL');
+    await expect(llInput).toHaveValue(/^\d+$/);
+    const llValue = await llInput.inputValue();
+    expect(parseFloat(llValue)).toBeGreaterThan(0);
   });
 
   test('Process Payment button is visible and shows total', async ({ page }) => {

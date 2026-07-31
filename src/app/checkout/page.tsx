@@ -1,9 +1,7 @@
 "use client";
 
-import { useState, useEffect, Suspense } from "react";
+import { useState, useEffect, useRef, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { createClient } from "@/lib/supabase/client";
-import type { Database } from "@/lib/types/database";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -15,13 +13,17 @@ import {
   Check,
   Loader2,
   Calculator,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react";
 import { useCartStore } from "@/lib/stores/cartStore";
 import { queueStockDecrementsForTransaction } from "@/lib/db";
 import { toast } from "sonner";
-import { formatLL, formatUSD, formatDateTime, SELL_RATE, RETURN_RATE } from "@/lib/utils/format";
+import { formatLL, formatUSD, SELL_RATE, RETURN_RATE } from "@/lib/utils/format";
 
-const supabase = createClient();
+// Quick-amount presets for one-tap cash entry
+const QUICK_LL_AMOUNTS = [5000, 10000, 20000, 50000, 100000];
+const QUICK_USD_AMOUNTS = [1, 5, 10, 20, 50, 100];
 
 function CheckoutContent() {
   const router = useRouter();
@@ -29,7 +31,6 @@ function CheckoutContent() {
 
   const [amountPaidLL, setAmountPaidLL] = useState<string>("");
   const [amountPaidUSD, setAmountPaidUSD] = useState<string>("");
-  const [whatsappNumber, setWhatsappNumber] = useState<string>("");
   const [isProcessing, setIsProcessing] = useState(false);
   const [transactionComplete, setTransactionComplete] = useState(false);
   const [isOffline, setIsOffline] = useState(
@@ -39,6 +40,8 @@ function CheckoutContent() {
   const [paidAmount, setPaidAmount] = useState<number>(0);
   const [changeGiven, setChangeGiven] = useState<number>(0);
   const [changeUsd, setChangeUsd] = useState<number>(0);
+  const [showSummary, setShowSummary] = useState(true);
+  const llInputRef = useRef<HTMLInputElement>(null);
 
   const {
     items,
@@ -87,11 +90,43 @@ function CheckoutContent() {
   const changeRate = getChangeRate();
   const displayChangeUSD = displayChangeLL / changeRate;
 
+  // Auto-focus the LL amount input so the cashier can start typing immediately
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      llInputRef.current?.focus();
+    }, 300);
+    return () => clearTimeout(timer);
+  }, []);
+
+  // Auto-collapse the order summary once payment entry begins,
+  // keeping the cashier focused on the amounts and change
+  useEffect(() => {
+    if ((paidLL > 0 || paidUSD > 0) && showSummary) {
+      setShowSummary(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [paidLL, paidUSD]);
+
   // Generate transaction number
   const generateTransactionNumber = () => {
     const timestamp = Date.now().toString(36).toUpperCase();
     const random = Math.random().toString(36).substring(2, 6).toUpperCase();
     return `TXN-${timestamp}-${random}`;
+  };
+
+  // ── Quick-payment helpers ──
+  const handleQuickLL = (amount: number) => {
+    setAmountPaidLL(String(amount));
+  };
+
+  const handleQuickUSD = (amount: number) => {
+    setAmountPaidUSD(String(amount));
+  };
+
+  const handleExactTotal = () => {
+    if (total <= 0) return;
+    setAmountPaidLL(String(Math.ceil(total)));
+    setAmountPaidUSD("");
   };
 
   // Handle payment processing — local only, no database writes
@@ -124,15 +159,6 @@ function CheckoutContent() {
       setChangeGiven(calculatedChangeGiven);
       setChangeUsd(calcChangeUsd);
 
-      // Prepare WhatsApp phone number for saving
-      let cleanPhoneNumber: string | undefined;
-      if (whatsappNumber && whatsappNumber.trim()) {
-        const clean = whatsappNumber.replace(/\D/g, '');
-        if (clean.length === 8) {
-          cleanPhoneNumber = clean;
-        }
-      }
-
       // Get current user info
       const currentUser = JSON.parse(localStorage.getItem("goldensquirrel_user") || "{}");
 
@@ -159,7 +185,6 @@ function CheckoutContent() {
         usd_total_amount: totalUsd,
         usd_amount_paid: paidUSD,
         usd_change_given: calcChangeUsd,
-        whatsapp_sent_to: cleanPhoneNumber,
         items: items.map((item) => ({
           product_id: item.product_id,
           product_name: item.product_name,
@@ -177,7 +202,7 @@ function CheckoutContent() {
         // Online: Save directly to Supabase
         try {
           const authData = JSON.parse(localStorage.getItem("goldensquirrel_auth") || "{}");
-          
+
           const response = await fetch("/api/transactions", {
             method: "POST",
             headers: {
@@ -213,7 +238,6 @@ function CheckoutContent() {
           total_usd: totalUsd,
           amount_paid_usd: paidUSD,
           change_given_usd: calcChangeUsd,
-          whatsapp_sent_to: cleanPhoneNumber,
           items: items.map((item) => ({
             product_id: item.product_id,
             product_name: item.product_name,
@@ -260,65 +284,6 @@ function CheckoutContent() {
       // Transaction complete — just show receipt
       setTransactionComplete(true);
       toast.success("Payment processed successfully!");
-
-      // Handle WhatsApp receipt
-      if (whatsappNumber && whatsappNumber.trim()) {
-        try {
-          const cleanNumber = whatsappNumber.replace(/\D/g, '');
-          if (cleanNumber.length === 8) {
-            const phoneNumber = `961${cleanNumber}`;
-
-            let storeName = "TableMind Store";
-            try {
-              const authData = JSON.parse(localStorage.getItem("goldensquirrel_auth") || "{}");
-              if (authData.username) {
-                storeName = authData.username;
-              }
-            } catch (e) {
-              // Use default store name
-            }
-
-            const receiptLines: string[] = [];
-            receiptLines.push(`*${storeName}*`);
-            receiptLines.push("");
-            receiptLines.push(`Transaction: #${txnNumber}`);
-            receiptLines.push(`Date: ${formatDateTime(new Date().toISOString())}`);
-            receiptLines.push("");
-            receiptLines.push("*Items:*");
-
-            items.forEach((item) => {
-              receiptLines.push(`${item.product_name} x${item.quantity} - ${formatLL(item.total_price)}`);
-            });
-
-            receiptLines.push("");
-            receiptLines.push(`*Total:* ${formatLL(total)}`);
-            if (paidUSD > 0) {
-              receiptLines.push(`*Paid in USD:* ${formatUSD(paidUSD)}`);
-            }
-            if (paidLL > 0) {
-              receiptLines.push(`*Paid in LL:* ${formatLL(paidLL)}`);
-            }
-            receiptLines.push(`*Total Paid:* ${formatLL(totalPaid)}`);
-            receiptLines.push(`*Change:* ${formatLL(calculatedChangeGiven)} (${formatUSD(calcChangeUsd)})`);
-            receiptLines.push("");
-            receiptLines.push("Status: ✓ Paid");
-            receiptLines.push("Thank you for your purchase!");
-
-            const receiptText = encodeURIComponent(receiptLines.join("\n"));
-            const whatsappUrl = `https://wa.me/${phoneNumber}?text=${receiptText}`;
-
-            setTimeout(() => {
-              try {
-                window.open(whatsappUrl, '_blank');
-              } catch (waError) {
-                console.warn("Could not open WhatsApp:", waError);
-              }
-            }, 1000);
-          }
-        } catch (whatsappError) {
-          console.warn("WhatsApp receipt failed, continuing anyway:", whatsappError);
-        }
-      }
     } catch (error) {
       console.error("Error processing payment:", error);
       toast.error("Failed to process payment");
@@ -358,29 +323,29 @@ function CheckoutContent() {
               Transaction #{transactionNumber}
             </p>
 
-             <div className="space-y-2 mb-6">
-               <div className="flex justify-between">
-                 <span>Total Amount</span>
-                 <span className="font-bold">{formatLL(total)}</span>
-               </div>
-               <div className="flex justify-between">
-                 <span>Amount Paid</span>
-                 <span className="font-bold">{formatLL(paidAmount)}</span>
-               </div>
-               {paidUSD > 0 && (
-                 <div className="flex justify-between text-xs text-muted-foreground">
-                   <span>of which USD</span>
-                   <span>{formatUSD(paidUSD)} @ {formatLL(RETURN_RATE)}/USD</span>
-                 </div>
-               )}
-               {changeGiven > 0 && (
-                 <div className="flex justify-between text-green-500">
-                   <span>Change</span>
-                   <span className="font-bold">{formatLL(changeGiven)}</span>
-                   <span className="text-sm">({formatUSD(changeUsd)})</span>
-                 </div>
-               )}
-             </div>
+            <div className="space-y-2 mb-6">
+              <div className="flex justify-between">
+                <span>Total Amount</span>
+                <span className="font-bold">{formatLL(total)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span>Amount Paid</span>
+                <span className="font-bold">{formatLL(paidAmount)}</span>
+              </div>
+              {paidUSD > 0 && (
+                <div className="flex justify-between text-xs text-muted-foreground">
+                  <span>of which USD</span>
+                  <span>{formatUSD(paidUSD)} @ {formatLL(RETURN_RATE)}/USD</span>
+                </div>
+              )}
+              {changeGiven > 0 && (
+                <div className="flex justify-between text-green-500">
+                  <span>Change</span>
+                  <span className="font-bold">{formatLL(changeGiven)}</span>
+                  <span className="text-sm">({formatUSD(changeUsd)})</span>
+                </div>
+              )}
+            </div>
 
             <div className="space-y-2">
               <Button variant="outline" className="w-full" onClick={handleNewTransaction}>
@@ -413,16 +378,161 @@ function CheckoutContent() {
       </header>
 
       <div className="container mx-auto px-4 py-6">
-        <div className="max-w-md mx-auto space-y-6">
-              {/* Order Summary */}
-              <Card>
-                <CardHeader>
-                  <CardTitle>Order Summary</CardTitle>
-                  <CardDescription>
-                    {items.length} item{items.length !== 1 ? "s" : ""}
-                  </CardDescription>
-                </CardHeader>
-                <CardContent>
+        <div className="max-w-md mx-auto space-y-4">
+          {/* ── Payment Method — first, so cashiers enter amounts & see change fast ── */}
+          <Card>
+            <CardHeader className="pb-3">
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-sm font-medium">Payment Method</CardTitle>
+                <Badge variant="outline">Cash</Badge>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label htmlFor="amountLL">Amount Received (LL)</Label>
+                  <Input
+                    ref={llInputRef}
+                    id="amountLL"
+                    type="number"
+                    step="1"
+                    inputMode="numeric"
+                    value={amountPaidLL}
+                    onChange={(e) => setAmountPaidLL(e.target.value)}
+                    className="text-lg mt-1"
+                  />
+                </div>
+
+                <div>
+                  <Label htmlFor="amountUSD">Amount Received (USD)</Label>
+                  <Input
+                    id="amountUSD"
+                    type="number"
+                    step="0.01"
+                    inputMode="decimal"
+                    value={amountPaidUSD}
+                    onChange={(e) => setAmountPaidUSD(e.target.value)}
+                    className="text-lg mt-1"
+                  />
+                </div>
+              </div>
+
+              {/* Quick amount buttons */}
+              <div className="space-y-2">
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    className="font-semibold"
+                    onClick={handleExactTotal}
+                  >
+                    Exact
+                  </Button>
+                  {QUICK_LL_AMOUNTS.map((amt) => (
+                    <Button
+                      key={`ll-${amt}`}
+                      variant="outline"
+                      size="sm"
+                      className={paidLL === amt ? "border-primary text-primary font-semibold" : ""}
+                      onClick={() => handleQuickLL(amt)}
+                    >
+                      {formatLL(amt)}
+                    </Button>
+                  ))}
+                </div>
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  {QUICK_USD_AMOUNTS.map((amt) => (
+                    <Button
+                      key={`usd-${amt}`}
+                      variant="outline"
+                      size="sm"
+                      className={paidUSD === amt ? "border-primary text-primary font-semibold" : ""}
+                      onClick={() => handleQuickUSD(amt)}
+                    >
+                      ${amt}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Payment Breakdown */}
+              {(paidLL > 0 || paidUSD > 0) && (
+                <div className="text-sm text-muted-foreground space-y-1 px-1">
+                  {paidLL > 0 && (
+                    <div className="flex justify-between">
+                      <span>Paid in LL</span>
+                      <span>{formatLL(paidLL)}</span>
+                    </div>
+                  )}
+                  {paidUSD > 0 && (
+                    <div className="flex justify-between">
+                      <span>Paid in USD</span>
+                      <span>{formatUSD(paidUSD)}</span>
+                    </div>
+                  )}
+                  {paidUSD > 0 && (
+                    <div className="flex justify-between text-xs">
+                      <span>USD rate applied</span>
+                      <span>$1 = {formatLL(RETURN_RATE)}</span>
+                    </div>
+                  )}
+                  <div className="flex justify-between border-t border-border/50 pt-1 font-medium">
+                    <span>Total Paid (LL equivalent)</span>
+                    <span>{formatLL(totalPaid)}</span>
+                  </div>
+                </div>
+              )}
+
+              {/* Calculator hint */}
+              {total > 0 && (
+                <div className="flex items-center justify-between text-sm text-muted-foreground px-1">
+                  <span className="flex items-center gap-2">
+                    <Calculator className="h-4 w-4" />
+                    Total:
+                  </span>
+                  <span>
+                    {formatLL(total)} / {formatUSD(totalUsd)}
+                  </span>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* ── Order Summary — collapsible so payment stays in focus ── */}
+          <Card>
+            <button
+              type="button"
+              className="w-full"
+              onClick={() => setShowSummary((prev) => !prev)}
+              aria-expanded={showSummary}
+            >
+              <CardHeader className="pb-3">
+                <div className="flex items-center justify-between">
+                  <div className="text-left">
+                    <CardTitle className="text-sm font-medium">Order Summary</CardTitle>
+                    <CardDescription>
+                      {items.length} item{items.length !== 1 ? "s" : ""}
+                    </CardDescription>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <div className="text-right">
+                      <div className="font-bold text-amber-500">{formatLL(total)}</div>
+                      <div className="text-xs text-muted-foreground">{formatUSD(totalUsd)}</div>
+                    </div>
+                    {showSummary ? (
+                      <ChevronUp className="h-4 w-4 text-muted-foreground" />
+                    ) : (
+                      <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                    )}
+                  </div>
+                </div>
+              </CardHeader>
+            </button>
+
+            {showSummary && (
+              <>
+                <Separator />
+                <CardContent className="pt-4">
                   <div className="space-y-3 max-h-[200px] overflow-y-auto mb-4">
                     {items.map((item) => (
                       <div key={item.product_id} className="flex justify-between text-sm">
@@ -483,167 +593,72 @@ function CheckoutContent() {
                     </div>
                   </div>
                 </CardContent>
-              </Card>
-
-          {/* WhatsApp Receipt Option */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2 text-sm font-medium">
-                WhatsApp Receipt
-              </CardTitle>
-              <CardDescription>
-                Optional: Send receipt via WhatsApp
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-2">
-                <Label htmlFor="whatsapp">WhatsApp Number</Label>
-                <Input
-                  id="whatsapp"
-                  type="tel"
-                  value={whatsappNumber}
-                  onChange={(e) => setWhatsappNumber(e.target.value)}
-                  className="text-lg"
-                />
-                <p className="text-xs text-muted-foreground">
-                  Enter Lebanese number starting with 70, 71, 76, etc. (no +961 or 00961 prefix)
-                </p>
-              </div>
-            </CardContent>
-          </Card>
-
-      {/* Payment Method */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-sm font-medium">Payment Method</CardTitle>
-        </CardHeader>
-        <CardContent>
-           <div className="space-y-4">
-             <div className="grid grid-cols-2 gap-4">
-               <div>
-                 <Label htmlFor="amountLL">Amount Received (LL)</Label>
-                <Input
-                  id="amountLL"
-                  type="number"
-                  step="1"
-                  value={amountPaidLL}
-                  onChange={(e) => setAmountPaidLL(e.target.value)}
-                  className="text-lg mt-1"
-                />
-               </div>
-
-               <div>
-                 <Label htmlFor="amountUSD">Amount Received (USD)</Label>
-                <Input
-                  id="amountUSD"
-                  type="number"
-                  step="0.01"
-                  value={amountPaidUSD}
-                  onChange={(e) => setAmountPaidUSD(e.target.value)}
-                  className="text-lg mt-1"
-                />
-               </div>
-             </div>
-
-             {/* Payment Breakdown */}
-             {(paidLL > 0 || paidUSD > 0) && (
-               <div className="text-sm text-muted-foreground space-y-1 px-1">
-                 {paidLL > 0 && (
-                   <div className="flex justify-between">
-                     <span>Paid in LL</span>
-                     <span>{formatLL(paidLL)}</span>
-                   </div>
-                 )}
-                 {paidUSD > 0 && (
-                   <div className="flex justify-between">
-                     <span>Paid in USD</span>
-                     <span>{formatUSD(paidUSD)}</span>
-                   </div>
-                 )}
-                 {paidUSD > 0 && (
-                   <div className="flex justify-between text-xs">
-                     <span>USD rate applied</span>
-                     <span>$1 = {formatLL(RETURN_RATE)}</span>
-                   </div>
-                 )}
-                 <div className="flex justify-between border-t border-border/50 pt-1 font-medium">
-                   <span>Total Paid (LL equivalent)</span>
-                   <span>{formatLL(totalPaid)}</span>
-                 </div>
-               </div>
-             )}
-
-             {/* Balance Display - always calculate live */}
-             {totalPaid > 0 && (
-               isChangeDue ? (
-                 <div className="p-4 bg-green-500/10 rounded-lg">
-                   <div className="text-green-600 font-medium mb-2">Change Due</div>
-                   <div className="flex justify-between items-center">
-                     <span className="text-green-600">in LL</span>
-                     <span className="text-2xl font-bold text-green-600">
-                       {formatLL(displayChangeLL)}
-                     </span>
-                   </div>
-                   <div className="flex justify-between items-center mt-1">
-                     <span className="text-green-600">in USD</span>
-                     <span className="text-xl font-bold text-green-600">
-                       {formatUSD(displayChangeUSD)}
-                     </span>
-                   </div>
-                   <div className="flex justify-between text-xs text-green-600/70 mt-2 pt-1 border-t border-green-600/20">
-                     <span>Rate applied for this transaction</span>
-                     <span>{getChangeRateLabel()}</span>
-                   </div>
-                 </div>
-               ) : (
-                 <div className="p-4 bg-amber-500/10 rounded-lg">
-                   <div className="text-amber-600 font-medium mb-1">Remaining Due</div>
-                   <div className="flex justify-between items-center">
-                     <span className="text-2xl font-bold text-amber-600">
-                       {formatLL(displayChangeLL)}
-                     </span>
-                     <span className="text-amber-600 font-medium">
-                       {formatUSD(displayChangeLL / SELL_RATE)}
-                     </span>
-                   </div>
-                 </div>
-               )
-             )}
-
-             {/* Calculator hint */}
-             {total > 0 && (
-               <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                 <Calculator className="h-4 w-4" />
-                 <span>
-                   Total: {formatLL(total)} / {formatUSD(totalUsd)}
-                 </span>
-               </div>
-             )}
-           </div>
-         </CardContent>
-          </Card>
-
-          {/* Process Payment Button */}
-          <Button
-            className="w-full h-14 text-lg"
-            onClick={handleProcessPayment}
-             disabled={
-               isProcessing ||
-               totalPaid < total
-             }
-          >
-            {isProcessing ? (
-              <>
-                <Loader2 className="h-5 w-5 mr-2 animate-spin" />
-                Processing...
-              </>
-            ) : (
-              <>
-                <Check className="h-5 w-5 mr-2" />
-                Process Payment • {formatLL(total)}
               </>
             )}
-          </Button>
+          </Card>
+
+          {/* ── Sticky bottom bar: live change + process button ── */}
+          <div className="sticky bottom-0 z-10 -mx-4 px-4 pt-3 pb-2 bg-background/95 backdrop-blur border-t border-border/60">
+            {/* Balance Display - always calculate live */}
+            {totalPaid > 0 && (
+              <>
+                {isChangeDue ? (
+                  <div className="mb-3 p-3 bg-green-500/10 rounded-lg">
+                    <div className="text-green-600 font-semibold mb-1">Change Due</div>
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-baseline gap-2 min-w-0">
+                        <span className="text-2xl font-bold text-green-600">
+                          {formatLL(displayChangeLL)}
+                        </span>
+                        <span className="text-sm text-green-600/80">
+                          ({formatUSD(displayChangeUSD)})
+                        </span>
+                      </div>
+                      <span className="text-xs text-green-600/70 text-right shrink-0">
+                        {getChangeRateLabel()}
+                      </span>
+                    </div>
+                  </div>
+                ) : displayChangeLL > 0 ? (
+                  <div className="mb-3 p-3 bg-amber-500/10 rounded-lg">
+                    <div className="text-amber-600 font-medium mb-1">Remaining Due</div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-2xl font-bold text-amber-600">
+                        {formatLL(displayChangeLL)}
+                      </span>
+                      <span className="text-amber-600 font-medium">
+                        {formatUSD(displayChangeLL / SELL_RATE)}
+                      </span>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="mb-3 p-3 bg-green-500/10 rounded-lg flex items-center justify-between">
+                    <span className="text-green-600 font-semibold">Exact payment received</span>
+                    <Check className="h-5 w-5 text-green-600" />
+                  </div>
+                )}
+              </>
+            )}
+
+            {/* Process Payment Button */}
+            <Button
+              className="w-full h-14 text-lg"
+              onClick={handleProcessPayment}
+              disabled={isProcessing || totalPaid < total}
+            >
+              {isProcessing ? (
+                <>
+                  <Loader2 className="h-5 w-5 mr-2 animate-spin" />
+                  Processing...
+                </>
+              ) : (
+                <>
+                  <Check className="h-5 w-5 mr-2" />
+                  Process Payment • {formatLL(total)}
+                </>
+              )}
+            </Button>
+          </div>
         </div>
       </div>
     </div>
