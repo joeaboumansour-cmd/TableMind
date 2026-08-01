@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { Providers } from "./providers";
 import PWAInstallPrompt from "@/components/PWAInstallPrompt";
+import PWAUpdateListener from "@/components/PWAUpdateListener";
 
 export const viewport: Viewport = {
   themeColor: '#f59e0b',
@@ -72,6 +73,7 @@ export default function RootLayout({
         <Providers>
           {children}
           <PWAInstallPrompt />
+          <PWAUpdateListener />
         </Providers>
       </body>
     </html>

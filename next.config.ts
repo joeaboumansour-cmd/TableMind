@@ -4,33 +4,46 @@ import type { NextConfig } from "next";
 const withPWA = withPWAInit({
   dest: "public",
   disable: process.env.NODE_ENV === "development",
-  // These are handled by default, so we keep the config clean
   cacheOnFrontEndNav: true,
   aggressiveFrontEndNavCaching: true,
   reloadOnOnline: true,
   // NO fallbacks.document — we NEVER want to show an offline blocking page.
-  // All critical routes are precached and served by Workbox's precacheAndRoute
-  // which works offline from the very first install, even on cold start.
-  workboxOptions: {
-    additionalManifestEntries: [
-      { url: "/", revision: "tablemind-root" },
-      { url: "/pos", revision: "tablemind-pos" },
-      { url: "/checkout", revision: "tablemind-checkout" },
-      { url: "/pos/products", revision: "tablemind-products" },
-      { url: "/transactions", revision: "tablemind-transactions" },
-      { url: "/login", revision: "tablemind-login" },
-      { url: "/offline", revision: "tablemind-offline" },
-    ],
-    // No runtimeCaching needed — the additionalManifestEntries above are
-    // added to precacheAndRoute, which creates handlers that serve them
-    // directly from precache. These work offline on first install.
-    // Non-precached routes fall through to the default NetworkFirst handler.
-  },
+  // Pages are served via the default NetworkFirst runtime handler, which
+  // always fetches fresh HTML when online and falls back to cache offline.
+  // We do NOT precache HTML routes with static revisions — doing so would
+  // freeze users on stale content forever (Workbox skips re-fetching when
+  // the revision string hasn't changed). Static JS/CSS/font chunks are still
+  // precached automatically because their filenames are content-hashed.
 });
 
 const nextConfig: NextConfig = {
   experimental: {
     serverMinification: true,
+  },
+  // Ensure the service worker is never cached by the browser/CDN so that
+  // update checks always fetch the latest version. This is critical for
+  // PWA auto-updates — without it, users may be stuck on an old SW.
+  async headers() {
+    return [
+      {
+        source: "/sw.js",
+        headers: [
+          {
+            key: "Cache-Control",
+            value: "public, max-age=0, must-revalidate",
+          },
+        ],
+      },
+      {
+        source: "/workbox-:hash.js",
+        headers: [
+          {
+            key: "Cache-Control",
+            value: "public, max-age=0, must-revalidate",
+          },
+        ],
+      },
+    ];
   },
   // Note: Turbopack is currently incompatible with many PWA plugins.
   // If you see errors during 'next dev', you may need to disable turbopack.
