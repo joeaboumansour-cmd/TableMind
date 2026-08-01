@@ -733,16 +733,16 @@ const filteredProducts = products.filter(
               placeholder="Search products..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-10 h-9"
+              className="pl-10 h-10 md:h-9"
             />
           </div>
           <Button variant="outline" size="sm" onClick={() => setShowScanSearch(true)} className="h-9 px-3">
             <Scan className="h-4 w-4" />
           </Button>
-          <Button variant="outline" size="sm" onClick={handleExportProducts} className="h-9 px-3" disabled={products.length === 0 || isOffline}>
+          <Button variant="outline" size="sm" onClick={handleExportProducts} className="h-9 px-3 hidden md:inline-flex" disabled={products.length === 0 || isOffline}>
             <Download className="h-4 w-4" />
           </Button>
-          <Button variant="outline" size="sm" onClick={() => setShowImportDialog(true)} className="h-9 px-3" disabled={isOffline}>
+          <Button variant="outline" size="sm" onClick={() => setShowImportDialog(true)} className="h-9 px-3 hidden md:inline-flex" disabled={isOffline}>
             <Upload className="h-4 w-4" />
           </Button>
           <Dialog open={isDialogOpen} onOpenChange={(open) => {
@@ -750,9 +750,9 @@ const filteredProducts = products.filter(
             if (!open) resetForm();
           }}>
             <DialogTrigger asChild>
-              <Button size="sm" className="h-9 px-3" disabled={isOffline}>
-                <Plus className="h-4 w-4 mr-1" />
-                Add
+              <Button size="sm" className="h-9 px-2 md:px-3" disabled={isOffline}>
+                <Plus className="h-4 w-4" />
+                <span className="hidden md:inline ml-1">Add</span>
               </Button>
             </DialogTrigger>
             <DialogContent className="max-w-md mx-4">
@@ -1251,7 +1251,7 @@ const filteredProducts = products.filter(
                 const product = barcodeIndex.get(scannedBarcode.trim());
                 if (product) {
                   setHighlightedProductId(product.id);
-                  setSearchQuery("");
+                  setSearchQuery(scannedBarcode.trim());
                   setShowScanSearch(false);
                   toast.success(`Found: ${product.name}`);
                   
