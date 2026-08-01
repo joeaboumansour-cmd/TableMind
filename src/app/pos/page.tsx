@@ -324,7 +324,7 @@ export default function POSPage() {
       } else {
         setHighlightedItemId(product.id);
         if (highlightTimeoutRef.current) clearTimeout(highlightTimeoutRef.current);
-        highlightTimeoutRef.current = setTimeout(() => setHighlightedItemId(null), 2000);
+        highlightTimeoutRef.current = setTimeout(() => setHighlightedItemId(null), 800);
         toast.info(`${resolvedProduct.name} is already in cart`);
         setTimeout(() => {
           const el = document.getElementById(`cart-item-${product.id}`);
@@ -859,7 +859,7 @@ export default function POSPage() {
                           id={`cart-item-${item.product_id}`}
                           className={`p-1 rounded-lg transition-all duration-300 ${
                             highlightedItemId === item.product_id
-                              ? "bg-amber-100 border-2 border-amber-500 shadow-lg scale-[1.02]"
+                              ? "bg-yellow-300 border-4 border-yellow-600 shadow-lg scale-[1.02]"
                               : "bg-muted/50 border-2 border-transparent"
                           }`}
                         >
@@ -1064,7 +1064,7 @@ export default function POSPage() {
                       id={`cart-item-${item.product_id}`}
                       className={`p-1 rounded-lg transition-all duration-300 ${
                         highlightedItemId === item.product_id
-                          ? "bg-amber-100 border-2 border-amber-500 shadow-lg scale-[1.02]"
+                          ? "bg-yellow-300 border-4 border-yellow-600 shadow-lg scale-[1.02]"
                           : "bg-muted/50 border-2 border-transparent"
                       }`}
                     >

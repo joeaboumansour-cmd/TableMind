@@ -39,7 +39,7 @@ import {
  import { toast } from "sonner";
 import { useAuth } from "@/lib/auth/AuthContext";
 import { formatLL, formatUSD, convertUsdToLl, convertLlToUsdForSale, SELL_RATE, RETURN_RATE, convertLlToUsdForReturn } from "@/lib/utils/format";
-import BarcodeScanner from "@/components/BarcodeScanner";
+import BarcodeScanner, { playSuccessSound } from "@/components/BarcodeScanner";
 import { isDesktop } from "@/lib/device";
 import CSVImportDialog from "@/components/CSVImportDialog";
 import { getFrequentlyUsedProductIds, addFrequentlyUsedProduct, removeFrequentlyUsedProduct, isFrequentlyUsed, syncFavoritesFromSupabase } from "@/lib/frequentlyUsed";
@@ -1039,9 +1039,9 @@ const filteredProducts = products.filter(
                   >
                     <Card 
                       id={`product-${product.id}`}
-                      className={`p-3 mb-2 transition-all duration-500 ${
+                      className={`p-3 mb-2 transition-all duration-300 ${
                         highlightedProductId === product.id 
-                          ? "ring-2 ring-amber-500 bg-amber-50 shadow-lg scale-[1.02]" 
+                          ? "ring-4 ring-yellow-500 bg-yellow-200 shadow-lg scale-[1.02]" 
                           : ""
                       }`}
                     >
@@ -1253,6 +1253,7 @@ const filteredProducts = products.filter(
                   setHighlightedProductId(product.id);
                   setSearchQuery(scannedBarcode.trim());
                   setShowScanSearch(false);
+                  playSuccessSound();
                   toast.success(`Found: ${product.name}`);
                   
                   // Auto-scroll to the product
@@ -1263,10 +1264,10 @@ const filteredProducts = products.filter(
                     }
                   }, 100);
                   
-                  // Clear highlight after 5 seconds
+                  // Clear highlight after 1 second
                   setTimeout(() => {
                     setHighlightedProductId(null);
-                  }, 5000);
+                  }, 1000);
                 } else {
                   toast.error("Product not found");
                   setShowScanSearch(false);
