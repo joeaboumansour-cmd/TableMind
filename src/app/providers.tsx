@@ -2,6 +2,7 @@
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ThemeProvider } from "next-themes";
+import { Toaster } from "sonner";
 import { useState } from "react";
 import { AuthProvider } from "@/lib/auth/AuthContext";
 
@@ -28,6 +29,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
           forcedTheme="dark"
         >
           {children}
+          <Toaster theme="dark" richColors position="top-center" />
         </ThemeProvider>
       </AuthProvider>
     </QueryClientProvider>
