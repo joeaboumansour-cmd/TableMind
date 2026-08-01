@@ -38,6 +38,7 @@ import { Product } from "@/lib/types/product";
 import { toast } from "sonner";
 import { formatCurrency, formatLL, convertUsdToLl, formatUSD, convertLlToUsd, convertLlToUsdForSale, convertLlToUsdForReturn, SELL_RATE, RETURN_RATE } from "@/lib/utils/format";
 import BarcodeScanner, { playSuccessSound } from "@/components/BarcodeScanner";
+import ProductSearchBar from "@/components/ProductSearchBar";
 import { SyncIndicator } from "@/components/SyncIndicator";
 import { syncEngine } from "@/lib/sync/engine";
 import {
@@ -74,7 +75,7 @@ export default function POSPage() {
   const [highlightedItemId, setHighlightedItemId] = useState<string | null>(null);
   const highlightTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-  // O(1) barcode lookup â€” rebuilt whenever products change
+  // O(1) barcode lookup — rebuilt whenever products change
   const [barcodeIndex, setBarcodeIndex] = useState<Map<string, Product>>(new Map());
   const barcodeIndexRef = useRef<Map<string, Product>>(new Map());
   // Check user permissions for History button
@@ -194,7 +195,7 @@ export default function POSPage() {
           if (navigator.onLine) {
             // Initialize/refresh local cache in background (non-blocking)
             // This uses incremental upsert so it's fast even with 2500 items
-            // Use startTransition to mark this as non-urgent â€” React will
+            // Use startTransition to mark this as non-urgent — React will
             // prioritize user interactions over the state update from sync
             syncEngine.initialize(store_id).then(() => {
               // After sync completes, refresh products from cache in a non-urgent transition
@@ -348,7 +349,7 @@ export default function POSPage() {
     }
   }, [items, addItem, incrementQuantity, isEnabled, isDesktopMode]);
 
-  // Handle barcode scan from camera â€” O(1) local first, then live Supabase fallback to guarantee zero misses
+  // Handle barcode scan from camera — O(1) local first, then live Supabase fallback to guarantee zero misses
   const handleBarcodeScan = async (barcode: string) => {
     const trimmed = barcode.trim();
     if (!trimmed) {
@@ -363,7 +364,7 @@ export default function POSPage() {
       return;
     }
 
-    // 2. Fallback: query Supabase directly if online â€” this fixes scan misses for products
+    // 2. Fallback: query Supabase directly if online — this fixes scan misses for products
     //    that exist server-side but aren't in the local cache/state yet
     if (!navigator.onLine) {
       toast.error("Product not found in local data");
@@ -442,7 +443,7 @@ export default function POSPage() {
       }
 
       toast.dismiss("scan-fallback");
-      toast.success("Found via server â€” added to cart");
+      toast.success("Found via server — added to cart");
 
       // 3. Add to cart
       handleProductAdd(mapped);
@@ -625,6 +626,38 @@ export default function POSPage() {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [isMobileMenuOpen]);
 
+  // Refs for F-key shortcuts
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const barcodeInputRef = useRef<HTMLInputElement | null>(null);
+
+  // F-key shortcuts: F2=Search, F3=Scanner, F4=Done
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
+        // Don't trigger shortcuts when typing in an input
+        return;
+      }
+      if (e.key === "F2") {
+        e.preventDefault();
+        searchInputRef.current?.focus();
+      } else if (e.key === "F3") {
+        e.preventDefault();
+        if (!isDesktopMode) {
+          toggleScanner();
+        } else {
+          barcodeInputRef.current?.focus();
+        }
+      } else if (e.key === "F4") {
+        e.preventDefault();
+        if (!isEmpty()) {
+          setIsQuickEndDialogOpen(true);
+        }
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [isEmpty, isDesktopMode, toggleScanner]);
+
   // Cleanup timeout on unmount
   useEffect(() => {
     return () => {
@@ -775,209 +808,221 @@ export default function POSPage() {
       {/* Main Content */}
       {isDesktopMode ? (
         /* ===== DESKTOP SPLIT LAYOUT ===== */
-        <div className="flex-1 flex flex-row overflow-hidden p-4 gap-4">
-          {/* Left side: Cart â€” 65% */}
-          <div className="flex-[65] flex flex-col overflow-hidden min-w-0">
-            <Card className="flex-1 flex flex-col overflow-hidden min-h-0">
-              {/* Cart Items - Scrollable */}
-              <div className="flex-1 overflow-y-auto p-4">
-                {isEmpty() ? (
-                  <div className="h-full flex flex-col items-center justify-center text-muted-foreground">
-                    <Scan className="h-16 w-16 mb-4 opacity-30" />
-                    <p className="text-xl font-medium">Scan items to add</p>
-                    <p className="text-sm mt-1">Use the scanner on the right</p>
-                  </div>
-                ) : (
-                  <div className="space-y-3">
-                    {items.map((item) => (
-                      <div
-                        key={item.product_id}
-                        id={`cart-item-${item.product_id}`}
-                        className={`p-1 rounded-lg transition-all duration-300 ${
-                          highlightedItemId === item.product_id
-                            ? "bg-amber-100 border-2 border-amber-500 shadow-lg scale-[1.02]"
-                            : "bg-muted/50 border-2 border-transparent"
-                        }`}
-                      >
-                        <div className="mb-2">
-                          <p className="font-semibold text-base leading-tight">
-                            {item.product_name}
-                          </p>
-                          {item.discount_percentage > 0 ? (
-                            <>
-                              <p className="text-xs text-muted-foreground text-center">
-                                <span className="line-through">{formatLL(item.original_unit_price)}</span>{' '}
-                                <span className="text-green-600 font-semibold">{formatLL(item.unit_price)}</span> each
-                              </p>
-                              <p className="text-xs text-muted-foreground text-center">
-                                <span className="line-through">{formatUSD(item.original_unit_price_usd)}</span>{' '}
-                                <span className="text-green-600 font-semibold">{formatUSD(item.unit_price_usd)}</span> each
-                              </p>
-                              <div className="flex justify-center mt-1">
-                                <Badge variant="default" className="text-xs bg-green-500">
-                                  -{item.discount_percentage}%
-                                </Badge>
-                              </div>
-                            </>
-                          ) : (
-                            <>
-                              <p className="text-xs text-muted-foreground text-center">
-                                {formatLL(item.unit_price)} each
-                              </p>
-                              <p className="text-xs text-muted-foreground text-center">
-                                {formatUSD(item.unit_price_usd)} each
-                              </p>
-                            </>
-                          )}
-                        </div>
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-2">
-                            <Button
-                              variant="outline"
-                              size="icon"
-                              className="h-8 w-8 rounded"
-                              onClick={() => decrementQuantity(item.product_id)}
-                            >
-                              <Minus className="h-3 w-3" />
-                            </Button>
-                            <span className="w-8 text-center text-base font-bold">
-                              {item.quantity}
-                            </span>
-                            <Button
-                              variant="outline"
-                              size="icon"
-                              className="h-8 w-8 rounded"
-                              disabled={item.quantity >= item.stock_quantity}
-                              onClick={() => {
-                                const success = incrementQuantity(item.product_id);
-                                if (!success) {
-                                  toast.error(`Cannot exceed available stock (${item.stock_quantity})`);
-                                }
-                              }}
-                            >
-                              <Plus className="h-3 w-3" />
-                            </Button>
-                          </div>
-                          <div className="text-right">
-                            <p className="font-semibold text-base text-amber-600">
-                              {formatLL(item.total_price)}
-                            </p>
-                            <p className="text-s text-muted-foreground">
-                              {formatUSD(item.total_price_usd)}
-                            </p>
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
+        <div className="flex-1 flex flex-col overflow-hidden p-4 gap-4">
+          {/* Top Bar: Product Search + Action Buttons */}
+          <div className="flex-shrink-0 flex items-center gap-3">
+            <ProductSearchBar
+              products={products}
+              onSelect={handleProductAdd}
+              placeholder="Search products by name or barcode..."
+              className="flex-1"
+              inputRef={searchInputRef}
+            />
+            {!isEmpty() && (
+              <div className="flex gap-2 flex-shrink-0">
+                <Button
+                  className="h-10 font-bold bg-green-600 hover:bg-green-700"
+                  onClick={() => setIsQuickEndDialogOpen(true)}
+                >
+                  <Check className="h-4 w-4 mr-1" />
+                  Done
+                </Button>
+                <Button
+                  className="h-10 font-bold"
+                  onClick={() => router.push(`/checkout?method=${isCharge ? "cash" : "card"}`)}
+                >
+                  <CreditCard className="h-4 w-4 mr-1" />
+                  Checkout
+                </Button>
               </div>
+            )}
+          </div>
 
-              {/* Cart Footer */}
-              {!isEmpty() && (
-                <div className="flex-shrink-0 p-4 pt-3 border-t">
-                  <div className="space-y-3">
-                    <div className="space-y-2">
-                      <div className="flex justify-between items-center">
-                        <Button
-                          variant="destructive"
-                          size="sm"
-                          className="flex items-center gap-2"
-                          onClick={() => {
-                            if (window.confirm("Are you sure you want to clear all items from the cart?")) {
-                              clearCart();
-                              toast.success("Cart cleared");
-                            }
-                          }}
+          {/* Split: Cart + Scanner */}
+          <div className="flex-1 flex flex-row overflow-hidden gap-4 min-h-0">
+            {/* Left side: Cart — 65% */}
+            <div className="flex-[65] flex flex-col overflow-hidden min-w-0">
+              <Card className="flex-1 flex flex-col overflow-hidden min-h-0">
+                {/* Cart Items - Scrollable */}
+                <div className="flex-1 overflow-y-auto p-4">
+                  {isEmpty() ? (
+                    <div className="h-full flex flex-col items-center justify-center text-muted-foreground">
+                      <Scan className="h-16 w-16 mb-4 opacity-30" />
+                      <p className="text-xl font-medium">Scan items to add</p>
+                      <p className="text-sm mt-1">Use the scanner on the right</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {items.map((item) => (
+                        <div
+                          key={item.product_id}
+                          id={`cart-item-${item.product_id}`}
+                          className={`p-1 rounded-lg transition-all duration-300 ${
+                            highlightedItemId === item.product_id
+                              ? "bg-amber-100 border-2 border-amber-500 shadow-lg scale-[1.02]"
+                              : "bg-muted/50 border-2 border-transparent"
+                          }`}
                         >
-                          <Trash2 className="h-4 w-4" />
-                          Clear All
-                        </Button>
-                        <div className="text-right">
-                          {useCartStore.getState().getTotalDiscount() > 0 && (
-                            <>
-                              <div className="text-sm text-muted-foreground">
-                                Subtotal: {formatLL(useCartStore.getState().getTotalOriginal())}
-                              </div>
-                              <div className="text-sm text-red-500">
-                                Discount: -{formatLL(useCartStore.getState().getTotalDiscount())}
-                              </div>
-                            </>
-                          )}
-                          <div className="text-2xl font-bold text-amber-500">
-                            {formatLL(getTotal())}
+                          <div className="mb-2">
+                            <p className="font-semibold text-base leading-tight">
+                              {item.product_name}
+                            </p>
+                            {item.discount_percentage > 0 ? (
+                              <>
+                                <p className="text-xs text-muted-foreground text-center">
+                                  <span className="line-through">{formatLL(item.original_unit_price)}</span>{' '}
+                                  <span className="text-green-600 font-semibold">{formatLL(item.unit_price)}</span> each
+                                </p>
+                                <p className="text-xs text-muted-foreground text-center">
+                                  <span className="line-through">{formatUSD(item.original_unit_price_usd)}</span>{' '}
+                                  <span className="text-green-600 font-semibold">{formatUSD(item.unit_price_usd)}</span> each
+                                </p>
+                                <div className="flex justify-center mt-1">
+                                  <Badge variant="default" className="text-xs bg-green-500">
+                                    -{item.discount_percentage}%
+                                  </Badge>
+                                </div>
+                              </>
+                            ) : (
+                              <>
+                                <p className="text-xs text-muted-foreground text-center">
+                                  {formatLL(item.unit_price)} each
+                                </p>
+                                <p className="text-xs text-muted-foreground text-center">
+                                  {formatUSD(item.unit_price_usd)} each
+                                </p>
+                              </>
+                            )}
                           </div>
-                          <div className="text-s text-muted-foreground">
-                            {formatUSD(getTotalUsd())}
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <Button
+                                variant="outline"
+                                size="icon"
+                                className="h-8 w-8 rounded"
+                                onClick={() => decrementQuantity(item.product_id)}
+                              >
+                                <Minus className="h-3 w-3" />
+                              </Button>
+                              <span className="w-8 text-center text-base font-bold">
+                                {item.quantity}
+                              </span>
+                              <Button
+                                variant="outline"
+                                size="icon"
+                                className="h-8 w-8 rounded"
+                                onClick={() => incrementQuantity(item.product_id)}
+                              >
+                                <Plus className="h-3 w-3" />
+                              </Button>
+                            </div>
+                            <div className="text-right">
+                              <p className="font-semibold text-base text-amber-600">
+                                {formatLL(item.total_price)}
+                              </p>
+                              <p className="text-s text-muted-foreground">
+                                {formatUSD(item.total_price_usd)}
+                              </p>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Cart Footer */}
+                {!isEmpty() && (
+                  <div className="flex-shrink-0 p-4 pt-3 border-t">
+                    <div className="space-y-3">
+                      <div className="space-y-2">
+                        <div className="flex justify-between items-center">
+                          <Button
+                            variant="destructive"
+                            size="sm"
+                            className="flex items-center gap-2"
+                            onClick={() => {
+                              if (window.confirm("Are you sure you want to clear all items from the cart?")) {
+                                clearCart();
+                                toast.success("Cart cleared");
+                              }
+                            }}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                            Clear All
+                          </Button>
+                          <div className="text-right">
+                            {useCartStore.getState().getTotalDiscount() > 0 && (
+                              <>
+                                <div className="text-sm text-muted-foreground">
+                                  Subtotal: {formatLL(useCartStore.getState().getTotalOriginal())}
+                                </div>
+                                <div className="text-sm text-red-500">
+                                  Discount: -{formatLL(useCartStore.getState().getTotalDiscount())}
+                                </div>
+                              </>
+                            )}
+                            <div className="text-2xl font-bold text-amber-500">
+                              {formatLL(getTotal())}
+                            </div>
+                            <div className="text-s text-muted-foreground">
+                              {formatUSD(getTotalUsd())}
+                            </div>
                           </div>
                         </div>
                       </div>
                     </div>
                   </div>
-                </div>
-              )}
-            </Card>
-          </div>
-
-          {/* Right side: Scanner + Grid + Checkout â€” 35% */}
-          <div className="flex-[35] flex flex-col gap-4 min-w-0">
-            {/* Barcode Scanner + Grid â€” scrollable area */}
-            <div className="flex-1 flex flex-col overflow-hidden min-h-0">
-              <BarcodeScanner
-                onScan={handleBarcodeScan}
-                isActive={true}
-                desktopMode={true}
-              >
-                {savedProducts.length > 0 && (
-                  <div className="grid grid-cols-2 gap-3">
-                    {savedProducts.map(product => (
-                      <div key={product.id}>
-                        <Button
-                          variant="outline"
-                          className="w-full min-h-[80px] flex-col py-2 px-3 text-center justify-center"
-                          onClick={() => handleProductAdd(product)}
-                        >
-                          <span className="text-sm leading-tight font-semibold break-words">{product.name}</span>
-                          <span className="text-xs text-muted-foreground mt-1.5">
-                            {formatLL(product.selling_price)}
-                          </span>
-                        </Button>
-                      </div>
-                    ))}
-                  </div>
                 )}
-              </BarcodeScanner>
+              </Card>
             </div>
 
-            {/* Action Buttons: Quick Done + Checkout */}
-            {!isEmpty() && (
-              <div className="flex-shrink-0">
-                <div className="grid grid-cols-2 gap-3">
-                  <Button
-                    className="h-14 text-lg font-bold bg-green-600 hover:bg-green-700"
-                    size="lg"
-                    onClick={() => setIsQuickEndDialogOpen(true)}
-                  >
-                    <Check className="h-5 w-5 mr-2" />
-                    Done
-                  </Button>
-                  <Button
-                    className="h-14 text-lg font-bold"
-                    size="lg"
-                    onClick={() => router.push(`/checkout?method=${isCharge ? "cash" : "card"}`)}
-                  >
-                    <CreditCard className="h-5 w-5 mr-2" />
-                    Checkout
-                  </Button>
-                </div>
+            {/* Right side: Scanner + Grid — 35% */}
+            <div className="flex-[35] flex flex-col gap-4 min-w-0">
+              {/* Barcode Scanner + Grid — scrollable area */}
+              <div className="flex-1 flex flex-col overflow-hidden min-h-0">
+                <BarcodeScanner
+                  onScan={handleBarcodeScan}
+                  isActive={true}
+                  desktopMode={true}
+                  barcodeInputRef={barcodeInputRef}
+                >
+                  {savedProducts.length > 0 && (
+                    <div className="grid grid-cols-2 gap-3">
+                      {savedProducts.map(product => (
+                        <div key={product.id}>
+                          <Button
+                            variant="outline"
+                            className="w-full min-h-[80px] flex-col py-2 px-3 text-center justify-center"
+                            onClick={() => handleProductAdd(product)}
+                          >
+                            <span className="text-sm leading-tight font-semibold break-words">{product.name}</span>
+                            <span className="text-xs text-muted-foreground mt-1.5">
+                              {formatLL(product.selling_price)}
+                            </span>
+                          </Button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </BarcodeScanner>
               </div>
-            )}
+            </div>
           </div>
         </div>
       ) : (
         /* ===== MOBILE LAYOUT (vertical stack) ===== */
         <div className="flex-1 flex flex-col overflow-hidden p-4 gap-3">
-          {/* Barcode Scanner - Always Open - Compact */}
+          {/* Product Search Bar - Always visible */}
+          <div className="flex-shrink-0">
+            <ProductSearchBar
+              products={products}
+              onSelect={handleProductAdd}
+              placeholder="Search products by name or barcode..."
+            />
+          </div>
+
+          {/* Barcode Scanner - Toggleable */}
           <div className="flex-shrink-0">
             <div className="flex items-center justify-between mb-2">
               <Button
@@ -997,6 +1042,7 @@ export default function POSPage() {
               onScan={handleBarcodeScan}
               isActive={isScannerActive}
               desktopMode={false}
+              showManualInput={false}
             />
           </div>
 
@@ -1070,13 +1116,7 @@ export default function POSPage() {
                             variant="outline"
                             size="icon"
                             className="h-8 w-8 rounded"
-                            disabled={item.quantity >= item.stock_quantity}
-                            onClick={() => {
-                              const success = incrementQuantity(item.product_id);
-                              if (!success) {
-                                toast.error(`Cannot exceed available stock (${item.stock_quantity})`);
-                              }
-                            }}
+                            onClick={() => incrementQuantity(item.product_id)}
                           >
                             <Plus className="h-3 w-3" />
                           </Button>

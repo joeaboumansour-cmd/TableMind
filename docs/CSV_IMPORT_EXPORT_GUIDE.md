@@ -20,7 +20,7 @@ The CSV Import/Export feature allows you to bulk manage your products by importi
 | `cost_price` | Number | Purchase cost | 1000.00 |
 | `selling_price` | Number or Formula | Sale price (supports Excel formulas) | 1500.00 or =D2*(1+G2) |
 | `currency` | Text | Currency code (LL or USD) | "LL" |
-| `stock_quantity` | Integer | Current stock | 100 |
+| `stock_quantity` | Integer | Current stock (can be negative) | 100 |
 | `min_stock_threshold` | Integer | Low stock alert level | 10 |
 
 ### Optional Columns

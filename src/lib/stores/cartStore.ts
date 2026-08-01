@@ -108,8 +108,7 @@ export const useCartStore = create<CartStore>()(
       incrementQuantity: (productId: string) => {
         const { items } = get();
         const item = items.find(i => i.product_id === productId);
-        const maxStock = item?.stock_quantity ?? Infinity;
-        if (item && item.quantity < maxStock) {
+        if (item) {
           get().updateQuantity(productId, item.quantity + 1);
           return true;
         }

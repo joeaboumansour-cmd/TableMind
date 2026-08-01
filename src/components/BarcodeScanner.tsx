@@ -71,8 +71,13 @@ interface BarcodeScannerProps {
    *  with auto-focus (for desktop hardware scanners). Children are rendered
    *  as quick-access buttons below the input. */
   desktopMode?: boolean;
+  /** When false, hides the manual barcode input section (use when an external
+   *  product search bar replaces manual entry). Defaults to true. */
+  showManualInput?: boolean;
   /** Rendered in desktop mode below the barcode input (e.g. saved product buttons). */
   children?: React.ReactNode;
+  /** Exposes the barcode input ref so parent can focus it (desktop mode). */
+  barcodeInputRef?: React.Ref<HTMLInputElement>;
 }
 
 // ============================================================
@@ -139,7 +144,7 @@ function isValidBarcode(raw: string): boolean {
 // MAIN COMPONENT
 // ============================================================
 
-export default function BarcodeScanner({ onScan, onClose, isActive = true, desktopMode = false, children }: BarcodeScannerProps) {
+export default function BarcodeScanner({ onScan, onClose, isActive = true, desktopMode = false, showManualInput = true, children, barcodeInputRef: externalBarcodeInputRef }: BarcodeScannerProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const videoContainerRef = useRef<HTMLDivElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -153,7 +158,8 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true, deskt
   const quaggaRef = useRef<any>(null);
   const quaggaInitRef = useRef(false);
   const quaggaStreamRef = useRef<MediaStream | null>(null);
-  const barcodeInputRef = useRef<HTMLInputElement | null>(null);
+  const internalBarcodeInputRef = useRef<HTMLInputElement | null>(null);
+  const barcodeInputRef = internalBarcodeInputRef;
 
   const [isScanning, setIsScanning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -511,7 +517,7 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true, deskt
     isMountedRef.current = isActive;
     if (isActive) {
       if (desktopMode) {
-        setTimeout(() => barcodeInputRef.current?.focus(), 0);
+        setTimeout(() => internalBarcodeInputRef.current?.focus(), 0);
       } else {
         startCamera();
       }
@@ -535,7 +541,7 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true, deskt
     setManualBarcode("");
     // Re-focus for next scan (desktop mode only)
     if (desktopMode) {
-      setTimeout(() => barcodeInputRef.current?.focus(), 0);
+      setTimeout(() => internalBarcodeInputRef.current?.focus(), 0);
     }
   }, [onScan, reportBarcode, desktopMode]);
 
@@ -549,7 +555,7 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true, deskt
           <div className="p-2 dark:bg-zinc-900 flex flex-col gap-2 flex-1 overflow-hidden">
             <div className="flex gap-2 flex-shrink-0">
               <Input
-                ref={barcodeInputRef}
+                ref={internalBarcodeInputRef}
                 placeholder="Scan barcode..."
                 value={manualBarcode}
                 onChange={e => setManualBarcode(e.target.value)}
@@ -616,21 +622,23 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true, deskt
             )}
           </div>
 
-          <div className="p-2 dark:bg-zinc-900 flex flex-col gap-2">
-            <div className="flex gap-2">
-              <Input
-                placeholder="Manual barcode..."
-                value={manualBarcode}
-                onChange={e => setManualBarcode(e.target.value)}
-                onKeyDown={e => e.key === "Enter" && handleManualSubmit(manualBarcode)}
-                className="h-8"
-                inputMode="numeric"
-                pattern="[0-9]*"
-              />
-              <Button size="sm" onClick={() => handleManualSubmit(manualBarcode)}>Add</Button>
+          {showManualInput && (
+            <div className="p-2 dark:bg-zinc-900 flex flex-col gap-2">
+              <div className="flex gap-2">
+                <Input
+                  placeholder="Manual barcode..."
+                  value={manualBarcode}
+                  onChange={e => setManualBarcode(e.target.value)}
+                  onKeyDown={e => e.key === "Enter" && handleManualSubmit(manualBarcode)}
+                  className="h-8"
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                />
+                <Button size="sm" onClick={() => handleManualSubmit(manualBarcode)}>Add</Button>
+              </div>
+              {onClose && <Button variant="ghost" size="sm" onClick={onClose} className="text-zinc-500">Cancel</Button>}
             </div>
-            {onClose && <Button variant="ghost" size="sm" onClick={onClose} className="text-zinc-500">Cancel</Button>}
-          </div>
+          )}
         </div>
       </CardContent>
     </Card>

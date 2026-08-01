@@ -176,8 +176,6 @@ export function parseCSV(csvString: string): ParsedCSVResult {
     const stockQuantity = parseInt(stockQuantityRaw, 10);
     if (isNaN(stockQuantity) || stockQuantityRaw === '') {
       rowErrors.push({ row: rowNum, field: 'stock_quantity', message: 'Stock quantity must be a valid integer' });
-    } else if (stockQuantity < 0) {
-      rowErrors.push({ row: rowNum, field: 'stock_quantity', message: 'Stock quantity must be non-negative' });
     }
 
     // Validate min_stock_threshold
