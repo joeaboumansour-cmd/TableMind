@@ -12,7 +12,6 @@ import {
   Plus,
   Trash2,
   Download,
-  Printer,
   X,
   FileDown,
   Loader2,
@@ -36,8 +35,6 @@ import BarcodeLabel from "@/components/BarcodeLabel";
 const STORAGE_KEY = "barcodegen_store_id";
 const TABLE_KEY = "barcodegen_table";
 
-type PrintMode = "table" | "labels" | null;
-
 export default function BarcodeGeneratorPage() {
   const router = useRouter();
   const { user } = useAuth();
@@ -53,9 +50,6 @@ export default function BarcodeGeneratorPage() {
 
   // ── Table state ─────────────────────────────────────────────
   const [rows, setRows] = useState<BarcodeRow[]>([]);
-
-  // ── Print state ─────────────────────────────────────────────
-  const [printMode, setPrintMode] = useState<PrintMode>(null);
 
   // ── POS check state ─────────────────────────────────────────
   const [posInfo, setPosInfo] = useState<{ count: number; nextSeq: number } | null>(null);
@@ -87,23 +81,6 @@ export default function BarcodeGeneratorPage() {
   useEffect(() => {
     localStorage.setItem(TABLE_KEY, JSON.stringify(rows));
   }, [rows]);
-
-  // ── Trigger print after print-only content renders ──────────
-  useEffect(() => {
-    if (printMode) {
-      const timer = setTimeout(() => {
-        window.print();
-      }, 600);
-      return () => clearTimeout(timer);
-    }
-  }, [printMode]);
-
-  // ── Reset print mode after printing ──────────────────────────
-  useEffect(() => {
-    const handleAfterPrint = () => setPrintMode(null);
-    window.addEventListener("afterprint", handleAfterPrint);
-    return () => window.removeEventListener("afterprint", handleAfterPrint);
-  }, []);
 
   // ── Check POS for existing barcodes (debounced) ─────────────
   useEffect(() => {
@@ -310,22 +287,26 @@ export default function BarcodeGeneratorPage() {
       return;
     }
 
-    // Generate SVG string for each barcode
+    // Generate SVG string for each barcode with larger dimensions for A4
     const labels = rows.map((row) => {
       const svgNS = "http://www.w3.org/2000/svg";
       const svg = document.createElementNS(svgNS, "svg");
+      svg.setAttribute("xmlns", svgNS);
       try {
         JsBarcode(svg, row.barcode, {
           format: "CODE128",
-          width: 1.5,
-          height: 40,
+          width: 2,
+          height: 50,
           displayValue: true,
-          fontSize: 11,
+          fontSize: 14,
           fontOptions: "bold",
           margin: 10,
           background: "#ffffff",
           lineColor: "#000000",
         });
+        // Set explicit dimensions for print
+        svg.setAttribute("width", "100%");
+        svg.setAttribute("height", "auto");
       } catch {
         // skip render errors
       }
@@ -339,27 +320,29 @@ export default function BarcodeGeneratorPage() {
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Barcode Labels — ${new Date().toLocaleDateString()}</title>
 <style>
-  @page { size: A4; margin: 10mm; }
+  @page { size: A4; margin: 15mm; }
   * { box-sizing: border-box; }
-  body { font-family: Arial, Helvetica, sans-serif; margin: 0; padding: 10px; }
+  body { font-family: Arial, Helvetica, sans-serif; margin: 0; padding: 15px; }
   .label-grid {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 4mm;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 6mm;
   }
   .label-item {
     page-break-inside: avoid;
     text-align: center;
-    border: 1px dashed #999;
-    padding: 3mm;
+    border: 2px solid #333;
+    padding: 5mm;
     display: flex;
     flex-direction: column;
     align-items: center;
+    justify-content: center;
+    min-height: 60mm;
   }
   .label-item svg { max-width: 100%; height: auto; }
-  .label-text { font-size: 10px; color: #333; margin-top: 2px; line-height: 1.2; }
-  .label-text .name { font-weight: bold; }
-  .toolbar { margin-bottom: 10px; }
+  .label-text { font-size: 14px; color: #000; margin-top: 4px; line-height: 1.3; font-weight: 500; }
+  .label-text .name { font-weight: bold; font-size: 15px; margin-bottom: 2px; }
+  .toolbar { margin-bottom: 15px; }
   @media print {
     .toolbar { display: none; }
     body { padding: 0; }
@@ -368,7 +351,7 @@ export default function BarcodeGeneratorPage() {
 </head>
 <body>
 <div class="toolbar">
-  <button onclick="window.print()" style="padding:8px 20px;font-size:16px;cursor:pointer;">Print Labels</button>
+  <button onclick="window.print()" style="padding:10px 24px;font-size:16px;cursor:pointer;">Print Labels</button>
 </div>
 <div class="label-grid">
 ${labels
@@ -397,23 +380,84 @@ ${labels
     toast.success("Labels HTML downloaded — open it on any computer and print");
   };
 
-  // ── Print table ─────────────────────────────────────────────
-  const handlePrintTable = () => {
+
+  // ── Download table as HTML ──────────────────────────────────
+  const handleDownloadTableHTML = () => {
     if (rows.length === 0) {
-      toast.error("No barcodes to print");
+      toast.error("No barcodes to export");
       return;
     }
-    setPrintMode("table");
+
+    const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Barcode Table — ${new Date().toLocaleDateString()}</title>
+<style>
+  @page { size: A4; margin: 15mm; }
+  * { box-sizing: border-box; }
+  body { font-family: Arial, Helvetica, sans-serif; margin: 0; padding: 20px; }
+  .toolbar { margin-bottom: 20px; }
+  table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+  th, td { border: 1px solid #333; padding: 8px 12px; text-align: left; font-size: 12px; }
+  th { background: #f0f0f0; font-weight: bold; }
+  tr:nth-child(even) { background: #f9f9f9; }
+  .barcode { font-family: monospace; font-weight: bold; }
+  @media print {
+    .toolbar { display: none; }
+    body { padding: 0; }
+  }
+</style>
+</head>
+<body>
+<div class="toolbar">
+  <button onclick="window.print()" style="padding:10px 24px;font-size:16px;cursor:pointer;">Print Table</button>
+</div>
+<h1 style="font-size: 20px; margin-bottom: 8px;">Generated Barcodes — ${new Date().toLocaleDateString()}</h1>
+<p style="color: #666; margin-bottom: 20px; font-size: 14px;">Total: ${rows.length} barcode${rows.length !== 1 ? "s" : ""}</p>
+<table>
+  <thead>
+    <tr>
+      <th style="width: 40px;">#</th>
+      <th>Barcode</th>
+      <th>Category</th>
+      <th>Color</th>
+      <th>Size</th>
+      <th style="width: 50px;">Seq</th>
+      <th>Product Name</th>
+    </tr>
+  </thead>
+  <tbody>
+    ${rows
+      .map(
+        (row) =>
+          `    <tr>
+      <td>${row.number}</td>
+      <td class="barcode">${row.barcode}</td>
+      <td>${row.categoryName}</td>
+      <td>${row.colorName}</td>
+      <td>${row.sizeName}</td>
+      <td style="text-align: center;">${String(row.sequence).padStart(2, "0")}</td>
+      <td>${row.productName || ""}</td>
+    </tr>`,
+      )
+      .join("\n")}
+  </tbody>
+</table>
+</body>
+</html>`;
+
+    const blob = new Blob([html], { type: "text/html;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `barcode_table_${new Date().toISOString().slice(0, 10)}.html`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast.success("Table HTML downloaded — open it on any computer and print");
   };
 
-  // ── Print labels ────────────────────────────────────────────
-  const handlePrintLabels = () => {
-    if (rows.length === 0) {
-      toast.error("No barcodes to print");
-      return;
-    }
-    setPrintMode("labels");
-  };
 
   // ── Duplicate indicator ─────────────────────────────────────
   const isDuplicate =
@@ -431,27 +475,6 @@ ${labels
 
   return (
     <div className="min-h-screen bg-background">
-      {/* ── Inline print styles ─────────────────────────────── */}
-      <style dangerouslySetInnerHTML={{
-        __html: `
-        .print-only { display: none; }
-        @media print {
-          .no-print { display: none !important; }
-          .print-only { display: block !important; }
-          @page { size: A4; margin: 10mm; }
-          .label-grid {
-            display: grid !important;
-            grid-template-columns: repeat(4, 1fr);
-            gap: 4mm;
-          }
-          .label-item { page-break-inside: avoid; padding: 3mm !important; }
-          .print-table { width: 100%; border-collapse: collapse; }
-          .print-table th, .print-table td { border: 1px solid #999; padding: 4px 8px; text-align: left; font-size: 12px; }
-          .print-table th { background: #f0f0f0; }
-        }
-        `,
-      }} />
-
       {/* ── Header ──────────────────────────────────────────── */}
       <header className="bg-background border-b no-print">
         <div className="px-4 py-3 flex items-center gap-3 max-w-5xl mx-auto">
@@ -657,26 +680,18 @@ ${labels
                 <Button
                   variant="outline"
                   size="sm"
+                  onClick={handleDownloadTableHTML}
+                >
+                  <FileDown className="h-3 w-3 mr-1" />
+                  Table HTML
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
                   onClick={handleDownloadLabelsHTML}
                 >
                   <FileDown className="h-3 w-3 mr-1" />
                   Labels HTML
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={handlePrintTable}
-                >
-                  <Printer className="h-3 w-3 mr-1" />
-                  Print Table
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={handlePrintLabels}
-                >
-                  <Printer className="h-3 w-3 mr-1" />
-                  Print Labels
                 </Button>
                 <Button
                   variant="outline"
@@ -779,58 +794,6 @@ ${labels
         )}
       </div>
 
-      {/* ── Print-only: Table view ──────────────────────────── */}
-      {printMode === "table" && (
-        <div className="print-only">
-          <h1 style={{ fontSize: "18px", marginBottom: "12px" }}>
-            Generated Barcodes — {new Date().toLocaleDateString()}
-          </h1>
-          <table className="print-table">
-            <thead>
-              <tr>
-                <th>#</th>
-                <th>Barcode</th>
-                <th>Category</th>
-                <th>Color</th>
-                <th>Size</th>
-                <th>Seq</th>
-                <th>Product Name</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row) => (
-                <tr key={row.id}>
-                  <td>{row.number}</td>
-                  <td style={{ fontFamily: "monospace" }}>{row.barcode}</td>
-                  <td>{row.categoryName}</td>
-                  <td>{row.colorName}</td>
-                  <td>{row.sizeName}</td>
-                  <td>{String(row.sequence).padStart(2, "0")}</td>
-                  <td>{row.productName || ""}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-      {/* ── Print-only: Labels view (A4 grid) ────────────────── */}
-      {printMode === "labels" && (
-        <div className="print-only">
-          <div className="label-grid">
-            {rows.map((row) => (
-              <BarcodeLabel
-                key={row.id}
-                barcode={row.barcode}
-                categoryName={row.categoryName}
-                colorName={row.colorName}
-                sizeName={row.sizeName}
-                productName={row.productName}
-              />
-            ))}
-          </div>
-        </div>
-      )}
     </div>
   );
 }
