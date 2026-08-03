@@ -136,6 +136,9 @@ function normalizeBarcode(raw: string): string {
 function isValidBarcode(raw: string): boolean {
   const n = normalizeBarcode(raw);
   if (!n) return false;
+  // Accept CODE128 barcodes (any length 1-64, alphanumeric)
+  if (/^[A-Za-z0-9\-_.]{1,64}$/.test(n)) return true;
+  // Accept EAN/UPC numeric barcodes and validate check digit
   if (!/^\d{8,13}$/.test(n)) return true;
   return isValidEAN(n);
 }
