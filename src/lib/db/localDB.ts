@@ -81,7 +81,7 @@ export interface QueuedTransactionItem {
 
 export interface PendingWrite {
   id: string;
-  type: "transaction" | "stock_decrement" | "favorite_add" | "favorite_remove";
+  type: "transaction" | "stock_decrement" | "favorite_add" | "favorite_remove" | "cash_shift_open" | "cash_shift_close" | "cash_adjustment";
   payload: unknown;
   created_at: string;
   retry_count: number;
@@ -397,6 +397,86 @@ export async function queueStockDecrementsForTransaction(
   for (const item of items) {
     await queueStockDecrement(item.product_id, item.quantity, storeId);
   }
+}
+
+// ---- Cash Shift Queuing ----
+
+export interface CashShiftOpenPayload {
+  store_id: string;
+  business_date: string;
+  opening_ll: number;
+  opening_usd: number;
+  user_id?: string;
+  user_name?: string;
+}
+
+export interface CashShiftClosePayload {
+  shift_id: string;
+  store_id: string;
+  closing_ll: number;
+  closing_usd: number;
+  notes?: string;
+  user_id?: string;
+  user_name?: string;
+}
+
+export interface CashAdjustmentPayload {
+  store_id: string;
+  shift_id: string;
+  adjustment_type: "cash_in" | "cash_out";
+  amount_ll: number;
+  amount_usd: number;
+  reason: string;
+  user_id?: string;
+  user_name?: string;
+}
+
+/**
+ * Queue a cash shift open operation for later sync when offline.
+ */
+export async function queueCashShiftOpen(payload: CashShiftOpenPayload): Promise<void> {
+  const pendingWrite: PendingWrite = {
+    id: crypto.randomUUID(),
+    type: "cash_shift_open",
+    payload,
+    created_at: new Date().toISOString(),
+    retry_count: 0,
+    last_error: null,
+  };
+  await db.pending_writes.add(pendingWrite);
+  console.log(`[LocalDB] Queued cash shift open for ${payload.business_date}`);
+}
+
+/**
+ * Queue a cash shift close operation for later sync when offline.
+ */
+export async function queueCashShiftClose(payload: CashShiftClosePayload): Promise<void> {
+  const pendingWrite: PendingWrite = {
+    id: crypto.randomUUID(),
+    type: "cash_shift_close",
+    payload,
+    created_at: new Date().toISOString(),
+    retry_count: 0,
+    last_error: null,
+  };
+  await db.pending_writes.add(pendingWrite);
+  console.log(`[LocalDB] Queued cash shift close for shift ${payload.shift_id}`);
+}
+
+/**
+ * Queue a cash adjustment operation for later sync when offline.
+ */
+export async function queueCashAdjustment(payload: CashAdjustmentPayload): Promise<void> {
+  const pendingWrite: PendingWrite = {
+    id: crypto.randomUUID(),
+    type: "cash_adjustment",
+    payload,
+    created_at: new Date().toISOString(),
+    retry_count: 0,
+    last_error: null,
+  };
+  await db.pending_writes.add(pendingWrite);
+  console.log(`[LocalDB] Queued cash adjustment for shift ${payload.shift_id}`);
 }
 
 export { db as localDB };

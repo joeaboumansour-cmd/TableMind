@@ -80,6 +80,8 @@ export default function POSPage() {
   const barcodeIndexRef = useRef<Map<string, Product>>(new Map());
   // Check user permissions for History button
   const [canViewTransactions, setCanViewTransactions] = useState(false);
+  // Check user permissions for Cash Register button
+  const [canViewCash, setCanViewCash] = useState(false);
   // Quick end transaction state
   const [isQuickEndDialogOpen, setIsQuickEndDialogOpen] = useState(false);
   const [isQuickEndProcessing, setIsQuickEndProcessing] = useState(false);
@@ -103,8 +105,9 @@ export default function POSPage() {
   useEffect(() => {
     if (user) {
       setCanViewTransactions(canAccess("transactions"));
+      setCanViewCash(canAccess("cash_register") && isEnabled("cash_register"));
     }
-  }, [user, canAccess]);
+  }, [user, canAccess, isEnabled]);
 
   // Detect desktop mode for hardware scanner + saved product buttons
   useEffect(() => {
@@ -729,6 +732,12 @@ export default function POSPage() {
             {/* Desktop Buttons */}
             <div className="hidden md:flex items-center gap-2">
               <SyncIndicator />
+              {canViewCash && (
+                <Button variant="ghost" size="sm" onClick={() => router.push("/pos/cash")}>
+                  <Banknote className="h-4 w-4 mr-1" />
+                  Cash
+                </Button>
+              )}
               {canViewTransactions && (
                 <Button variant="ghost" size="sm" onClick={() => router.push("/transactions")}>
                   <History className="h-4 w-4 mr-1" />
@@ -765,6 +774,18 @@ export default function POSPage() {
                    <div className="px-4 py-2 border-b">
                      <SyncIndicator compact />
                    </div>
+                   {canViewCash && (
+                     <button
+                       className="w-full px-4 py-3 text-left flex items-center gap-3 hover:bg-muted/50 transition-colors"
+                       onClick={() => {
+                         router.push("/pos/cash");
+                         setIsMobileMenuOpen(false);
+                       }}
+                     >
+                       <Banknote className="h-4 w-4" />
+                       <span>Cash Register</span>
+                     </button>
+                   )}
                    {canViewTransactions && (
                      <button
                        className="w-full px-4 py-3 text-left flex items-center gap-3 hover:bg-muted/50 transition-colors"

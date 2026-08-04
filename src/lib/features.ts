@@ -69,6 +69,13 @@ export const FEATURES: Record<string, FeatureDefinition> = {
     category: "retail",
     default: true,
   },
+  cash_register: {
+    key: "cash_register",
+    label: "Cash Register",
+    description: "Daily cash shift tracking: opening float, sales, adjustments, and end-of-day reconciliation",
+    category: "core",
+    default: false,
+  },
 };
 
 export type FeatureKey = keyof typeof FEATURES;
@@ -93,6 +100,7 @@ export const FEATURE_PRESETS: Record<string, FeaturePreset> = {
       product_discount: false,
       transaction_analytics: false,
       desktop_shortcuts: true,
+      cash_register: false,
     },
   },
 };

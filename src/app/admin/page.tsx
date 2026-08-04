@@ -72,7 +72,7 @@ interface StoreFeatures {
 }
 
 // Section toggle order for display
-const SECTION_KEYS: SectionKey[] = ["pos", "inventory", "transactions", "receipts"];
+const SECTION_KEYS: SectionKey[] = ["pos", "inventory", "transactions", "receipts", "cash_register"];
 
 export default function AdminPage() {
   const router = useRouter();
@@ -267,6 +267,7 @@ export default function AdminPage() {
       inventory: false,
       transactions: false,
       receipts: false,
+      cash_register: false,
     });
   };
 

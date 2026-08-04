@@ -11,6 +11,7 @@ export const SECTIONS = {
   inventory: { label: "Inventory & Products", description: "View and manage products, prices, stock" },
   transactions: { label: "Transaction History", description: "View past sales and receipts" },
   receipts: { label: "View Receipts", description: "Access individual transaction receipts" },
+  cash_register: { label: "Cash Register", description: "View and reconcile the daily cash drawer" },
 } as const;
 
 export type SectionKey = keyof typeof SECTIONS;
@@ -20,6 +21,7 @@ export interface UserPermissions {
   inventory: boolean;
   transactions: boolean;
   receipts: boolean;
+  cash_register: boolean;
   [key: string]: boolean; // Allows future sections without type changes
 }
 
@@ -41,6 +43,7 @@ export function getDefaultPermissions(): UserPermissions {
     inventory: false,
     transactions: false,
     receipts: false,
+    cash_register: false,
   };
   return perms;
 }
@@ -54,6 +57,7 @@ export function getFullPermissions(): UserPermissions {
     inventory: true,
     transactions: true,
     receipts: true,
+    cash_register: true,
   };
   return perms;
 }

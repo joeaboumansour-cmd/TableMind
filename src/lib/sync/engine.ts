@@ -345,6 +345,33 @@ class SyncEngine {
     return result;
   }
 
+  private async processCashShiftWrite(write: PendingWrite): Promise<void> {
+    const authData = localStorage.getItem("goldensquirrel_auth") || "{}";
+    // Build auth header including user_id for employees so the API
+    // correctly verifies the caller (owner vs employee with permission).
+    let headerPayload: any = {};
+    try {
+      headerPayload = JSON.parse(authData);
+    } catch {}
+    const storedUser = localStorage.getItem("goldensquirrel_user");
+    if (storedUser) {
+      try {
+        const u = JSON.parse(storedUser);
+        if (!u.isOwner && u.id) headerPayload.user_id = u.id;
+      } catch {}
+    }
+    const h = { "Content-Type": "application/json", "x-auth-data": JSON.stringify(headerPayload) };
+    const p = write.payload as any;
+    const body = JSON.stringify({
+      ...(write.type === "cash_shift_open" ? { action: "open", business_date: p.business_date, opening_ll: p.opening_ll, opening_usd: p.opening_usd, user_id: p.user_id, user_name: p.user_name } : {}),
+      ...(write.type === "cash_shift_close" ? { action: "close", shift_id: p.shift_id, closing_ll: p.closing_ll, closing_usd: p.closing_usd, notes: p.notes, user_id: p.user_id, user_name: p.user_name } : {}),
+      ...(write.type === "cash_adjustment" ? { shift_id: p.shift_id, adjustment_type: p.adjustment_type, amount_ll: p.amount_ll, amount_usd: p.amount_usd, reason: p.reason, user_id: p.user_id, user_name: p.user_name } : {}),
+    });
+    const url = write.type === "cash_shift_open" || write.type === "cash_shift_close" ? "/api/cash-shifts" : "/api/cash-adjustments";
+    const r = await fetch(url, { method: "POST", headers: h, body });
+    if (!r.ok) throw new Error(`${write.type} failed (${r.status})`);
+  }
+
   /**
    * Process pending stock decrements from the pending_writes table.
    * Each stock decrement is processed via the Supabase RPC.
@@ -361,14 +388,37 @@ class SyncEngine {
     const stockDecrements = pendingWrites.filter(
       (w) => w.type === "stock_decrement"
     );
+    const cashWrites = pendingWrites.filter(
+      (w) => w.type === "cash_shift_open" || w.type === "cash_shift_close" || w.type === "cash_adjustment"
+    );
 
-    if (stockDecrements.length === 0) {
+    if (stockDecrements.length === 0 && cashWrites.length === 0) {
       return result;
     }
 
-    console.log(`[Sync] Processing ${stockDecrements.length} pending stock decrements...`);
+    console.log(`[Sync] Processing ${stockDecrements.length} stock decrements + ${cashWrites.length} cash ops...`);
 
     const supabase = createClient();
+
+    // Process cash operations first (order matters)
+    for (const write of cashWrites) {
+      try {
+        await this.processCashShiftWrite(write);
+        await removePendingWrite(write.id);
+        result.processed++;
+      } catch (error: any) {
+        console.error(`[Sync] Failed ${write.type}:`, error);
+        result.failed++;
+        result.errors.push(`${write.type}: ${error.message}`);
+        try {
+          const { localDB } = await import("@/lib/db/localDB");
+          await localDB.pending_writes.where("id").equals(write.id).modify((w: any) => {
+            w.retry_count += 1;
+            w.last_error = error.message;
+          });
+        } catch {}
+      }
+    }
 
     for (const write of stockDecrements) {
       try {

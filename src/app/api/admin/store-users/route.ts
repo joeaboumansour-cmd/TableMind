@@ -69,6 +69,7 @@ export async function POST(request: Request) {
           inventory: false,
           transactions: false,
           receipts: false,
+          cash_register: false,
         },
       })
       .select("id, store_id, username, display_name, is_active, permissions, created_at")

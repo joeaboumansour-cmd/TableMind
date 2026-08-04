@@ -187,6 +187,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
           inventory: rawPerms.inventory === true,
           transactions: rawPerms.transactions === true,
           receipts: rawPerms.receipts === true,
+          cash_register: rawPerms.cash_register === true,
         };
       } catch {
         perms = {
@@ -194,6 +195,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
           inventory: false,
           transactions: false,
           receipts: false,
+          cash_register: false,
         };
       }
 
@@ -261,6 +263,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
             inventory: rawPerms.inventory === true,
             transactions: rawPerms.transactions === true,
             receipts: rawPerms.receipts === true,
+            cash_register: rawPerms.cash_register === true,
           };
         } catch {
           perms = {
@@ -268,6 +271,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
             inventory: false,
             transactions: false,
             receipts: false,
+            cash_register: false,
           };
         }
 
@@ -338,6 +342,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
             inventory: rawPerms.inventory === true,
             transactions: rawPerms.transactions === true,
             receipts: rawPerms.receipts === true,
+            cash_register: rawPerms.cash_register === true,
           },
         };
         setUser(updatedUser);

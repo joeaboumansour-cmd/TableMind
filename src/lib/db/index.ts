@@ -24,6 +24,9 @@ export {
   seedProductsIfNeeded,
   queueStockDecrement,
   queueStockDecrementsForTransaction,
+  queueCashShiftOpen,
+  queueCashShiftClose,
+  queueCashAdjustment,
 } from "./localDB";
 
 export type {
@@ -34,5 +37,8 @@ export type {
   QueuedTransactionItem,
   SeedProduct,
   PendingWrite,
+  CashShiftOpenPayload,
+  CashShiftClosePayload,
+  CashAdjustmentPayload,
 } from "./localDB";
 

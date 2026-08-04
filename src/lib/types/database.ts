@@ -161,6 +161,103 @@ export interface Database {
           currency?: string;
         };
       };
+      cash_shifts: {
+        Row: {
+          id: string;
+          store_id: string;
+          business_date: string;
+          status: string;
+          opened_by: string | null;
+          opened_by_name: string;
+          opened_at: string;
+          opening_ll: number;
+          opening_usd: number;
+          closed_by: string | null;
+          closed_by_name: string | null;
+          closed_at: string | null;
+          closing_ll: number | null;
+          closing_usd: number | null;
+          verified: boolean;
+          notes: string | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          store_id: string;
+          business_date: string;
+          status?: string;
+          opened_by?: string | null;
+          opened_by_name?: string;
+          opened_at?: string;
+          opening_ll?: number;
+          opening_usd?: number;
+          closed_by?: string | null;
+          closed_by_name?: string | null;
+          closed_at?: string | null;
+          closing_ll?: number | null;
+          closing_usd?: number | null;
+          verified?: boolean;
+          notes?: string | null;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          store_id?: string;
+          business_date?: string;
+          status?: string;
+          opened_by?: string | null;
+          opened_by_name?: string;
+          opened_at?: string;
+          opening_ll?: number;
+          opening_usd?: number;
+          closed_by?: string | null;
+          closed_by_name?: string | null;
+          closed_at?: string | null;
+          closing_ll?: number | null;
+          closing_usd?: number | null;
+          verified?: boolean;
+          notes?: string | null;
+          created_at?: string;
+        };
+      };
+      cash_adjustments: {
+        Row: {
+          id: string;
+          store_id: string;
+          shift_id: string;
+          adjustment_type: string;
+          amount_ll: number;
+          amount_usd: number;
+          reason: string;
+          created_by: string | null;
+          created_by_name: string | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          store_id: string;
+          shift_id: string;
+          adjustment_type: string;
+          amount_ll?: number;
+          amount_usd?: number;
+          reason: string;
+          created_by?: string | null;
+          created_by_name?: string | null;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          store_id?: string;
+          shift_id?: string;
+          adjustment_type?: string;
+          amount_ll?: number;
+          amount_usd?: number;
+          reason?: string;
+          created_by?: string | null;
+          created_by_name?: string | null;
+          created_at?: string;
+        };
+      };
     };
     Views: {
       [_ in never]: never;
