@@ -101,7 +101,7 @@ function buildAuthHeaders(currentUser: any): Record<string, string> {
 export function CashRegisterPage() {
   const router = useRouter();
   const { user, isLoading: authLoading, canAccess } = useAuth();
-  const { isEnabled } = useFeatureFlags();
+  const { isEnabled, isLoading: flagsLoading } = useFeatureFlags();
 
   const [isLoading, setIsLoading] = useState(true);
   const [shift, setShift] = useState<CashShift | null>(null);
@@ -180,8 +180,10 @@ export function CashRegisterPage() {
   }, [user, loadData]);
 
   // Feature flag + permission guard
+  // Only redirect after both auth AND feature flags have finished loading.
+  // Otherwise isEnabled() returns false during initial load and causes a false redirect.
   useEffect(() => {
-    if (!authLoading && user) {
+    if (!authLoading && user && !flagsLoading) {
       if (!isEnabled("cash_register")) {
         toast.error("Cash Register is not enabled for this store");
         router.replace("/pos");
@@ -193,7 +195,7 @@ export function CashRegisterPage() {
         return;
       }
     }
-  }, [authLoading, user, isEnabled, canAccess, router]);
+  }, [authLoading, user, flagsLoading, isEnabled, canAccess, router]);
 
   const canEdit = user?.isOwner || (user?.permissions.cash_register === true);
 

@@ -38,6 +38,7 @@ import {
  } from "lucide-react";
  import { toast } from "sonner";
 import { useAuth } from "@/lib/auth/AuthContext";
+import { PermissionGuard } from "@/lib/auth/guards";
 import { formatLL, formatUSD, convertUsdToLl, convertLlToUsdForSale, SELL_RATE, RETURN_RATE, convertLlToUsdForReturn } from "@/lib/utils/format";
 import BarcodeScanner, { playSuccessSound } from "@/components/BarcodeScanner";
 import { isDesktop } from "@/lib/device";
@@ -65,6 +66,14 @@ interface Product {
 }
 
 export default function StoreProductsPage() {
+  return (
+    <PermissionGuard section="inventory">
+      <StoreProductsPageContent />
+    </PermissionGuard>
+  );
+}
+
+function StoreProductsPageContent() {
   const router = useRouter();
   const { user, logout: authLogout, isLoading: authLoading } = useAuth();
   // Lazy init supabase client inside component to avoid SSR issues on hard refresh

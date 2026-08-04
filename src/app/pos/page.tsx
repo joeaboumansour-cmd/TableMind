@@ -82,6 +82,8 @@ export default function POSPage() {
   const [canViewTransactions, setCanViewTransactions] = useState(false);
   // Check user permissions for Cash Register button
   const [canViewCash, setCanViewCash] = useState(false);
+  // Check user permissions for Inventory button
+  const [canViewInventory, setCanViewInventory] = useState(false);
   // Quick end transaction state
   const [isQuickEndDialogOpen, setIsQuickEndDialogOpen] = useState(false);
   const [isQuickEndProcessing, setIsQuickEndProcessing] = useState(false);
@@ -106,6 +108,7 @@ export default function POSPage() {
     if (user) {
       setCanViewTransactions(canAccess("transactions"));
       setCanViewCash(canAccess("cash_register") && isEnabled("cash_register"));
+      setCanViewInventory(canAccess("inventory") && isEnabled("inventory"));
     }
   }, [user, canAccess, isEnabled]);
 
@@ -738,16 +741,18 @@ export default function POSPage() {
                   Cash
                 </Button>
               )}
-              {canViewTransactions && (
+              {canViewTransactions && isEnabled("transactions") && (
                 <Button variant="ghost" size="sm" onClick={() => router.push("/transactions")}>
                   <History className="h-4 w-4 mr-1" />
                   History
                 </Button>
               )}
-              <Button variant="ghost" size="sm" onClick={() => router.push("/pos/products")}>
-                <Package className="h-4 w-4 mr-1" />
-                Inventory
-              </Button>
+              {canViewInventory && (
+                <Button variant="ghost" size="sm" onClick={() => router.push("/pos/products")}>
+                  <Package className="h-4 w-4 mr-1" />
+                  Inventory
+                </Button>
+              )}
               <Button variant="ghost" size="icon" onClick={handleLogout}>
                 <LogOut className="h-5 w-5" />
               </Button>
@@ -786,7 +791,7 @@ export default function POSPage() {
                        <span>Cash Register</span>
                      </button>
                    )}
-                   {canViewTransactions && (
+                   {canViewTransactions && isEnabled("transactions") && (
                      <button
                        className="w-full px-4 py-3 text-left flex items-center gap-3 hover:bg-muted/50 transition-colors"
                        onClick={() => {
@@ -798,16 +803,18 @@ export default function POSPage() {
                        <span>History</span>
                      </button>
                    )}
-                   <button
-                     className="w-full px-4 py-3 text-left flex items-center gap-3 hover:bg-muted/50 transition-colors"
-                     onClick={() => {
-                       router.push("/pos/products");
-                       setIsMobileMenuOpen(false);
-                     }}
-                   >
-                     <Package className="h-4 w-4" />
-                     <span>Inventory</span>
-                   </button>
+                   {canViewInventory && (
+                     <button
+                       className="w-full px-4 py-3 text-left flex items-center gap-3 hover:bg-muted/50 transition-colors"
+                       onClick={() => {
+                         router.push("/pos/products");
+                         setIsMobileMenuOpen(false);
+                       }}
+                     >
+                       <Package className="h-4 w-4" />
+                       <span>Inventory</span>
+                     </button>
+                   )}
                    <div className="border-t" />
                   <button
                     className="w-full px-4 py-3 text-left flex items-center gap-3 hover:bg-muted/50 transition-colors text-red-500"
