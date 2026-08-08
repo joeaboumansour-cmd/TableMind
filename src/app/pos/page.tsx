@@ -53,6 +53,7 @@ import { useFeatureFlags } from "@/hooks/useFeatureFlags";
 import { usePreloadProducts } from "@/hooks/usePreloadProducts";
 import { isDesktop, isIOS, isAndroid } from "@/lib/device";
 import { getFrequentlyUsedProductIds, addFrequentlyUsedProduct, removeFrequentlyUsedProduct, isFrequentlyUsed } from "@/lib/frequentlyUsed";
+import { connectivity } from "@/lib/connectivity";
 
 const supabase = createClient();
 
@@ -153,7 +154,7 @@ export default function POSPage() {
           const licenseExpiresAt = authData ? JSON.parse(authData)?.license_expires_at : null;
 
           // Check license expiration - only when online, never block offline
-          if (licenseExpiresAt && navigator.onLine) {
+          if (licenseExpiresAt && connectivity.isOnline) {
             const licenseExpires = new Date(licenseExpiresAt);
             const now = new Date();
             if (licenseExpires < now) {
@@ -198,7 +199,7 @@ export default function POSPage() {
 
           // Then sync in background: pull latest products + push queued transactions
           // syncEngine.initialize() handles both pull and push in one sync cycle
-          if (navigator.onLine) {
+          if (connectivity.isOnline) {
             // Initialize/refresh local cache in background (non-blocking)
             // This uses incremental upsert so it's fast even with 2500 items
             // Use startTransition to mark this as non-urgent — React will
@@ -264,7 +265,7 @@ export default function POSPage() {
 
     // Refresh products when window gains focus (only if online)
     const handleFocus = () => {
-      if (merchant?.id && navigator.onLine) {
+      if (merchant?.id && connectivity.isOnline) {
         loadData();
       }
     };
@@ -372,7 +373,7 @@ export default function POSPage() {
 
     // 2. Fallback: query Supabase directly if online — this fixes scan misses for products
     //    that exist server-side but aren't in the local cache/state yet
-    if (!navigator.onLine) {
+    if (!connectivity.isOnline) {
       toast.error("Product not found in local data");
       return;
     }
@@ -537,6 +538,54 @@ export default function POSPage() {
         ...userInfo,
       };
 
+      // Build the offline queue payload up-front so we can fall back to it
+      // if the online save fails (e.g. navigator.onLine lies on desktop).
+      const { queueTransaction } = await import("@/lib/db/localDB");
+      const authDataOffline = JSON.parse(localStorage.getItem("goldensquirrel_auth") || "{}");
+      // Ensure store_id is never empty - try multiple fallbacks
+      const offlineStoreId = authDataOffline.store_id || "";
+      const offlineTxnData: any = {
+        id: crypto.randomUUID(),
+        store_id: offlineStoreId,
+        transaction_number: txnNumber,
+        subtotal: getSubtotal(),
+        total_amount: total,
+        amount_paid: total,
+        change_given: 0,
+        payment_method: "cash",
+        subtotal_usd: getSubtotalUsd(),
+        total_usd: totalUsd,
+        amount_paid_usd: totalUsd,
+        change_given_usd: 0,
+        items: items.map((item) => ({
+          product_id: item.product_id,
+          product_name: item.product_name,
+          quantity: item.quantity,
+          unit_price: item.unit_price,
+          total_price: item.total_price,
+          currency: item.currency,
+          unit_price_usd: item.unit_price_usd,
+          total_price_usd: item.total_price_usd,
+        })),
+        created_at: new Date().toISOString(),
+      };
+      // Add user_name for ALL users (owners included) - always set independently of user_id
+      if (currentUser && currentUser.username) {
+        offlineTxnData.user_name = currentUser.displayName || currentUser.username;
+        // Only set user_id for employees (not owners, whose ID is a store_id)
+        if (!currentUser.isOwner && currentUser.id) {
+          offlineTxnData.user_id = currentUser.id;
+        }
+      }
+
+      // Queue stock decrements as pending_writes for reliable sync
+      const queueStockDecrements = () =>
+        queueStockDecrementsForTransaction(
+          items.map((item) => ({ product_id: item.product_id, quantity: item.quantity })),
+          offlineStoreId
+        );
+
+      let savedOnline = false;
       if (navigator.onLine) {
         // Online: Save directly to Supabase
         try {
@@ -554,57 +603,16 @@ export default function POSPage() {
           if (!response.ok) {
             throw new Error("Failed to save transaction");
           }
+          savedOnline = true;
         } catch (error) {
-          console.error("Failed to save transaction online:", error);
-          toast.error("Transaction ended but failed to save receipt");
+          // Fall back to offline queue so the transaction is NEVER lost.
+          console.error("Failed to save transaction online, queuing offline:", error);
         }
-      } else {
-        // Offline: Queue for later sync
-        const { queueTransaction } = await import("@/lib/db/localDB");
-        const authDataOffline = JSON.parse(localStorage.getItem("goldensquirrel_auth") || "{}");
-        // Ensure store_id is never empty - try multiple fallbacks
-        const offlineStoreId = authDataOffline.store_id || "";
-        const offlineTxnData: any = {
-          id: crypto.randomUUID(),
-          store_id: offlineStoreId,
-          transaction_number: txnNumber,
-          subtotal: getSubtotal(),
-          total_amount: total,
-          amount_paid: total,
-          change_given: 0,
-          payment_method: "cash",
-          subtotal_usd: getSubtotalUsd(),
-          total_usd: totalUsd,
-          amount_paid_usd: totalUsd,
-          change_given_usd: 0,
-          items: items.map((item) => ({
-            product_id: item.product_id,
-            product_name: item.product_name,
-            quantity: item.quantity,
-            unit_price: item.unit_price,
-            total_price: item.total_price,
-            currency: item.currency,
-            unit_price_usd: item.unit_price_usd,
-            total_price_usd: item.total_price_usd,
-          })),
-          created_at: new Date().toISOString(),
-        };
-        // Add user_name for ALL users (owners included) - always set independently of user_id
-        if (currentUser && currentUser.username) {
-          offlineTxnData.user_name = currentUser.displayName || currentUser.username;
-          // Only set user_id for employees (not owners, whose ID is a store_id)
-          if (!currentUser.isOwner && currentUser.id) {
-            offlineTxnData.user_id = currentUser.id;
-          }
-        }
+      }
+
+      if (!savedOnline) {
         await queueTransaction(offlineTxnData);
-
-        // Queue stock decrements as pending_writes for reliable sync
-        await queueStockDecrementsForTransaction(
-          items.map((item) => ({ product_id: item.product_id, quantity: item.quantity })),
-          offlineStoreId
-        );
-
+        await queueStockDecrements();
         toast.info("Transaction saved offline - will sync when online");
       }
 
@@ -675,7 +683,7 @@ export default function POSPage() {
 
   // Prefetch critical routes while online so they are available offline
   useEffect(() => {
-    if (navigator.onLine && user) {
+    if (connectivity.isOnline && user) {
       router.prefetch("/checkout");
       router.prefetch("/pos/products");
       router.prefetch("/transactions");

@@ -18,6 +18,7 @@ import {
 } from "@/lib/db/localDB";
 import type { CachedProduct, QueuedTransaction, PendingWrite } from "@/lib/db/localDB";
 import { syncFavoritesFromSupabase, processPendingFavoriteWrites } from "@/lib/frequentlyUsed";
+import { connectivity } from "@/lib/connectivity";
 
 type SyncStatus = "idle" | "syncing" | "error" | "offline";
 type SyncListener = (status: SyncStatus, pendingCount?: number) => void;
@@ -42,39 +43,39 @@ class SyncEngine {
     if (this.initialized) return;
     this.initialized = true;
 
-    this._status = navigator.onLine ? "idle" : "offline";
+    this._status = connectivity.isOnline ? "idle" : "offline";
     this._pendingCount = await getQueuedCount();
     this.notify();
 
-    // Listen for online/offline events
-    window.addEventListener("online", () => {
-      console.log("[Sync] Connection restored, triggering sync...");
-      this._status = "idle";
-      this.notify();
-      // Auto-sync when coming back online
-      this.syncNow();
-      // Start periodic retry
-      this.startRetryInterval();
-    });
-
-    window.addEventListener("offline", () => {
-      console.log("[Sync] Connection lost, entering offline mode");
-      this._status = "offline";
-      this.notify();
-      // Stop periodic retry when offline
-      this.stopRetryInterval();
+    // Subscribe to real connectivity changes (heartbeat-based, not navigator.onLine)
+    connectivity.subscribe((status) => {
+      if (status === "online") {
+        console.log("[Sync] Connection restored, triggering sync...");
+        this._status = "idle";
+        this.notify();
+        // Auto-sync when coming back online
+        this.syncNow();
+        // Start periodic retry
+        this.startRetryInterval();
+      } else {
+        console.log("[Sync] Connection lost, entering offline mode");
+        this._status = "offline";
+        this.notify();
+        // Stop periodic retry when offline
+        this.stopRetryInterval();
+      }
     });
 
     // Retry sync when page becomes visible again (e.g., user switches back to tab)
     window.addEventListener("visibilitychange", () => {
-      if (document.visibilityState === "visible" && navigator.onLine) {
+      if (document.visibilityState === "visible" && connectivity.isOnline) {
         console.log("[Sync] Page became visible, checking for pending sync...");
         this.syncNow();
       }
     });
 
     // Start periodic retry if online on init
-    if (navigator.onLine) {
+    if (connectivity.isOnline) {
       this.startRetryInterval();
     }
   }
@@ -87,7 +88,7 @@ class SyncEngine {
     if (this.retryIntervalId) return;
     this.retryIntervalId = setInterval(async () => {
       const count = await getQueuedCount();
-      if (count > 0 && navigator.onLine) {
+      if (count > 0 && connectivity.isOnline) {
         console.log(`[Sync] Periodic check: ${count} queued transactions, attempting sync...`);
         this.syncNow();
       }
@@ -106,11 +107,11 @@ class SyncEngine {
   }
 
   get isOnline(): boolean {
-    return navigator.onLine;
+    return connectivity.isOnline;
   }
 
   get isOffline(): boolean {
-    return !navigator.onLine;
+    return connectivity.isOffline;
   }
 
   get pendingCount(): number {
@@ -481,9 +482,9 @@ class SyncEngine {
     failed: number;
     errors: string[];
   }> {
-    if (this.syncInProgress || !navigator.onLine) {
+    if (this.syncInProgress || !connectivity.isOnline) {
       return {
-        success: navigator.onLine,
+        success: connectivity.isOnline,
         pulled: 0,
         pushed: 0,
         failed: 0,
@@ -554,7 +555,7 @@ class SyncEngine {
   async initialize(storeId: string): Promise<void> {
     this.storeId = storeId;
 
-    if (navigator.onLine) {
+    if (connectivity.isOnline) {
       // Use syncNow() instead of calling pushQueuedTransactions() directly
       // This ensures the syncInProgress flag prevents concurrent syncs
       // (e.g., the online event listener also triggering syncNow())

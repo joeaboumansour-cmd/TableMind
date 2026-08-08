@@ -39,6 +39,7 @@ import {
 } from "@/lib/db";
 import type { CachedTransaction, CachedTransactionItem } from "@/lib/db";
 import { TransactionAnalytics } from "@/components/TransactionAnalytics";
+import { connectivity } from "@/lib/connectivity";
 
 // Helper: check if user auth exists in localStorage (works offline)
 function hasAuthInStorage(): boolean {
@@ -139,7 +140,7 @@ export default function TransactionHistoryPage() {
         userStoreId: user?.storeId,
         storeIdFromStorage: getStoreIdFromStorage(),
         resolvedStoreId: store_id,
-        isOffline: !navigator.onLine
+        isOffline: !connectivity.isOnline
       });
 
       if (!store_id) {
@@ -166,7 +167,7 @@ export default function TransactionHistoryPage() {
       }
 
       // Then try to fetch fresh data from API if online AND we have a store_id
-      if (navigator.onLine && store_id) {
+      if (connectivity.isOnline && store_id) {
         const authData = localStorage.getItem("goldensquirrel_auth");
         console.log("[Transactions] Attempting API fetch:", {
           hasAuthData: !!authData,
@@ -279,29 +280,23 @@ export default function TransactionHistoryPage() {
 
   // Track online/offline status and refresh transactions when coming back online
   useEffect(() => {
-    setIsOffline(!navigator.onLine);
+    setIsOffline(!connectivity.isOnline);
 
-    const handleOnline = () => {
-      setIsOffline(false);
-      console.log("[Transactions] Back online — refreshing transactions...");
-      // Small delay to ensure auth state has settled
-      setTimeout(() => {
-        fetchTransactions();
-      }, 500);
-    };
+    const unsubscribe = connectivity.subscribe((status) => {
+      if (status === "online") {
+        setIsOffline(false);
+        console.log("[Transactions] Back online — refreshing transactions...");
+        // Small delay to ensure auth state has settled
+        setTimeout(() => {
+          fetchTransactions();
+        }, 500);
+      } else {
+        setIsOffline(true);
+        console.log("[Transactions] Gone offline");
+      }
+    });
 
-    const handleOffline = () => {
-      setIsOffline(true);
-      console.log("[Transactions] Gone offline");
-    };
-
-    window.addEventListener("online", handleOnline);
-    window.addEventListener("offline", handleOffline);
-
-    return () => {
-      window.removeEventListener("online", handleOnline);
-      window.removeEventListener("offline", handleOffline);
-    };
+    return unsubscribe;
   }, [fetchTransactions]);
 
   // Apply date filter and search

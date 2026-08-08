@@ -1,11 +1,14 @@
 // =============================================
 // Hook: Online/Offline Status
 // Tracks connectivity changes in real-time
+// Uses the heartbeat-based connectivity module
+// (navigator.onLine is unreliable on desktop)
 // =============================================
 
 import { useState, useEffect, useCallback } from "react";
 import { syncEngine } from "@/lib/sync/engine";
 import { getQueuedCount } from "@/lib/db/localDB";
+import { connectivity } from "@/lib/connectivity";
 
 export type NetworkStatus = "online" | "offline";
 
@@ -27,9 +30,7 @@ interface UseOnlineStatusReturn {
 }
 
 export function useOnlineStatus(): UseOnlineStatusReturn {
-  const [status, setStatus] = useState<NetworkStatus>(
-    navigator.onLine ? "online" : "offline"
-  );
+  const [status, setStatus] = useState<NetworkStatus>(connectivity.status);
   const [pendingSyncCount, setPendingSyncCount] = useState(0);
   const [syncStatus, setSyncStatus] = useState(syncEngine.status);
 
@@ -43,29 +44,18 @@ export function useOnlineStatus(): UseOnlineStatusReturn {
     }
   }, []);
 
-  const handleOnline = useCallback(() => {
-    setStatus("online");
-    refreshPendingCount();
-  }, [refreshPendingCount]);
-
-  const handleOffline = useCallback(() => {
-    setStatus("offline");
-    refreshPendingCount();
-  }, [refreshPendingCount]);
-
-  // Listen for online/offline events
+  // Subscribe to real connectivity changes (heartbeat-based)
   useEffect(() => {
-    window.addEventListener("online", handleOnline);
-    window.addEventListener("offline", handleOffline);
+    const unsubscribe = connectivity.subscribe((newStatus) => {
+      setStatus(newStatus);
+      refreshPendingCount();
+    });
 
     // Initial check
     refreshPendingCount();
 
-    return () => {
-      window.removeEventListener("online", handleOnline);
-      window.removeEventListener("offline", handleOffline);
-    };
-  }, [handleOnline, handleOffline, refreshPendingCount]);
+    return unsubscribe;
+  }, [refreshPendingCount]);
 
   // Subscribe to sync engine status changes
   useEffect(() => {
@@ -82,7 +72,7 @@ export function useOnlineStatus(): UseOnlineStatusReturn {
 
   // Trigger a manual sync
   const syncNow = useCallback(async () => {
-    if (navigator.onLine) {
+    if (connectivity.isOnline) {
       await syncEngine.syncNow();
       await refreshPendingCount();
     }

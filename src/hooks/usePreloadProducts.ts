@@ -8,6 +8,7 @@ import { useEffect } from "react";
 import { createClient, fetchAllProducts } from "@/lib/supabase/client";
 import { getCachedProductsCount } from "@/lib/db/localDB";
 import { syncEngine } from "@/lib/sync/engine";
+import { connectivity } from "@/lib/connectivity";
 
 /**
  * Preload products into the local cache as soon as the user logs in.
@@ -30,8 +31,8 @@ export function usePreloadProducts(storeId: string | null | undefined) {
         return;
       }
 
-      // Only preload if online
-      if (!navigator.onLine) {
+      // Only preload if online (heartbeat-based)
+      if (!connectivity.isOnline) {
         console.log("[Preload] Offline, skipping preload");
         return;
       }

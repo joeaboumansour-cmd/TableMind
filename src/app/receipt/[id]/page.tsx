@@ -17,6 +17,7 @@ import {
 import { toast } from "sonner";
 import { formatCurrency, formatDateTime } from "@/lib/utils/format";
 import { usePermissionGuard } from "@/lib/auth/usePermissionGuard";
+import { connectivity } from "@/lib/connectivity";
 
 const supabase = createClient();
 
@@ -85,7 +86,7 @@ export default function ReceiptPage() {
         }
 
         // Try fetching from Supabase if online
-        if (navigator.onLine) {
+        if (connectivity.isOnline) {
           const { data: txnData, error: txnError } = await supabase
             .from("transactions")
             .select("*")

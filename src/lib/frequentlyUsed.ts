@@ -14,6 +14,7 @@
 import { createClient } from "@/lib/supabase/client";
 import { addPendingWrite, removePendingWrite, getPendingWrites } from "@/lib/db/localDB";
 import type { PendingWrite } from "@/lib/db/localDB";
+import { connectivity } from "@/lib/connectivity";
 
 const STORAGE_KEY_PREFIX = "tm_frequently_used_";
 const MAX_FREQUENTLY_USED = 12;
@@ -94,7 +95,7 @@ export function isFrequentlyUsed(storeId: string, productId: string): boolean {
  * as a pending write for later sync.
  */
 async function persistFavoriteAdd(storeId: string, productId: string): Promise<void> {
-  if (typeof window === "undefined" || !navigator.onLine) {
+  if (typeof window === "undefined" || !connectivity.isOnline) {
     await queueFavoriteWrite("favorite_add", storeId, productId);
     return;
   }
@@ -122,7 +123,7 @@ async function persistFavoriteAdd(storeId: string, productId: string): Promise<v
  * as a pending write for later sync.
  */
 async function persistFavoriteRemove(storeId: string, productId: string): Promise<void> {
-  if (typeof window === "undefined" || !navigator.onLine) {
+  if (typeof window === "undefined" || !connectivity.isOnline) {
     await queueFavoriteWrite("favorite_remove", storeId, productId);
     return;
   }
@@ -175,7 +176,7 @@ async function queueFavoriteWrite(
  * This avoids losing locally-cached favorites if the pull fails partially.
  */
 export async function syncFavoritesFromSupabase(storeId: string): Promise<void> {
-  if (typeof window === "undefined" || !navigator.onLine) return;
+  if (typeof window === "undefined" || !connectivity.isOnline) return;
 
   try {
     const supabase = createClient();

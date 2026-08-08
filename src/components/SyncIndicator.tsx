@@ -10,20 +10,18 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useEffect, useState } from "react";
 import { syncEngine } from "@/lib/sync/engine";
+import { connectivity } from "@/lib/connectivity";
 
 export function SyncIndicator({ compact = false }: { compact?: boolean }) {
-  const [isOnline, setIsOnline] = useState(
-    typeof navigator !== "undefined" ? navigator.onLine : true
-  );
+  const [isOnline, setIsOnline] = useState(connectivity.isOnline);
   const [pendingCount, setPendingCount] = useState(0);
   const [isSyncing, setIsSyncing] = useState(false);
 
   useEffect(() => {
-    const handleOnline = () => setIsOnline(true);
-    const handleOffline = () => setIsOnline(false);
-
-    window.addEventListener("online", handleOnline);
-    window.addEventListener("offline", handleOffline);
+    // Subscribe to real connectivity changes (heartbeat-based)
+    const unsubscribeConnectivity = connectivity.subscribe((status) => {
+      setIsOnline(status === "online");
+    });
 
     // Subscribe to sync engine updates
     const unsubscribe = syncEngine.subscribe((status, count) => {
@@ -32,8 +30,7 @@ export function SyncIndicator({ compact = false }: { compact?: boolean }) {
     });
 
     return () => {
-      window.removeEventListener("online", handleOnline);
-      window.removeEventListener("offline", handleOffline);
+      unsubscribeConnectivity();
       unsubscribe();
     };
   }, []);

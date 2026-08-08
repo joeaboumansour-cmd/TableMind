@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { useAuth } from "@/lib/auth/AuthContext";
 import { hasCachedCredentials, getCachedCredentials } from "@/lib/auth/offlineAuth";
+import { connectivity } from "@/lib/connectivity";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -24,10 +25,8 @@ export default function LoginPage() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
 
-  // Offline state tracking
-  const [isOffline, setIsOffline] = useState(
-    typeof navigator !== "undefined" ? !navigator.onLine : false
-  );
+  // Offline state tracking (heartbeat-based)
+  const [isOffline, setIsOffline] = useState(connectivity.isOffline);
   const [cachedStoreUsername, setCachedStoreUsername] = useState<string | null>(null);
 
   // If already logged in, redirect to POS
@@ -39,11 +38,9 @@ export default function LoginPage() {
 
   // Track online/offline status and check for cached credentials
   useEffect(() => {
-    const handleOnline = () => setIsOffline(false);
-    const handleOffline = () => setIsOffline(true);
-
-    window.addEventListener("online", handleOnline);
-    window.addEventListener("offline", handleOffline);
+    const unsubscribe = connectivity.subscribe((status) => {
+      setIsOffline(status === "offline");
+    });
 
     // Check for cached credentials
     if (hasCachedCredentials()) {
@@ -55,10 +52,7 @@ export default function LoginPage() {
       }
     }
 
-    return () => {
-      window.removeEventListener("online", handleOnline);
-      window.removeEventListener("offline", handleOffline);
-    };
+    return unsubscribe;
   }, []);
 
   // Main login handler — works for both store owners and employees
@@ -71,7 +65,7 @@ export default function LoginPage() {
     }
 
     // If offline, use cached credentials
-    if (!navigator.onLine) {
+    if (!connectivity.isOnline) {
       if (!hasCachedCredentials()) {
         toast.error("You are offline and no cached credentials are available. Please connect to the internet to log in.");
         return;

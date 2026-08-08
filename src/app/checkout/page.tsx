@@ -214,6 +214,66 @@ function CheckoutContent() {
         ...userInfo,
       };
 
+      // Build the offline queue payload up-front so we can fall back to it
+      // if the online save fails (e.g. navigator.onLine lies on desktop).
+      const { queueTransaction } = await import("@/lib/db/localDB");
+      const authDataOffline = JSON.parse(localStorage.getItem("goldensquirrel_auth") || "{}");
+      // Ensure store_id is never empty - try multiple fallbacks
+      const offlineStoreId = authDataOffline.store_id || "";
+      const offlineTxnData: any = {
+        id: crypto.randomUUID(),
+        store_id: offlineStoreId,
+        transaction_number: txnNumber,
+        subtotal: getSubtotal(),
+        total_amount: total,
+        amount_paid: totalPaid,
+        change_given: calculatedChangeGiven,
+        payment_method: "cash",
+        subtotal_usd: getSubtotalUsd(),
+        total_usd: totalUsd,
+        amount_paid_usd: paidUSD,
+        change_given_usd: calcChangeUsd,
+        items: items.map((item) => ({
+          product_id: item.product_id,
+          product_name: item.product_name,
+          quantity: item.quantity,
+          unit_price: item.unit_price,
+          total_price: item.total_price,
+          currency: item.currency,
+          unit_price_usd: item.unit_price_usd,
+          total_price_usd: item.total_price_usd,
+        })),
+        created_at: new Date().toISOString(),
+      };
+      // Add user_name for ALL users (owners included) - always set independently of user_id
+      if (currentUser && currentUser.username) {
+        offlineTxnData.user_name = currentUser.displayName || currentUser.username;
+        // Only set user_id for employees (not owners, whose ID is a store_id)
+        if (!currentUser.isOwner && currentUser.id) {
+          offlineTxnData.user_id = currentUser.id;
+        }
+      } else {
+        // Fallback: try to get user info from auth data
+        try {
+          const storedUser = JSON.parse(localStorage.getItem("goldensquirrel_user") || "{}");
+          if (storedUser.displayName) {
+            offlineTxnData.user_name = storedUser.displayName;
+          } else if (storedUser.username) {
+            offlineTxnData.user_name = storedUser.username;
+          }
+        } catch (e) {
+          // Ignore parse errors
+        }
+      }
+
+      // Queue stock decrements as pending_writes for reliable sync
+      const queueStockDecrements = () =>
+        queueStockDecrementsForTransaction(
+          items.map((item) => ({ product_id: item.product_id, quantity: item.quantity })),
+          offlineStoreId
+        );
+
+      let savedOnline = false;
       if (navigator.onLine) {
         // Online: Save directly to Supabase
         try {
@@ -231,69 +291,16 @@ function CheckoutContent() {
           if (!response.ok) {
             throw new Error("Failed to save transaction");
           }
+          savedOnline = true;
         } catch (error) {
-          console.error("Failed to save transaction online:", error);
-          toast.error("Payment processed but failed to save receipt");
+          // Fall back to offline queue so the transaction is NEVER lost.
+          console.error("Failed to save transaction online, queuing offline:", error);
         }
-      } else {
-        // Offline: Queue for later sync
-        const { queueTransaction } = await import("@/lib/db/localDB");
-        const authDataOffline = JSON.parse(localStorage.getItem("goldensquirrel_auth") || "{}");
-        // Ensure store_id is never empty - try multiple fallbacks
-        const offlineStoreId = authDataOffline.store_id || "";
-        const offlineTxnData: any = {
-          id: crypto.randomUUID(),
-          store_id: offlineStoreId,
-          transaction_number: txnNumber,
-          subtotal: getSubtotal(),
-          total_amount: total,
-          amount_paid: totalPaid,
-          change_given: calculatedChangeGiven,
-          payment_method: "cash",
-          subtotal_usd: getSubtotalUsd(),
-          total_usd: totalUsd,
-          amount_paid_usd: paidUSD,
-          change_given_usd: calcChangeUsd,
-          items: items.map((item) => ({
-            product_id: item.product_id,
-            product_name: item.product_name,
-            quantity: item.quantity,
-            unit_price: item.unit_price,
-            total_price: item.total_price,
-            currency: item.currency,
-            unit_price_usd: item.unit_price_usd,
-            total_price_usd: item.total_price_usd,
-          })),
-          created_at: new Date().toISOString(),
-        };
-        // Add user_name for ALL users (owners included) - always set independently of user_id
-        if (currentUser && currentUser.username) {
-          offlineTxnData.user_name = currentUser.displayName || currentUser.username;
-          // Only set user_id for employees (not owners, whose ID is a store_id)
-          if (!currentUser.isOwner && currentUser.id) {
-            offlineTxnData.user_id = currentUser.id;
-          }
-        } else {
-          // Fallback: try to get user info from auth data
-          try {
-            const storedUser = JSON.parse(localStorage.getItem("goldensquirrel_user") || "{}");
-            if (storedUser.displayName) {
-              offlineTxnData.user_name = storedUser.displayName;
-            } else if (storedUser.username) {
-              offlineTxnData.user_name = storedUser.username;
-            }
-          } catch (e) {
-            // Ignore parse errors
-          }
-        }
+      }
+
+      if (!savedOnline) {
         await queueTransaction(offlineTxnData);
-
-        // Queue stock decrements as pending_writes for reliable sync
-        await queueStockDecrementsForTransaction(
-          items.map((item) => ({ product_id: item.product_id, quantity: item.quantity })),
-          offlineStoreId
-        );
-
+        await queueStockDecrements();
         toast.info("Transaction saved offline - will sync when online");
       }
 

@@ -47,6 +47,7 @@ import { getFrequentlyUsedProductIds, addFrequentlyUsedProduct, removeFrequently
 import { downloadCSV, productsToCSV } from "@/lib/csv/utils";
 import { FeatureFlagGuard } from "@/lib/auth/featureGuard";
 import { fetchProductsCacheFirst } from "@/lib/supabase/client";
+import { connectivity } from "@/lib/connectivity";
 
 interface Product {
   id: string;
@@ -93,9 +94,7 @@ function StoreProductsPageContent() {
   const [highlightedProductId, setHighlightedProductId] = useState<string | null>(null);
   const [showScanSearch, setShowScanSearch] = useState(false);
   const [showImportDialog, setShowImportDialog] = useState(false);
-  const [isOffline, setIsOffline] = useState(
-    typeof navigator !== "undefined" ? !navigator.onLine : false
-  );
+  const [isOffline, setIsOffline] = useState(connectivity.isOffline);
   // O(1) barcode product index
   const [barcodeIndex, setBarcodeIndex] = useState<Map<string, Product>>(new Map());
   // Desktop mode for hardware scanner (no camera)
@@ -103,16 +102,12 @@ function StoreProductsPageContent() {
   // Force re-render when star is toggled (localStorage change)
   const [freqVersion, setFreqVersion] = useState(0);
 
-  // Track online/offline status for UI
+  // Track online/offline status for UI (heartbeat-based)
   useEffect(() => {
-    const handleOnline = () => setIsOffline(false);
-    const handleOffline = () => setIsOffline(true);
-    window.addEventListener("online", handleOnline);
-    window.addEventListener("offline", handleOffline);
-    return () => {
-      window.removeEventListener("online", handleOnline);
-      window.removeEventListener("offline", handleOffline);
-    };
+    const unsubscribe = connectivity.subscribe((status) => {
+      setIsOffline(status === "offline");
+    });
+    return unsubscribe;
   }, []);
 
   // Detect desktop mode — skip camera, use compact barcode input
@@ -273,8 +268,8 @@ function StoreProductsPageContent() {
 
   const fetchProducts = async (storeId: string) => {
     try {
-      // Check if online before attempting the query
-      if (!navigator.onLine) {
+      // Check if online before attempting the query (heartbeat-based)
+      if (!connectivity.isOnline) {
         toast.error("No internet connection. Please connect to refresh products.");
         setIsLoading(false);
         return;

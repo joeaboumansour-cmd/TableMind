@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useAuth } from "@/lib/auth/AuthContext";
 import { getDefaultFeaturesForPreset, mergeFeaturesWithDefaults } from "@/lib/features";
+import { connectivity } from "@/lib/connectivity";
 
 interface FeatureFlagsState {
   flags: Record<string, boolean>;
@@ -58,7 +59,7 @@ export function useFeatureFlags(): {
 
   // Load from database (online sync)
   const loadFromDb = useCallback(async () => {
-    if (!storeId || !navigator.onLine) return null;
+    if (!storeId || !connectivity.isOnline) return null;
 
     try {
       const response = await fetch(`/api/admin/stores/features?store_id=${storeId}`);

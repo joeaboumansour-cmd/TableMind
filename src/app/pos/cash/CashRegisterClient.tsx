@@ -33,6 +33,7 @@ import { useAuth } from "@/lib/auth/AuthContext";
 import { useFeatureFlags } from "@/hooks/useFeatureFlags";
 import { formatLL, formatUSD, formatDateTime } from "@/lib/utils/format";
 import { combineCurrencyTotals, computeExpectedDrawer, computeVariance } from "@/lib/cashShift";
+import { connectivity } from "@/lib/connectivity";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 interface CashShift {
@@ -150,7 +151,7 @@ export function CashRegisterPage() {
   // ── Load data ──────────────────────────────────────────────────────────────
   const loadData = useCallback(async () => {
     if (!user?.storeId) return;
-    if (!navigator.onLine) {
+    if (!connectivity.isOnline) {
       setIsLoading(false);
       toast.info("Offline mode — shift data may be stale");
       return;
@@ -211,7 +212,7 @@ export function CashRegisterPage() {
     setIsOpening(true);
     try {
       const headers = buildAuthHeaders(user);
-      if (!navigator.onLine) {
+      if (!connectivity.isOnline) {
         const { queueCashShiftOpen } = await import("@/lib/db/localDB");
         await queueCashShiftOpen({
           store_id: user!.storeId,
@@ -263,7 +264,7 @@ export function CashRegisterPage() {
     setIsClosing(true);
     try {
       const headers = buildAuthHeaders(user);
-      if (!navigator.onLine) {
+      if (!connectivity.isOnline) {
         const { queueCashShiftClose } = await import("@/lib/db/localDB");
         await queueCashShiftClose({
           shift_id: shift.id,
@@ -326,7 +327,7 @@ export function CashRegisterPage() {
     setIsAddingAdj(true);
     try {
       const headers = buildAuthHeaders(user);
-      if (!navigator.onLine) {
+      if (!connectivity.isOnline) {
         const { queueCashAdjustment } = await import("@/lib/db/localDB");
         await queueCashAdjustment({
           store_id: user.storeId,
