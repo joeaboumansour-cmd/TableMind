@@ -4,7 +4,8 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { CartStore, CartItem } from '@/lib/types/cart';
 import { Product } from '@/lib/types/product';
-import { convertLlToUsdForReturn, SELL_RATE } from '@/lib/utils/format';
+import { convertLlToUsdForReturn, convertUsdToLl, roundToNearest5k } from '@/lib/utils/format';
+
 
 export const useCartStore = create<CartStore>()(
   persist(
@@ -30,26 +31,29 @@ export const useCartStore = create<CartStore>()(
         let unitPriceLl: number;
 
         if (product.currency === 'USD') {
-          // If base price is USD, calculate LL by multiplying by the SELL_RATE
+          // If base price is USD, convert to LL using sell rate and round to
+          // nearest 5,000 LL (smallest physical bill denomination).
           unitPriceUsd = product.selling_price;
-          unitPriceLl = product.selling_price * SELL_RATE;
+          unitPriceLl = convertUsdToLl(product.selling_price);
         } else {
           // If base price is LL (default), calculate USD using the utility function
           unitPriceLl = product.selling_price;
           unitPriceUsd = convertLlToUsdForReturn(product.selling_price);
         }
 
-        // Calculate discount
+        // Calculate discount — round discounted LL price to nearest 5k so that
+        // every LL value in the system stays a clean multiple of 5,000.
         const discountPercentage = product.discount_percentage || 0;
         let discountedUnitPriceLl = unitPriceLl;
         let discountedUnitPriceUsd = unitPriceUsd;
 
         if (discountPercentage > 0) {
-          discountedUnitPriceLl = unitPriceLl * (1 - discountPercentage / 100);
+          discountedUnitPriceLl = roundToNearest5k(unitPriceLl * (1 - discountPercentage / 100));
           discountedUnitPriceUsd = unitPriceUsd * (1 - discountPercentage / 100);
         }
 
-        const unitPriceDiscountAmount = unitPriceLl - discountedUnitPriceLl;
+        const unitPriceDiscountAmount = roundToNearest5k(unitPriceLl - discountedUnitPriceLl);
+
 
         // Add new item at the top of the cart
         const newItem: CartItem = {

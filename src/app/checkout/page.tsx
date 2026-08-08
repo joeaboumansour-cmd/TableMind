@@ -16,29 +16,12 @@ import {
   ChevronDown,
   ChevronUp,
   X,
-  Banknote,
 } from "lucide-react";
 import { useCartStore } from "@/lib/stores/cartStore";
 import { queueStockDecrementsForTransaction } from "@/lib/db";
 import { toast } from "sonner";
-import { formatLL, formatUSD, SELL_RATE, RETURN_RATE } from "@/lib/utils/format";
+import { formatLL, formatUSD, SELL_RATE, RETURN_RATE, convertUsdToLlForReturn } from "@/lib/utils/format";
 
-// ── Common bill / coin denominations ──
-const LL_DENOMINATIONS = [
-  { label: "5K", value: 5000 },
-  { label: "10K", value: 10000 },
-  { label: "20K", value: 20000 },
-  { label: "50K", value: 50000 },
-  { label: "100K", value: 100000 },
-];
-const USD_DENOMINATIONS = [
-  { label: "$1", value: 1 },
-  { label: "$5", value: 5 },
-  { label: "$10", value: 10 },
-  { label: "$20", value: 20 },
-  { label: "$50", value: 50 },
-  { label: "$100", value: 100 },
-];
 
 function CheckoutContent() {
   const router = useRouter();
@@ -70,10 +53,13 @@ function CheckoutContent() {
   const totalUsd = getTotalUsd();
 
   // Calculate total paid - combine both currencies
-  // USD is valued at RETURN_RATE (89,000) so the store wins on incoming USD
+  // USD is valued at RETURN_RATE (89,000) so the store wins on incoming USD.
+  // The LL-equivalent of USD payments is rounded to the nearest 5,000 so that
+  // every totalPaid value is a clean multiple of 5,000 LL.
   const paidLL = parseFloat(amountPaidLL) || 0;
   const paidUSD = parseFloat(amountPaidUSD) || 0;
-  const totalPaid = paidLL + (paidUSD * RETURN_RATE);
+  const totalPaid = paidLL + convertUsdToLlForReturn(paidUSD);
+
 
   // Balance calculation
   const difference = totalPaid - total;
@@ -118,19 +104,6 @@ function CheckoutContent() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [paidLL, paidUSD]);
-
-  // ── Bill denomination buttons — repeatedly click to keep adding ──
-  // Cashiers correct mistakes by editing the text field directly
-  const handleQuickLL = (amount: number) => {
-    const current = parseFloat(amountPaidLL) || 0;
-    setAmountPaidLL(String(current + amount));
-  };
-
-  const handleQuickUSD = (amount: number) => {
-    const current = parseFloat(amountPaidUSD) || 0;
-    const newValue = current + amount;
-    setAmountPaidUSD(newValue % 1 === 0 ? String(newValue) : newValue.toFixed(2));
-  };
 
   // ── Clear all payment fields ──
   const handleClear = () => {
@@ -409,12 +382,11 @@ function CheckoutContent() {
               </div>
             </CardHeader>
             <CardContent className="space-y-4">
-              {/* Amount Received Inputs — full width so cashiers can see the entire number */}
+              {/* Amount Received Inputs */}
               <div className="grid grid-cols-2 gap-4">
                 {/* LL Input */}
                 <div>
-                  <Label htmlFor="amountLL" className="flex items-center gap-1">
-                    <Banknote className="h-4 w-4" />
+                  <Label htmlFor="amountLL">
                     Amount Received (LL)
                   </Label>
                   <Input
@@ -432,8 +404,7 @@ function CheckoutContent() {
 
                 {/* USD Input */}
                 <div>
-                  <Label htmlFor="amountUSD" className="flex items-center gap-1">
-                    <Banknote className="h-4 w-4" />
+                  <Label htmlFor="amountUSD">
                     Amount Received (USD)
                   </Label>
                   <Input
@@ -446,70 +417,6 @@ function CheckoutContent() {
                     className="text-lg mt-1"
                     placeholder="0"
                   />
-                </div>
-              </div>
-
-              {/* ── Bill denomination buttons (LL) ── */}
-              <div className="space-y-2.5">
-                <div className="flex items-center gap-2">
-                  <Banknote className="h-4 w-4 text-muted-foreground" />
-                  <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                    Lebanese Pounds
-                  </span>
-                </div>
-                <div className="grid grid-cols-5 gap-2">
-                  {LL_DENOMINATIONS.map((denom) => {
-                    const current = parseFloat(amountPaidLL) || 0;
-                    const isActive = current === denom.value;
-                    return (
-                      <Button
-                        key={denom.value}
-                        variant="default"
-                        size="sm"
-                        className={`text-xs font-bold py-3 h-auto transition-all ${
-                          isActive
-                            ? "bg-green-600 hover:bg-green-700 active:scale-95 ring-2 ring-primary ring-offset-2"
-                            : "bg-green-600 hover:bg-green-700 active:scale-95"
-                        }`}
-                        onClick={() => handleQuickLL(denom.value)}
-                        title={`Add ${formatLL(denom.value)}`}
-                      >
-                        {denom.label}
-                      </Button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* ── Bill denomination buttons (USD) ── */}
-              <div className="space-y-2.5">
-                <div className="flex items-center gap-2">
-                  <Banknote className="h-4 w-4 text-muted-foreground" />
-                  <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                    US Dollars
-                  </span>
-                </div>
-                <div className="grid grid-cols-6 gap-2">
-                  {USD_DENOMINATIONS.map((denom) => {
-                    const current = parseFloat(amountPaidUSD) || 0;
-                    const isActive = current === denom.value;
-                    return (
-                      <Button
-                        key={denom.value}
-                        variant="default"
-                        size="sm"
-                        className={`text-xs font-bold py-3 h-auto transition-all ${
-                          isActive
-                            ? "bg-blue-600 hover:bg-blue-700 active:scale-95 ring-2 ring-primary ring-offset-2"
-                            : "bg-blue-600 hover:bg-blue-700 active:scale-95"
-                        }`}
-                        onClick={() => handleQuickUSD(denom.value)}
-                        title={`Add ${formatUSD(denom.value)}`}
-                      >
-                        {denom.label}
-                      </Button>
-                    );
-                  })}
                 </div>
               </div>
 
@@ -662,8 +569,7 @@ function CheckoutContent() {
               <>
                 {isChangeDue ? (
                   <div className="mb-3 p-3 bg-green-500/10 rounded-lg">
-                    <div className="text-green-600 font-semibold mb-1 flex items-center gap-2">
-                      <Banknote className="h-4 w-4" />
+                    <div className="text-green-600 font-semibold mb-1">
                       Change Due
                     </div>
                     <div className="flex items-center justify-between gap-2">
@@ -682,8 +588,7 @@ function CheckoutContent() {
                   </div>
                 ) : displayChangeLL > 0 ? (
                   <div className="mb-3 p-3 bg-amber-500/10 rounded-lg">
-                    <div className="text-amber-600 font-medium mb-1 flex items-center gap-2">
-                      <Banknote className="h-4 w-4" />
+                    <div className="text-amber-600 font-medium mb-1">
                       Remaining Due
                     </div>
                     <div className="flex justify-between items-center">

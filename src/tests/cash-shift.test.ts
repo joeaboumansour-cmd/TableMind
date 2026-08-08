@@ -4,12 +4,74 @@ import {
   computeExpectedDrawer,
   computeVariance,
 } from "../lib/cashShift";
-import { SELL_RATE } from "../lib/utils/format";
+import {
+  SELL_RATE,
+  LL_ROUND_UNIT,
+  roundToNearest5k,
+  convertUsdToLl,
+  convertUsdToLlForReturn,
+} from "../lib/utils/format";
 
 describe("Cash Register - Drawer Math", () => {
+  describe("roundToNearest5k", () => {
+    it("rounds 186,300 down to 185,000 (example: $2.07 × 90,000)", () => {
+      expect(roundToNearest5k(186300)).toBe(185000);
+    });
+
+    it("rounds 209,200 up to 210,000", () => {
+      expect(roundToNearest5k(209200)).toBe(210000);
+    });
+
+    it("rounds exact multiples of 5k to themselves", () => {
+      expect(roundToNearest5k(0)).toBe(0);
+      expect(roundToNearest5k(5000)).toBe(5000);
+      expect(roundToNearest5k(100000)).toBe(100000);
+      expect(roundToNearest5k(185000)).toBe(185000);
+    });
+
+    it("rounds 2,499 down to 0 and 2,500 up to 5,000", () => {
+      expect(roundToNearest5k(2499)).toBe(0);
+      expect(roundToNearest5k(2500)).toBe(5000);
+    });
+
+    it("exports the correct round unit constant", () => {
+      expect(LL_ROUND_UNIT).toBe(5000);
+    });
+  });
+
+  describe("convertUsdToLl", () => {
+    it("converts $2.07 to 185,000 LL (rounded from 186,300)", () => {
+      expect(convertUsdToLl(2.07)).toBe(185000);
+    });
+
+    it("converts whole-dollar amounts that are already multiples of 5k", () => {
+      expect(convertUsdToLl(1)).toBe(90000);
+      expect(convertUsdToLl(2)).toBe(180000);
+    });
+  });
+
+  describe("convertUsdToLlForReturn", () => {
+    it("converts at RETURN_RATE (89,000) and rounds to nearest 5k", () => {
+      // $2.07 × 89,000 = 184,230 → rounded to 185,000
+      expect(convertUsdToLlForReturn(2.07)).toBe(185000);
+    });
+
+    it("converts whole-dollar amounts", () => {
+      // $1 × 89,000 = 89,000 → rounds up to 90,000 (nearest 5k)
+      expect(convertUsdToLlForReturn(1)).toBe(90000);
+      // $2 × 89,000 = 178,000 → already a multiple of 5k
+      expect(convertUsdToLlForReturn(2)).toBe(180000);
+    });
+  });
+
   describe("combineCurrencyTotals", () => {
     it("combines LL and USD into LL-equivalent using SELL_RATE", () => {
       expect(combineCurrencyTotals(100000, 1)).toBe(100000 + SELL_RATE);
+    });
+
+    it("rounds the USD→LL contribution to nearest 5k", () => {
+      // 2.07 USD × 90,000 = 186,300 → rounded to 185,000
+      expect(combineCurrencyTotals(0, 2.07)).toBe(185000);
     });
 
     it("handles zero values", () => {

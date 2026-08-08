@@ -927,7 +927,7 @@ const filteredProducts = products.filter(
                       {currency === 'LL' ? (
                         <>Calculated: {formatLL(parseFloat(sellingPrice) || 0)} ≈ {formatUSD((parseFloat(sellingPrice) || 0) / RETURN_RATE)}</>
                       ) : (
-                        <>Calculated: {formatUSD(parseFloat(sellingPrice) || 0)} ≈ {formatLL((parseFloat(sellingPrice) || 0) * SELL_RATE)}</>
+                        <>Calculated: {formatUSD(parseFloat(sellingPrice) || 0)} ≈ {formatLL(convertUsdToLl(parseFloat(sellingPrice) || 0))}</>
                       )}
                     </p>
                   </div>
@@ -1076,9 +1076,9 @@ const filteredProducts = products.filter(
                                   <span>Sell: {formatLL(product.selling_price)}</span>
                                 </div>
                                 <div className="flex items-center justify-center gap-3 text-[12px]">
-                                  <span>Cost: {formatUSD(product.cost_price / RETURN_RATE)}</span>
+                                  <span>Cost: {formatLL(convertUsdToLl(product.cost_price))}</span>
                                   <span>•</span>
-                                  <span>Sell: {formatUSD(product.selling_price / RETURN_RATE)}</span>
+                                  <span>Sell: {formatLL(convertUsdToLl(product.selling_price))}</span>
                                 </div>
                               </>
                             ) : (
@@ -1089,9 +1089,10 @@ const filteredProducts = products.filter(
                                   <span>Sell: {formatUSD(product.selling_price)}</span>
                                 </div>
                                 <div className="flex items-center justify-center gap-3 text-[12px]">
-                                  <span>Cost: {formatLL(product.cost_price * SELL_RATE)}</span>
+                                  <span>Cost: {formatLL(convertUsdToLl(product.cost_price))}</span>
                                   <span>•</span>
-                                  <span>Sell: {formatLL(product.selling_price * SELL_RATE)}</span>
+                                  <span>Sell: {formatLL(convertUsdToLl(product.selling_price))}</span>
+
                                 </div>
                               </>
                             )}

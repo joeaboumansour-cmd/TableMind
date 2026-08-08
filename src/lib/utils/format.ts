@@ -13,10 +13,43 @@ export const SELL_RATE = 90000;
 export const RETURN_RATE = 89000;
 
 /**
- * Convert USD to Lebanese Pounds (uses sell rate)
+ * The smallest physical LL bill denomination.
+ * All LL amounts in the system (prices, totals, change, revenue) must be
+ * multiples of this value because there are no 1,000 / 250 / 500 LL bills.
+ */
+export const LL_ROUND_UNIT = 5000;
+
+/**
+ * Round a Lebanese Pound amount to the nearest 5,000 LL.
+ *
+ * Rationale: Lebanon no longer has bills smaller than 5,000 LL, so every
+ * LL value that enters the system must be a multiple of 5,000.
+ *
+ * Example: 186,300 → 185,000 | 209,200 → 210,000
+ */
+export function roundToNearest5k(amount: number): number {
+  return Math.round(amount / LL_ROUND_UNIT) * LL_ROUND_UNIT;
+}
+
+/**
+ * Convert USD to Lebanese Pounds (uses sell rate) and round to nearest 5k.
+ *
+ * This is the canonical conversion for product prices: a product priced at
+ * $2.07 on the 90,000 sell rate produces 186,300 LL → rounded to 185,000 LL.
+ * The original USD value ($2.07) is always preserved; only the LL equivalent
+ * is rounded.
  */
 export function convertUsdToLl(usdAmount: number): number {
-  return Math.round(usdAmount * SELL_RATE);
+  return roundToNearest5k(usdAmount * SELL_RATE);
+}
+
+/**
+ * Convert USD to Lebanese Pounds using the RETURN_RATE (89,000) and round to
+ * nearest 5k.  Used when a customer pays in USD — the LL-equivalent of their
+ * payment is rounded so that change is always a multiple of 5,000.
+ */
+export function convertUsdToLlForReturn(usdAmount: number): number {
+  return roundToNearest5k(usdAmount * RETURN_RATE);
 }
 
 /**

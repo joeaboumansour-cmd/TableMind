@@ -4,7 +4,7 @@ import React, { useState, useRef, useEffect, useCallback, useMemo } from "react"
 import { Input } from "@/components/ui/input";
 import { Search, X } from "lucide-react";
 import { Product } from "@/lib/types/product";
-import { formatLL, formatUSD, convertLlToUsdForReturn } from "@/lib/utils/format";
+import { formatLL, formatUSD, convertLlToUsdForReturn, convertUsdToLl } from "@/lib/utils/format";
 import { cn } from "@/lib/utils";
 
 interface ProductSearchBarProps {
@@ -264,7 +264,8 @@ export default function ProductSearchBar({
                       activeIndex === index ? "text-amber-800 dark:text-amber-100" : "text-muted-foreground"
                     )}>
                       {product.currency === "USD"
-                        ? formatLL(product.selling_price * 90000)
+                        ? formatLL(convertUsdToLl(product.selling_price))
+
                         : formatUSD(convertLlToUsdForReturn(product.selling_price))}
                     </p>
                   </div>

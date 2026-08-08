@@ -1,15 +1,15 @@
-// =============================================
 // Cash Register - Drawer Math (shared utility)
 // Single source of truth for expected drawer and variance
-// =============================================
-import { SELL_RATE } from "./utils/format";
+import { SELL_RATE, roundToNearest5k } from "./utils/format";
 
 /**
  * Combine LL and USD amounts into a single LL-equivalent total.
  * USD is converted at the store's SELL_RATE.
+ * The USD→LL conversion is rounded to the nearest 5,000 LL so that all
+ * cash-register totals stay on real bill denominations.
  */
 export function combineCurrencyTotals(ll: number, usd: number): number {
-  return (ll || 0) + (usd || 0) * SELL_RATE;
+  return (ll || 0) + roundToNearest5k((usd || 0) * SELL_RATE);
 }
 
 /**
