@@ -35,7 +35,7 @@ import {
 import { useCartStore } from "@/lib/stores/cartStore";
 import { useAuth } from "@/lib/auth/AuthContext";
 import { Product } from "@/lib/types/product";
-import { toast } from "sonner";
+import { useToastManager } from "@/hooks/useToastManager";
 import { formatCurrency, formatLL, convertUsdToLl, formatUSD, convertLlToUsd, convertLlToUsdForSale, convertLlToUsdForReturn, SELL_RATE, RETURN_RATE } from "@/lib/utils/format";
 import BarcodeScanner, { playSuccessSound } from "@/components/BarcodeScanner";
 import ProductSearchBar from "@/components/ProductSearchBar";
@@ -88,6 +88,8 @@ export default function POSPage() {
   // Quick end transaction state
   const [isQuickEndDialogOpen, setIsQuickEndDialogOpen] = useState(false);
   const [isQuickEndProcessing, setIsQuickEndProcessing] = useState(false);
+
+  const { toast } = useToastManager({ throttleMs: 1200 });
 
   const {
     items,
@@ -385,7 +387,7 @@ export default function POSPage() {
     }
 
     try {
-      toast.loading("Verifying barcode...", { id: "scan-fallback" });
+      toast.loading("Verifying barcode...", { key: "scan-fallback" });
 
       // Use a fresh client to ensure latest restaurant header
       const liveClient = createClient();

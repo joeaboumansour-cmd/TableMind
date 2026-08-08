@@ -29,7 +29,6 @@ import {
    ArrowLeft,
    Search,
    Scan,
-   Info,
    X,
    Download,
    Upload,
@@ -83,17 +82,15 @@ function StoreProductsPageContent() {
   const [products, setProducts] = useState<Product[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [showImportDialog, setShowImportDialog] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const searchTimerRef = useRef<NodeJS.Timeout | null>(null);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [showBarcodeScanner, setShowBarcodeScanner] = useState(false);
-  const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
-  const [showInfoDialog, setShowInfoDialog] = useState(false);
   const [highlightedProductId, setHighlightedProductId] = useState<string | null>(null);
   const [showScanSearch, setShowScanSearch] = useState(false);
-  const [showImportDialog, setShowImportDialog] = useState(false);
   const [isOffline, setIsOffline] = useState(connectivity.isOffline);
   // O(1) barcode product index
   const [barcodeIndex, setBarcodeIndex] = useState<Map<string, Product>>(new Map());
@@ -126,7 +123,7 @@ function StoreProductsPageContent() {
   const [discountPercentage, setDiscountPercentage] = useState("");
   const [sellingPrice, setSellingPrice] = useState("");
   const [stockQuantity, setStockQuantity] = useState("");
-  const [minStockThreshold, setMinStockThreshold] = useState("5");
+  const [minStockThreshold, setMinStockThreshold] = useState("0");
 
   // Product discount
   const [discountEnabled, setDiscountEnabled] = useState(false);
@@ -283,14 +280,6 @@ function StoreProductsPageContent() {
       });
 
       setProducts(data || []);
-      
-      // Update selected product if it exists in the new data
-      if (selectedProduct && data) {
-        const updatedProduct = data.find((p: Product) => p.id === selectedProduct.id);
-        if (updatedProduct) {
-          setSelectedProduct(updatedProduct);
-        }
-      }
     } catch (error: any) {
       console.error("Error fetching products:", error);
       // Show a more helpful error message
@@ -322,7 +311,7 @@ function StoreProductsPageContent() {
 
       const discount = parseFloat(discountPercentage) || 0;
       const stockQty = parseInt(stockQuantity) || 0;
-      const minStock = parseInt(minStockThreshold) || 5;
+      const minStock = parseInt(minStockThreshold) || 0;
 
       if (editingProduct) {
         // Update existing product
@@ -457,7 +446,7 @@ function StoreProductsPageContent() {
     setDiscountPercentage("");
     setSellingPrice("");
     setStockQuantity("");
-    setMinStockThreshold("5");
+    setMinStockThreshold("0");
     setEditingProduct(null);
     setLastUpdated('cost');
   };
@@ -737,8 +726,18 @@ const filteredProducts = products.filter(
               placeholder="Search products..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-10 h-10 md:h-9"
+              className="pl-10 pr-10 h-10 md:h-9"
             />
+            {searchQuery && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setSearchQuery("")}
+                className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7 p-0 bg-muted/80 hover:bg-muted text-foreground rounded-full"
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            )}
           </div>
           <Button variant="outline" size="sm" onClick={() => setShowScanSearch(true)} className="h-9 px-3">
             <Scan className="h-4 w-4" />
@@ -973,7 +972,7 @@ const filteredProducts = products.filter(
                         <Input
                           id="minStockThreshold"
                           type="number"
-                          placeholder="5"
+                          placeholder="0"
                           value={minStockThreshold}
                           onChange={(e) => setMinStockThreshold(e.target.value)}
                           className="h-9"
@@ -1140,17 +1139,6 @@ const filteredProducts = products.filter(
                           <Button
                             variant="ghost"
                             size="sm"
-                            onClick={() => {
-                              setSelectedProduct(product);
-                              setShowInfoDialog(true);
-                            }}
-                            className="h-8 w-8 p-0"
-                          >
-                            <Info className="h-4 w-4 text-blue-500" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
                             onClick={() => handleEditProduct(product)}
                             className="h-8 w-8 p-0"
                             disabled={isOffline}
@@ -1177,69 +1165,6 @@ const filteredProducts = products.filter(
         </div>
       </div>
 
-      {/* Product Info Dialog */}
-      <Dialog open={showInfoDialog} onOpenChange={setShowInfoDialog}>
-        <DialogContent className="max-w-sm mx-4">
-          <DialogHeader>
-            <DialogTitle className="text-lg">Product Details</DialogTitle>
-          </DialogHeader>
-          {selectedProduct && (
-            <div className="space-y-3 py-4">
-              <div>
-                <Label className="text-xs text-muted-foreground">Name</Label>
-                <p className="font-medium">{selectedProduct.name}</p>
-              </div>
-              {selectedProduct.barcode && (
-                <div>
-                  <Label className="text-xs text-muted-foreground">Barcode</Label>
-                  <p className="font-mono text-sm">{selectedProduct.barcode}</p>
-                </div>
-              )}
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <Label className="text-xs text-muted-foreground">Cost Price</Label>
-                  <p className="font-medium">{formatLL(selectedProduct.cost_price)}</p>
-                </div>
-                <div>
-                  <Label className="text-xs text-muted-foreground">Selling Price</Label>
-                  <p className="font-medium">{formatLL(selectedProduct.selling_price)}</p>
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <Label className="text-xs text-muted-foreground">Profit</Label>
-                  <p className="font-medium">{selectedProduct.profit_percentage.toFixed(1)}%</p>
-                </div>
-                <div>
-                  <Label className="text-xs text-muted-foreground">Discount</Label>
-                  <p className="font-medium">{selectedProduct.discount_percentage > 0 ? `${selectedProduct.discount_percentage}% OFF` : "None"}</p>
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <Label className="text-xs text-muted-foreground">Stock</Label>
-                  <p className="font-medium">{selectedProduct.stock_quantity}</p>
-                </div>
-                <div>
-                  <Label className="text-xs text-muted-foreground">Min Stock Alert</Label>
-                  <p className="font-medium">{selectedProduct.min_stock_threshold}</p>
-                </div>
-              </div>
-              <div>
-                <Label className="text-xs text-muted-foreground">Added</Label>
-                <p className="text-sm text-muted-foreground">
-                  {new Date(selectedProduct.created_at).toLocaleDateString()}
-                </p>
-              </div>
-            </div>
-          )}
-          <DialogFooter>
-            <Button variant="outline" size="sm" onClick={() => setShowInfoDialog(false)}>
-              Close
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
 
       {/* Scan Search Dialog */}
       {showScanSearch && (
