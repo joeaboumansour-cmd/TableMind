@@ -124,10 +124,11 @@ function isCacheFresh(): boolean {
 export async function fetchProductsCacheFirst(
   supabase: ReturnType<typeof createBrowserClient>,
   storeId: string,
-  onCacheHit?: (products: any[]) => void
+  onCacheHit?: (products: any[]) => void,
+  forceRefresh = false
 ): Promise<any[]> {
   // 1. Try cache first (instant, no network)
-  if (typeof window !== "undefined") {
+  if (typeof window !== "undefined" && !forceRefresh) {
     try {
       const { getCachedProducts } = await import("@/lib/db/localDB");
       const cached = await getCachedProducts(storeId);

@@ -263,7 +263,7 @@ function StoreProductsPageContent() {
     setBarcodeIndex(index);
   }, [products]);
 
-  const fetchProducts = async (storeId: string) => {
+  const fetchProducts = async (storeId: string, forceRefresh = false) => {
     try {
       // Check if online before attempting the query (heartbeat-based)
       if (!connectivity.isOnline) {
@@ -272,12 +272,14 @@ function StoreProductsPageContent() {
         return;
       }
 
-      // Cache-first: render instantly from IndexedDB, then refresh in background
+      // Cache-first: render instantly from IndexedDB, then refresh in background.
+      // When forceRefresh is true (after a write), bypass the freshness check
+      // so the UI always reflects the latest data from Supabase.
       const data = await fetchProductsCacheFirst(supabase, storeId, (cached) => {
         // onCacheHit: render stale cache immediately for instant perceived load
         setProducts(cached as Product[]);
         setIsLoading(false);
-      });
+      }, forceRefresh);
 
       setProducts(data || []);
     } catch (error: any) {
@@ -389,7 +391,10 @@ function StoreProductsPageContent() {
 
       setIsDialogOpen(false);
       resetForm();
-      fetchProducts(storeId);
+      // Invalidate the cache freshness timestamp so the next fetch
+      // doesn't skip the network call, then force a fresh refresh.
+      try { localStorage.removeItem('products_last_sync'); } catch {}
+      fetchProducts(storeId, true);
     } catch (error: any) {
       console.error("Error saving product:", error);
       if (error.code === "23505") {
@@ -430,7 +435,10 @@ function StoreProductsPageContent() {
       if (error) throw error;
 
       toast.success(`Product "${productName}" deleted`);
-      fetchProducts(storeId);
+      // Invalidate the cache freshness timestamp and force a fresh refresh
+      // so the deleted product disappears from the UI immediately.
+      try { localStorage.removeItem('products_last_sync'); } catch {}
+      fetchProducts(storeId, true);
     } catch (error) {
       console.error("Error deleting product:", error);
       toast.error("Failed to delete product");
@@ -1237,7 +1245,10 @@ const filteredProducts = products.filter(
         onOpenChange={setShowImportDialog}
         storeId={storeId}
         onImportComplete={() => {
-          fetchProducts(storeId);
+          // Invalidate the cache freshness timestamp and force a fresh refresh
+          // so imported products appear immediately.
+          try { localStorage.removeItem('products_last_sync'); } catch {}
+          fetchProducts(storeId, true);
           setShowImportDialog(false);
         }}
       />
