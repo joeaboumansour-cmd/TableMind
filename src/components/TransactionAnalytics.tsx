@@ -10,8 +10,8 @@ import { DayOfWeekChart } from "@/components/charts/DayOfWeekChart";
 import { SlowMovingProducts } from "@/components/SlowMovingProducts";
 import {
   formatLL,
-  formatUSD,
   formatPercent,
+  convertLlToUsdForSale,
 } from "@/lib/utils/format";
 import { toast } from "sonner";
 
@@ -50,9 +50,6 @@ interface AnalyticsData {
     lastSold: string;
     daysSinceLastSale: number;
   }>;
-  whatsappDeliveryRate: number;
-  transactionsWithUser: number;
-  anonymousTransactions: number;
 }
 
 interface TransactionAnalyticsProps {
@@ -166,7 +163,7 @@ export function TransactionAnalytics({
                   {formatLL(analytics.summary.totalRevenue)}
                 </div>
                 <p className="text-xs text-muted-foreground mt-1">
-                  {formatUSD(analytics.summary.totalRevenue)} USD
+                  ${convertLlToUsdForSale(analytics.summary.totalRevenue).toFixed(2)} USD
                 </p>
               </CardContent>
             </Card>
@@ -219,42 +216,6 @@ export function TransactionAnalytics({
                 <div className="text-2xl font-bold">
                   {analytics.summary.totalItemsSold}
                 </div>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-muted-foreground">
-                  WhatsApp Delivery
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">
-                  {formatPercent(analytics.whatsappDeliveryRate)}
-                </div>
-                <p className="text-xs text-muted-foreground mt-1">
-                  {Math.round(
-                    (analytics.whatsappDeliveryRate / 100) *
-                      analytics.summary.totalTransactions
-                  )}
-                  {" receipts sent"}
-                </p>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-muted-foreground">
-                  Staff Activity
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">
-                  {analytics.transactionsWithUser}
-                </div>
-                <p className="text-xs text-muted-foreground mt-1">
-                  {analytics.anonymousTransactions} anonymous
-                </p>
               </CardContent>
             </Card>
           </div>

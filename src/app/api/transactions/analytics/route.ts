@@ -1,5 +1,6 @@
 import { createServiceRoleClient } from "@/lib/supabase/server";
 import { NextResponse } from "next/server";
+import { convertUsdToLl } from "@/lib/utils/format";
 
 interface AnalyticsResponse {
   summary: {
@@ -36,9 +37,6 @@ interface AnalyticsResponse {
     lastSold: string;
     daysSinceLastSale: number;
   }>;
-  whatsappDeliveryRate: number;
-  transactionsWithUser: number;
-  anonymousTransactions: number;
 }
 
 function getCutoffDate(filter: string): Date | null {
@@ -95,8 +93,6 @@ export async function GET(request: Request) {
         total_amount,
         subtotal,
         created_at,
-        whatsapp_sent_to,
-        user_name,
         transaction_items (
           product_name,
           quantity,
@@ -127,8 +123,6 @@ export async function GET(request: Request) {
     let totalItemsSold = 0;
     const productStats: Record<string, { quantity: number; revenue: number }> = {};
     const productLastSold: Record<string, string> = {};
-    let whatsappSentCount = 0;
-    let withUserCount = 0;
 
     // Time-based analytics
     const hourlyStats: Record<number, { revenue: number; transactions: number }> = {};
@@ -142,18 +136,30 @@ export async function GET(request: Request) {
       });
     });
 
-    // Fetch current cost prices for products
+    // Fetch current cost prices for products.
+    // NOTE: `cost_price` is stored in the product's own `currency` (USD or LL).
+    // Transaction amounts (total_amount / unit_price) are ALWAYS stored in LL,
+    // so a USD-denominated cost_price must be converted to LL before it is
+    // subtracted from LL revenue — otherwise the tiny USD cost is dwarfed by
+    // the large LL revenue and profit erroneously ≈ revenue.
     let costPriceMap: Record<string, number> = {};
     if (productIds.size > 0) {
       const { data: products } = await supabase
         .from("products")
-        .select("id, cost_price")
+        .select("id, cost_price, currency")
         .eq("store_id", store_id)
         .in("id", Array.from(productIds));
 
       if (products) {
         products.forEach((p) => {
-          costPriceMap[p.id] = p.cost_price || 0;
+          let cost = p.cost_price || 0;
+          // Convert USD cost to LL using the same sell rate (90,000) the cart
+          // store uses when turning a USD selling_price into LL. This keeps
+          // cost and revenue in the same currency (LL).
+          if (p.currency === 'USD') {
+            cost = convertUsdToLl(cost);
+          }
+          costPriceMap[p.id] = cost;
         });
       }
     }
@@ -201,9 +207,6 @@ export async function GET(request: Request) {
           productLastSold[name] = t.created_at;
         }
       });
-
-      if (t.whatsapp_sent_to) whatsappSentCount++;
-      if (t.user_name) withUserCount++;
     });
 
     const totalTransactions = txns.length;
@@ -278,9 +281,6 @@ export async function GET(request: Request) {
       hourlySales,
       dayOfWeekSales,
       slowMovingProducts,
-      whatsappDeliveryRate: totalTransactions > 0 ? (whatsappSentCount / totalTransactions) * 100 : 0,
-      transactionsWithUser: withUserCount,
-      anonymousTransactions: totalTransactions - withUserCount,
     };
 
     return NextResponse.json(response);
