@@ -47,6 +47,7 @@ export interface CartActions {
   getSubtotalUsd: () => number;
   getTotal: () => number;
   getTotalUsd: () => number;
+  getRoundingAdjustment: () => number;
   getTotalDiscount: () => number;
   getTotalDiscountUsd: () => number;
   getTotalOriginal: () => number;

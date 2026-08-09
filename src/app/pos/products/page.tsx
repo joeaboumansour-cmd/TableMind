@@ -38,7 +38,7 @@ import {
  import { toast } from "sonner";
 import { useAuth } from "@/lib/auth/AuthContext";
 import { PermissionGuard } from "@/lib/auth/guards";
-import { formatLL, formatUSD, convertUsdToLl, convertLlToUsdForSale, SELL_RATE, RETURN_RATE, convertLlToUsdForReturn } from "@/lib/utils/format";
+import { formatLL, formatUSD, convertLlToUsdForSale, SELL_RATE, RETURN_RATE, convertLlToUsdForReturn } from "@/lib/utils/format";
 import BarcodeScanner, { playSuccessSound } from "@/components/BarcodeScanner";
 import { isDesktop } from "@/lib/device";
 import CSVImportDialog from "@/components/CSVImportDialog";
@@ -934,7 +934,7 @@ const filteredProducts = products.filter(
                       {currency === 'LL' ? (
                         <>Calculated: {formatLL(parseFloat(sellingPrice) || 0)} ≈ {formatUSD((parseFloat(sellingPrice) || 0) / RETURN_RATE)}</>
                       ) : (
-                        <>Calculated: {formatUSD(parseFloat(sellingPrice) || 0)} ≈ {formatLL(convertUsdToLl(parseFloat(sellingPrice) || 0))}</>
+                          <>Calculated: {formatUSD(parseFloat(sellingPrice) || 0)} ≈ {formatLL((parseFloat(sellingPrice) || 0) * SELL_RATE)}</>
                       )}
                     </p>
                   </div>
@@ -1083,9 +1083,9 @@ const filteredProducts = products.filter(
                                   <span>Sell: {formatLL(product.selling_price)}</span>
                                 </div>
                                 <div className="flex items-center justify-center gap-3 text-[12px]">
-                                  <span>Cost: {formatLL(convertUsdToLl(product.cost_price))}</span>
+                                  <span>Cost: {formatUSD(product.cost_price / RETURN_RATE)}</span>
                                   <span>•</span>
-                                  <span>Sell: {formatLL(convertUsdToLl(product.selling_price))}</span>
+                                  <span>Sell: {formatUSD(product.selling_price / RETURN_RATE)}</span>
                                 </div>
                               </>
                             ) : (
@@ -1096,10 +1096,9 @@ const filteredProducts = products.filter(
                                   <span>Sell: {formatUSD(product.selling_price)}</span>
                                 </div>
                                 <div className="flex items-center justify-center gap-3 text-[12px]">
-                                  <span>Cost: {formatLL(convertUsdToLl(product.cost_price))}</span>
+                                  <span>Cost: {formatLL(product.cost_price * SELL_RATE)}</span>
                                   <span>•</span>
-                                  <span>Sell: {formatLL(convertUsdToLl(product.selling_price))}</span>
-
+                                  <span>Sell: {formatLL(product.selling_price * SELL_RATE)}</span>
                                 </div>
                               </>
                             )}

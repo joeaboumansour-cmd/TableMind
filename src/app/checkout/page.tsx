@@ -46,11 +46,13 @@ function CheckoutContent() {
     getTotalUsd,
     getTotalDiscount,
     getTotalOriginal,
+    getRoundingAdjustment,
     clearCart,
   } = useCartStore();
 
   const total = getTotal();
   const totalUsd = getTotalUsd();
+  const roundingAdjustment = getRoundingAdjustment();
 
   // Calculate total paid - combine both currencies
   // USD is valued at RETURN_RATE (89,000) so the store wins on incoming USD.
@@ -539,6 +541,15 @@ function CheckoutContent() {
                           <span>-{formatLL(getTotalDiscount())}</span>
                         </div>
                       </>
+                    )}
+                    {/* Show rounding adjustment if any (rounded to nearest 5k) */}
+                    {roundingAdjustment !== 0 && (
+                      <div className="flex justify-between text-sm text-muted-foreground">
+                        <span>Rounding adjustment</span>
+                        <span className={roundingAdjustment > 0 ? "text-amber-600" : "text-green-600"}>
+                          {roundingAdjustment > 0 ? "+" : ""}{formatLL(roundingAdjustment)}
+                        </span>
+                      </div>
                     )}
                     <div className="flex justify-between text-lg font-bold">
                       <span>Total</span>

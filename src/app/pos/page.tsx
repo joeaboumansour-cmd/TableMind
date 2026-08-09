@@ -36,7 +36,7 @@ import { useCartStore } from "@/lib/stores/cartStore";
 import { useAuth } from "@/lib/auth/AuthContext";
 import { Product } from "@/lib/types/product";
 import { useToastManager } from "@/hooks/useToastManager";
-import { formatCurrency, formatLL, convertUsdToLl, formatUSD, convertLlToUsd, convertLlToUsdForSale, convertLlToUsdForReturn, SELL_RATE, RETURN_RATE } from "@/lib/utils/format";
+import { formatCurrency, formatLL, formatUSD, convertLlToUsd, convertLlToUsdForSale, convertLlToUsdForReturn, SELL_RATE, RETURN_RATE } from "@/lib/utils/format";
 import BarcodeScanner, { playSuccessSound } from "@/components/BarcodeScanner";
 import ProductSearchBar from "@/components/ProductSearchBar";
 import { SyncIndicator } from "@/components/SyncIndicator";
@@ -1000,6 +1000,11 @@ export default function POSPage() {
                                 </div>
                               </>
                             )}
+                            {useCartStore.getState().getRoundingAdjustment() !== 0 && (
+                              <div className="text-sm text-muted-foreground">
+                                Rounding: {formatLL(useCartStore.getState().getRoundingAdjustment())}
+                              </div>
+                            )}
                             <div className="text-2xl font-bold text-amber-500">
                               {formatLL(getTotal())}
                             </div>
@@ -1204,6 +1209,11 @@ export default function POSPage() {
                               Discount: -{formatLL(useCartStore.getState().getTotalDiscount())}
                             </div>
                           </>
+                        )}
+                        {useCartStore.getState().getRoundingAdjustment() !== 0 && (
+                          <div className="text-sm text-muted-foreground">
+                            Rounding: {formatLL(useCartStore.getState().getRoundingAdjustment())}
+                          </div>
                         )}
                         <div className="text-2xl font-bold text-amber-500">
                           {formatLL(getTotal())}

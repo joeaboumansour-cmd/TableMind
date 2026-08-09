@@ -4,7 +4,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { CartStore, CartItem } from '@/lib/types/cart';
 import { Product } from '@/lib/types/product';
-import { convertLlToUsdForReturn, convertUsdToLl, roundToNearest5k } from '@/lib/utils/format';
+import { convertLlToUsdForReturn, SELL_RATE, roundToNearest5k } from '@/lib/utils/format';
 
 
 export const useCartStore = create<CartStore>()(
@@ -31,28 +31,27 @@ export const useCartStore = create<CartStore>()(
         let unitPriceLl: number;
 
         if (product.currency === 'USD') {
-          // If base price is USD, convert to LL using sell rate and round to
-          // nearest 5,000 LL (smallest physical bill denomination).
+          // If base price is USD, calculate exact LL by multiplying by the SELL_RATE.
+          // NOTE: We do NOT round per-item — rounding happens on the cart total only.
           unitPriceUsd = product.selling_price;
-          unitPriceLl = convertUsdToLl(product.selling_price);
+          unitPriceLl = product.selling_price * SELL_RATE;
         } else {
           // If base price is LL (default), calculate USD using the utility function
           unitPriceLl = product.selling_price;
           unitPriceUsd = convertLlToUsdForReturn(product.selling_price);
         }
 
-        // Calculate discount — round discounted LL price to nearest 5k so that
-        // every LL value in the system stays a clean multiple of 5,000.
+        // Calculate discount — exact, unrounded. Rounding happens on the cart total.
         const discountPercentage = product.discount_percentage || 0;
         let discountedUnitPriceLl = unitPriceLl;
         let discountedUnitPriceUsd = unitPriceUsd;
 
         if (discountPercentage > 0) {
-          discountedUnitPriceLl = roundToNearest5k(unitPriceLl * (1 - discountPercentage / 100));
+          discountedUnitPriceLl = unitPriceLl * (1 - discountPercentage / 100);
           discountedUnitPriceUsd = unitPriceUsd * (1 - discountPercentage / 100);
         }
 
-        const unitPriceDiscountAmount = roundToNearest5k(unitPriceLl - discountedUnitPriceLl);
+        const unitPriceDiscountAmount = unitPriceLl - discountedUnitPriceLl;
 
 
         // Add new item at the top of the cart
@@ -150,11 +149,19 @@ export const useCartStore = create<CartStore>()(
       },
 
       getTotal: () => {
-        return get().getSubtotal();
+        // The amount the customer actually pays — the cart total rounded to the
+        // nearest 5,000 LL (smallest physical bill denomination).
+        return roundToNearest5k(get().getSubtotal());
       },
 
       getTotalUsd: () => {
         return get().getSubtotalUsd();
+      },
+
+      // The difference between the rounded total (charged) and the exact subtotal.
+      // Positive = customer pays a bit more, negative = customer pays a bit less.
+      getRoundingAdjustment: () => {
+        return get().getTotal() - get().getSubtotal();
       },
 
       getTotalDiscount: () => {
