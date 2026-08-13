@@ -20,6 +20,7 @@ export interface CachedTransaction {
   id: string;
   store_id: string;
   transaction_number: string;
+  receipt_token?: string;
   subtotal: number;
   total_amount: number;
   amount_paid: number;
@@ -52,6 +53,7 @@ export interface QueuedTransaction {
   id: string;
   store_id: string;
   transaction_number: string;
+  receipt_token?: string;
   subtotal: number;
   total_amount: number;
   amount_paid: number;

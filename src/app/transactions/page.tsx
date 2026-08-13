@@ -209,6 +209,7 @@ export default function TransactionHistoryPage() {
                 id: t.id,
                 store_id: store_id,
                 transaction_number: t.transaction_number,
+                receipt_token: t.receipt_token,
                 subtotal: t.subtotal,
                 total_amount: t.total_amount,
                 amount_paid: t.amount_paid,

@@ -16,11 +16,16 @@ import {
   ChevronDown,
   ChevronUp,
   X,
+  Copy,
+  Share2,
+  Printer,
 } from "lucide-react";
 import { useCartStore } from "@/lib/stores/cartStore";
 import { queueStockDecrementsForTransaction } from "@/lib/db";
 import { toast } from "sonner";
 import { formatLL, formatUSD, SELL_RATE, RETURN_RATE, convertUsdToLlForReturn } from "@/lib/utils/format";
+import { generateReceiptToken } from "@/lib/receipt/token";
+import QRCode from "qrcode";
 
 
 function CheckoutContent() {
@@ -35,6 +40,9 @@ function CheckoutContent() {
   const [changeGiven, setChangeGiven] = useState<number>(0);
   const [changeUsd, setChangeUsd] = useState<number>(0);
   const [showSummary, setShowSummary] = useState(true);
+  const [receiptToken, setReceiptToken] = useState<string>("");
+  const [receiptUrl, setReceiptUrl] = useState<string>("");
+  const [qrDataUrl, setQrDataUrl] = useState<string>("");
 
   const llInputRef = useRef<HTMLInputElement>(null);
 
@@ -143,6 +151,11 @@ function CheckoutContent() {
       const txnNumber = generateTransactionNumber();
       setTransactionNumber(txnNumber);
 
+      // Generate unguessable receipt token (works fully offline)
+      const token = generateReceiptToken();
+      setReceiptToken(token);
+      setReceiptUrl(`${window.location.origin}/receipt/${token}`);
+
       const calculatedChangeGiven = totalPaid - total;
       const calcChangeUsd = calculatedChangeGiven / changeRate;
 
@@ -167,6 +180,7 @@ function CheckoutContent() {
       // Save transaction to database
       const transactionData: any = {
         transaction_number: txnNumber,
+        receipt_token: token,
         subtotal: getSubtotal(),
         total_amount: total,
         amount_paid: totalPaid,
@@ -199,6 +213,7 @@ function CheckoutContent() {
         id: crypto.randomUUID(),
         store_id: offlineStoreId,
         transaction_number: txnNumber,
+        receipt_token: token,
         subtotal: getSubtotal(),
         total_amount: total,
         amount_paid: totalPaid,
@@ -282,6 +297,19 @@ function CheckoutContent() {
       // Transaction complete — just show receipt
       setTransactionComplete(true);
       toast.success("Payment processed successfully!");
+
+      // Generate QR code for the digital receipt (client-side, works offline)
+      try {
+        const url = `${window.location.origin}/receipt/${token}`;
+        const dataUrl = await QRCode.toDataURL(url, {
+          width: 256,
+          margin: 2,
+          errorCorrectionLevel: "M",
+        });
+        setQrDataUrl(dataUrl);
+      } catch (qrError) {
+        console.error("Failed to generate QR code:", qrError);
+      }
     } catch (error) {
       console.error("Error processing payment:", error);
       toast.error("Failed to process payment");
@@ -294,6 +322,65 @@ function CheckoutContent() {
   const handleNewTransaction = () => {
     clearCart();
     router.push("/pos");
+  };
+
+  // Copy receipt link to clipboard
+  const handleCopyLink = async () => {
+    try {
+      await navigator.clipboard.writeText(receiptUrl);
+      toast.success("Receipt link copied to clipboard");
+    } catch (err) {
+      console.error("Failed to copy link:", err);
+      toast.error("Failed to copy link");
+    }
+  };
+
+  // Share receipt link via Web Share API
+  const handleShareReceipt = async () => {
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: `Receipt - ${transactionNumber}`,
+          text: `Your receipt for transaction ${transactionNumber}`,
+          url: receiptUrl,
+        });
+      } catch (err) {
+        // User cancelled share
+      }
+    } else {
+      await handleCopyLink();
+    }
+  };
+
+  // Print the QR code (for hard-copy at the register)
+  const handlePrintQR = () => {
+    const printWindow = window.open("", "_blank", "width=400,height=500");
+    if (!printWindow) {
+      toast.error("Please allow pop-ups to print the QR code");
+      return;
+    }
+    printWindow.document.write(`
+      <html>
+        <head>
+          <title>Receipt QR - ${transactionNumber}</title>
+          <style>
+            body { font-family: Arial, sans-serif; text-align: center; padding: 20px; }
+            h2 { margin-bottom: 4px; }
+            p { color: #666; margin-bottom: 16px; }
+            img { max-width: 300px; }
+            .url { font-size: 12px; color: #888; word-break: break-all; margin-top: 12px; }
+          </style>
+        </head>
+        <body>
+          <h2>Scan for Digital Receipt</h2>
+          <p>Transaction #${transactionNumber}</p>
+          <img src="${qrDataUrl}" alt="Receipt QR Code" />
+          <div class="url">${receiptUrl}</div>
+          <script>window.print();</script>
+        </body>
+      </html>
+    `);
+    printWindow.document.close();
   };
 
   if (transactionComplete) {
@@ -332,6 +419,37 @@ function CheckoutContent() {
                 </div>
               )}
             </div>
+
+            {/* Digital Receipt QR Code */}
+            {qrDataUrl && (
+              <div className="mb-6 p-4 border rounded-lg bg-muted/30">
+                <h3 className="font-semibold text-sm mb-1">Digital Receipt</h3>
+                <p className="text-xs text-muted-foreground mb-3">
+                  Customer can scan this QR code to view their receipt on their phone
+                </p>
+                <div className="flex justify-center mb-3">
+                  <img
+                    src={qrDataUrl}
+                    alt="Digital receipt QR code"
+                    className="w-48 h-48 rounded-lg bg-white p-2"
+                  />
+                </div>
+                <div className="grid grid-cols-3 gap-2">
+                  <Button variant="outline" size="sm" onClick={handleCopyLink}>
+                    <Copy className="h-4 w-4 mr-1" />
+                    Copy
+                  </Button>
+                  <Button variant="outline" size="sm" onClick={handleShareReceipt}>
+                    <Share2 className="h-4 w-4 mr-1" />
+                    Share
+                  </Button>
+                  <Button variant="outline" size="sm" onClick={handlePrintQR}>
+                    <Printer className="h-4 w-4 mr-1" />
+                    Print
+                  </Button>
+                </div>
+              </div>
+            )}
 
             <div className="space-y-2">
               <Button variant="outline" className="w-full" onClick={handleNewTransaction}>

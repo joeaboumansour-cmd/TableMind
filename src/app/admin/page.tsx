@@ -42,6 +42,9 @@ import {
   UserPlus,
   Eye,
   EyeOff,
+  Settings,
+  Phone,
+  MapPin,
 } from "lucide-react";
 import { toast } from "sonner";
 import { formatDateTime } from "@/lib/utils/format";
@@ -105,6 +108,15 @@ export default function AdminPage() {
   const [featureFlags, setFeatureFlags] = useState<StoreFeatures>({});
   const [isSavingFeatures, setIsSavingFeatures] = useState(false);
   const [isLoadingFeatures, setIsLoadingFeatures] = useState(false);
+
+  // Store settings (receipt marketing info)
+  const [isSettingsDialogOpen, setIsSettingsDialogOpen] = useState(false);
+  const [settingsStoreId, setSettingsStoreId] = useState<string | null>(null);
+  const [settingsStoreName, setSettingsStoreName] = useState("");
+  const [settingsPhoneWhatsapp, setSettingsPhoneWhatsapp] = useState("");
+  const [settingsAddress, setSettingsAddress] = useState("");
+  const [isSavingSettings, setIsSavingSettings] = useState(false);
+  const [isLoadingSettings, setIsLoadingSettings] = useState(false);
 
   // Employee form
   const [editingEmployee, setEditingEmployee] = useState<Employee | null>(null);
@@ -450,6 +462,58 @@ export default function AdminPage() {
     }
   };
 
+  // ------ Store Settings (Receipt Marketing Info) ------
+  const openSettingsDialog = async (storeId: string, storeName: string) => {
+    setSettingsStoreId(storeId);
+    setSettingsStoreName(storeName);
+    setIsSettingsDialogOpen(true);
+    setIsLoadingSettings(true);
+    setSettingsPhoneWhatsapp("");
+    setSettingsAddress("");
+
+    try {
+      const { data, error } = await supabase
+        .from("stores")
+        .select("phone_whatsapp, address")
+        .eq("id", storeId)
+        .single();
+
+      if (error) throw error;
+      setSettingsPhoneWhatsapp(data.phone_whatsapp || "");
+      setSettingsAddress(data.address || "");
+    } catch (error) {
+      console.error("Error fetching store settings:", error);
+      toast.error("Failed to load store settings");
+    } finally {
+      setIsLoadingSettings(false);
+    }
+  };
+
+  const handleSaveSettings = async () => {
+    if (!settingsStoreId) return;
+    setIsSavingSettings(true);
+
+    try {
+      const { error } = await supabase
+        .from("stores")
+        .update({
+          phone_whatsapp: settingsPhoneWhatsapp.trim() || null,
+          address: settingsAddress.trim() || null,
+        })
+        .eq("id", settingsStoreId);
+
+      if (error) throw error;
+
+      toast.success("Store settings saved successfully!");
+      setIsSettingsDialogOpen(false);
+    } catch (error) {
+      console.error("Error saving store settings:", error);
+      toast.error("Failed to save store settings");
+    } finally {
+      setIsSavingSettings(false);
+    }
+  };
+
   const handleDeleteEmployee = async (employee: Employee) => {
     if (!confirm(`Delete employee "${employee.display_name || employee.username}"? This cannot be undone.`)) {
       return;
@@ -712,6 +776,14 @@ export default function AdminPage() {
                             <Button
                               variant="outline"
                               size="sm"
+                              onClick={() => openSettingsDialog(store.id, store.username)}
+                              title="Store settings (receipt info)"
+                            >
+                              <Settings className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
                               onClick={() => openEmployeeDialog(store.id, store.username)}
                               title="Manage employees"
                             >
@@ -816,6 +888,74 @@ export default function AdminPage() {
                 </>
               ) : (
                 "Save Features"
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Store Settings Dialog (Receipt Marketing Info) */}
+      <Dialog open={isSettingsDialogOpen} onOpenChange={setIsSettingsDialogOpen}>
+        <DialogContent className="max-w-md mx-4">
+          <DialogHeader>
+            <DialogTitle>Store Settings — {settingsStoreName}</DialogTitle>
+            <DialogDescription>
+              Contact info shown on digital receipts. This is free marketing for your store.
+            </DialogDescription>
+          </DialogHeader>
+
+          {isLoadingSettings ? (
+            <div className="text-center py-8">
+              <Loader2 className="h-6 w-6 animate-spin mx-auto text-muted-foreground" />
+            </div>
+          ) : (
+            <div className="space-y-4 py-2">
+              <div className="space-y-2">
+                <Label htmlFor="settings-phone" className="flex items-center gap-2">
+                  <Phone className="h-4 w-4 text-muted-foreground" />
+                  Phone / WhatsApp
+                </Label>
+                <Input
+                  id="settings-phone"
+                  placeholder="e.g., 70123456"
+                  value={settingsPhoneWhatsapp}
+                  onChange={(e) => setSettingsPhoneWhatsapp(e.target.value)}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Shown on the receipt with a WhatsApp link so customers can contact you.
+                </p>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="settings-address" className="flex items-center gap-2">
+                  <MapPin className="h-4 w-4 text-muted-foreground" />
+                  Address
+                </Label>
+                <Input
+                  id="settings-address"
+                  placeholder="e.g., Main Street, Downtown"
+                  value={settingsAddress}
+                  onChange={(e) => setSettingsAddress(e.target.value)}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Shown on the receipt for delivery info.
+                </p>
+              </div>
+            </div>
+          )}
+
+          <DialogFooter className="gap-2">
+            <Button variant="outline" size="sm" onClick={() => setIsSettingsDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button size="sm" onClick={handleSaveSettings} disabled={isSavingSettings || isLoadingSettings}>
+              {isSavingSettings ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                  Saving...
+                </>
+              ) : (
+                "Save Settings"
               )}
             </Button>
           </DialogFooter>

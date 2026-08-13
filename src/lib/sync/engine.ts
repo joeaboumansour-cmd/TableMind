@@ -256,6 +256,10 @@ class SyncEngine {
         // Build the transaction payload matching the API's expected format
         const payload = {
           transaction_number: txn.transaction_number,
+          // Include receipt token so offline transactions get their public receipt
+          ...(txn.receipt_token && {
+            receipt_token: txn.receipt_token,
+          }),
           subtotal: txn.subtotal,
           total_amount: txn.total_amount,
           amount_paid: txn.amount_paid,

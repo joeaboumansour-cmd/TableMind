@@ -58,6 +58,7 @@ export async function GET(request: Request) {
       .select(`
         id,
         transaction_number,
+        receipt_token,
         subtotal,
         total_amount,
         amount_paid,
@@ -165,6 +166,10 @@ export async function POST(request: Request) {
       .insert({
         store_id: store_id,
         transaction_number: body.transaction_number,
+        // Store the receipt token so the public receipt page can find it
+        ...(body.receipt_token && {
+          receipt_token: body.receipt_token,
+        }),
         subtotal: body.subtotal,
         total_amount: body.total_amount,
         amount_paid: body.amount_paid,

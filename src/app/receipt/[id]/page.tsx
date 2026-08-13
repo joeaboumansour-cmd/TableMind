@@ -1,157 +1,166 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { useRouter, useParams } from "next/navigation";
-import { createClient } from "@/lib/supabase/client";
+import { useState, useEffect, useCallback } from "react";
+import { useParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
-import { Badge } from "@/components/ui/badge";
 import {
-  ArrowLeft,
   Printer,
   Share2,
   Download,
   Loader2,
+  RefreshCw,
+  Phone,
+  MapPin,
+  MessageCircle,
+  Receipt,
 } from "lucide-react";
 import { toast } from "sonner";
-import { formatCurrency, formatDateTime } from "@/lib/utils/format";
-import { usePermissionGuard } from "@/lib/auth/usePermissionGuard";
-import { connectivity } from "@/lib/connectivity";
+import { formatLL, formatDateTime } from "@/lib/utils/format";
+import { isValidReceiptToken } from "@/lib/receipt/token";
 
-const supabase = createClient();
+interface PublicReceiptItem {
+  product_name: string;
+  quantity: number;
+}
 
-interface Transaction {
-  id: string;
+interface PublicReceipt {
   transaction_number: string;
-  subtotal: number;
+  created_at: string;
   total_amount: number;
   amount_paid: number;
   change_given: number;
-  created_at: string;
+  items: PublicReceiptItem[];
+  store: {
+    name: string;
+    phone_whatsapp: string | null;
+    address: string | null;
+  };
 }
 
-interface TransactionItem {
-  id: string;
-  product_name: string;
-  quantity: number;
-  unit_price: number;
-  total_price: number;
-}
-
-// Helper: check if user auth exists in localStorage (works offline)
-function hasAuthInStorage(): boolean {
-  if (typeof window === "undefined") return false;
-  try {
-    return !!localStorage.getItem("goldensquirrel_user") || 
-           !!localStorage.getItem("goldensquirrel_auth");
-  } catch { return false; }
-}
-
-export default function ReceiptPage() {
-  const router = useRouter();
+export default function PublicReceiptPage() {
   const params = useParams();
-  const transactionNumber = params.id as string;
-  // Permission check - only when online, never block offline
-  usePermissionGuard("receipts");
+  const token = params.id as string;
 
-  const [transaction, setTransaction] = useState<Transaction | null>(null);
-  const [items, setItems] = useState<TransactionItem[]>([]);
+  const [receipt, setReceipt] = useState<PublicReceipt | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isPending, setIsPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const fetchReceipt = useCallback(async () => {
+    if (!isValidReceiptToken(token)) {
+      setError("This receipt link is invalid.");
+      setIsLoading(false);
+      return;
+    }
+
+    try {
+      const response = await fetch(`/api/public/receipt/${token}`);
+      if (response.status === 404) {
+        const data = await response.json();
+        if (data.pending) {
+          // Transaction not synced yet (store was offline at checkout)
+          setIsPending(true);
+          setError(null);
+          setReceipt(null);
+        } else {
+          setError("This receipt could not be found.");
+          setIsPending(false);
+        }
+        return;
+      }
+      if (response.status === 429) {
+        setError("Too many requests. Please try again later.");
+        setIsPending(false);
+        return;
+      }
+      if (!response.ok) {
+        setError("Failed to load receipt. Please try again.");
+        setIsPending(false);
+        return;
+      }
+
+      const data = await response.json();
+      setReceipt(data.receipt);
+      setIsPending(false);
+      setError(null);
+    } catch (err) {
+      console.error("Error fetching receipt:", err);
+      setError("Failed to load receipt. Please check your connection.");
+      setIsPending(false);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [token]);
 
   useEffect(() => {
-    const fetchTransaction = async () => {
-      try {
-        // Get store auth - but NEVER redirect to /login just because authData is missing.
-        // Auth is in localStorage, user state will resolve.
-        const authData = localStorage.getItem("goldensquirrel_auth");
-        const storeUser = localStorage.getItem("goldensquirrel_user");
-        
-        let store_id: string | null = null;
-        if (authData) {
-          store_id = JSON.parse(authData).store_id;
-        } else if (storeUser) {
-          store_id = JSON.parse(storeUser).storeId;
-        }
+    fetchReceipt();
+  }, [fetchReceipt]);
 
-        if (!store_id) {
-          // Only redirect if there's truly no auth data in localStorage
-          if (!hasAuthInStorage()) {
-            router.push("/login");
-            return;
-          }
-          // Has auth but no store_id - try to render what we can
-          setIsLoading(false);
-          return;
-        }
-
-        // Try fetching from Supabase if online
-        if (connectivity.isOnline) {
-          const { data: txnData, error: txnError } = await supabase
-            .from("transactions")
-            .select("*")
-            .eq("transaction_number", transactionNumber)
-            .eq("store_id", store_id)
-            .single();
-
-          if (txnError) throw txnError;
-          setTransaction(txnData);
-
-          const { data: itemsData, error: itemsError } = await supabase
-            .from("transaction_items")
-            .select("*")
-            .eq("transaction_id", txnData.id)
-            .order("created_at");
-
-          if (itemsError) throw itemsError;
-          setItems(itemsData || []);
-        } else {
-          // Offline: try reading from cached transactions
-          const { getCachedTransactions } = await import("@/lib/db");
-          const cached = await getCachedTransactions(store_id);
-          const found = cached.find(t => t.transaction_number === transactionNumber);
-          if (found) {
-            setTransaction(found as any);
-            setItems(found.transaction_items.map((item: any) => ({
-              id: item.id,
-              product_name: item.product_name,
-              quantity: item.quantity,
-              unit_price: item.unit_price,
-              total_price: item.total_price,
-            })));
-          }
-        }
-      } catch (error) {
-        console.error("Error fetching transaction:", error);
-        // Never redirect on error - just show what we have or an empty state
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
-    fetchTransaction();
-  }, [transactionNumber, router, supabase]);
+  // Auto-retry while the transaction is pending sync (store was offline)
+  useEffect(() => {
+    if (!isPending) return;
+    const interval = setInterval(() => {
+      fetchReceipt();
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [isPending, fetchReceipt]);
 
   const handlePrint = () => {
     window.print();
   };
 
   const handleShare = async () => {
+    const url = window.location.href;
     if (navigator.share) {
       try {
         await navigator.share({
-          title: `Receipt - ${transactionNumber}`,
-          text: `Transaction ${transactionNumber} - Total: ${formatCurrency(transaction?.total_amount || 0)}`,
-          url: window.location.href,
+          title: `Receipt - ${receipt?.transaction_number || ""}`,
+          text: `Your receipt from ${receipt?.store?.name || "our store"}`,
+          url,
         });
-      } catch (error) {
+      } catch (err) {
         // User cancelled share
       }
     } else {
-      navigator.clipboard.writeText(window.location.href);
-      toast.success("Link copied to clipboard");
+      try {
+        await navigator.clipboard.writeText(url);
+        toast.success("Link copied to clipboard");
+      } catch (err) {
+        toast.error("Failed to copy link");
+      }
     }
   };
+
+  const handleDownload = async () => {
+    if (!receipt) return;
+    try {
+      // Use html2pdf.js (already a dependency) to generate a PDF of the receipt
+      const { default: html2pdf } = await import("html2pdf.js");
+      const element = document.getElementById("receipt-print-area");
+      if (!element) return;
+
+      const opt = {
+        margin: 10,
+        filename: `receipt-${receipt.transaction_number}.pdf`,
+        image: { type: "jpeg" as const, quality: 0.98 },
+        html2canvas: { scale: 2, useCORS: true },
+        jsPDF: { unit: "mm" as const, format: "a5" as const, orientation: "portrait" as const },
+      };
+
+      await html2pdf().set(opt).from(element).save();
+      toast.success("Receipt downloaded as PDF");
+    } catch (err) {
+      console.error("Failed to download PDF:", err);
+      toast.error("Failed to download PDF. Try Print instead.");
+    }
+  };
+
+  // Build WhatsApp link from store phone (free marketing on the e-receipt)
+  const whatsappLink = receipt?.store.phone_whatsapp
+    ? `https://wa.me/${receipt.store.phone_whatsapp.replace(/\D/g, "")}`
+    : null;
 
   if (isLoading) {
     return (
@@ -164,8 +173,49 @@ export default function ReceiptPage() {
     );
   }
 
-  if (!transaction) {
-    return null;
+  if (isPending) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background p-4">
+        <Card className="w-full max-w-md">
+          <CardContent className="pt-6 text-center">
+            <div className="h-16 w-16 rounded-full bg-amber-500/10 flex items-center justify-center mx-auto mb-4">
+              <RefreshCw className="h-8 w-8 text-amber-500 animate-spin" />
+            </div>
+            <h2 className="text-xl font-bold mb-2">Receipt Pending</h2>
+            <p className="text-muted-foreground mb-4">
+              This receipt was created while the store was offline. It will appear
+              here automatically once the store reconnects.
+            </p>
+            <Button variant="outline" onClick={fetchReceipt}>
+              <RefreshCw className="h-4 w-4 mr-2" />
+              Check Again
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  if (error || !receipt) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-background p-4">
+        <Card className="w-full max-w-md">
+          <CardContent className="pt-6 text-center">
+            <div className="h-16 w-16 rounded-full bg-red-500/10 flex items-center justify-center mx-auto mb-4">
+              <Receipt className="h-8 w-8 text-red-500" />
+            </div>
+            <h2 className="text-xl font-bold mb-2">Receipt Not Found</h2>
+            <p className="text-muted-foreground mb-4">
+              {error || "This receipt could not be found."}
+            </p>
+            <Button variant="outline" onClick={fetchReceipt}>
+              <RefreshCw className="h-4 w-4 mr-2" />
+              Try Again
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
   }
 
   return (
@@ -174,22 +224,21 @@ export default function ReceiptPage() {
       <header className="sticky top-0 z-50 bg-background border-b print:hidden">
         <div className="container mx-auto px-4 py-3">
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <Button variant="ghost" size="icon" onClick={() => router.push("/pos")}>
-                <ArrowLeft className="h-5 w-5" />
-              </Button>
-              <div>
-                <h1 className="font-bold text-lg">Receipt</h1>
-                <p className="text-sm text-muted-foreground">
-                  #{transaction.transaction_number}
-                </p>
-              </div>
+            <div>
+              <h1 className="font-bold text-lg">{receipt.store.name}</h1>
+              <p className="text-sm text-muted-foreground">
+                Digital Receipt
+              </p>
             </div>
 
             <div className="flex items-center gap-2">
               <Button variant="outline" size="sm" onClick={handleShare}>
                 <Share2 className="h-4 w-4 mr-2" />
                 Share
+              </Button>
+              <Button variant="outline" size="sm" onClick={handleDownload}>
+                <Download className="h-4 w-4 mr-2" />
+                PDF
               </Button>
               <Button variant="outline" size="sm" onClick={handlePrint}>
                 <Printer className="h-4 w-4 mr-2" />
@@ -203,7 +252,7 @@ export default function ReceiptPage() {
       <div className="container mx-auto px-4 py-6">
         <div className="max-w-md mx-auto">
           <Card className="print:shadow-none print:border-none">
-            <CardContent className="pt-6">
+            <CardContent className="pt-6" id="receipt-print-area">
               {/* Receipt Header */}
               <div className="text-center mb-6">
                 <div className="h-16 w-16 rounded-full bg-amber-500 flex items-center justify-center mx-auto mb-3">
@@ -218,35 +267,63 @@ export default function ReceiptPage() {
                     <path d="M12 20 C 8 18, 6 14, 6 10 C 6 4, 10 2, 14 4 C 17 5, 18 8, 16 10 C 14 12, 11 10, 12 8 C 12 6, 14 6, 15 7 C 16 8, 16 10, 14 12 C 12 14, 10 16, 12 20 Z" />
                   </svg>
                 </div>
-                <h2 className="text-xl font-bold">GoldenSquirrel</h2>
-                <p className="text-sm text-muted-foreground">Point of Sale Receipt</p>
+                <h2 className="text-xl font-bold">{receipt.store.name}</h2>
+                <p className="text-sm text-muted-foreground">Digital Receipt</p>
               </div>
+
+              {/* Store Contact Info — free marketing */}
+              {(receipt.store.phone_whatsapp || receipt.store.address) && (
+                <div className="space-y-1.5 text-sm mb-6 p-3 bg-muted/50 rounded-lg">
+                  {receipt.store.phone_whatsapp && (
+                    <div className="flex items-center justify-center gap-2">
+                      <Phone className="h-3.5 w-3.5 text-muted-foreground" />
+                      <span>{receipt.store.phone_whatsapp}</span>
+                      {whatsappLink && (
+                        <a
+                          href={whatsappLink}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 text-green-600 hover:underline"
+                        >
+                          <MessageCircle className="h-3.5 w-3.5" />
+                          WhatsApp
+                        </a>
+                      )}
+                    </div>
+                  )}
+                  {receipt.store.address && (
+                    <div className="flex items-center justify-center gap-2">
+                      <MapPin className="h-3.5 w-3.5 text-muted-foreground" />
+                      <span>{receipt.store.address}</span>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Transaction Info */}
               <div className="space-y-2 text-sm mb-6">
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Transaction #</span>
-                  <span className="font-mono">{transaction.transaction_number}</span>
+                  <span className="font-mono">{receipt.transaction_number}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Date & Time</span>
-                  <span>{formatDateTime(transaction.created_at)}</span>
+                  <span>{formatDateTime(receipt.created_at)}</span>
                 </div>
               </div>
 
               <Separator className="my-4" />
 
-              {/* Items */}
+              {/* Items — name + quantity only, NO unit prices */}
               <div className="space-y-3 mb-6">
-                {items.map((item) => (
-                  <div key={item.id} className="flex justify-between text-sm">
+                {receipt.items.map((item, index) => (
+                  <div key={index} className="flex justify-between text-sm">
                     <div className="flex-1">
                       <p className="font-medium">{item.product_name}</p>
-                      <p className="text-muted-foreground">
-                        {formatCurrency(item.unit_price)} × {item.quantity}
-                      </p>
                     </div>
-                    <span className="font-medium">{formatCurrency(item.total_price)}</span>
+                    <span className="text-muted-foreground shrink-0 ml-4">
+                      × {item.quantity}
+                    </span>
                   </div>
                 ))}
               </div>
@@ -257,7 +334,7 @@ export default function ReceiptPage() {
               <div className="space-y-2">
                 <div className="flex justify-between text-lg font-bold">
                   <span>Total</span>
-                  <span className="text-amber-500">{formatCurrency(transaction.total_amount)}</span>
+                  <span className="text-amber-500">{formatLL(receipt.total_amount)}</span>
                 </div>
               </div>
 
@@ -267,12 +344,12 @@ export default function ReceiptPage() {
               <div className="space-y-2 text-sm">
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Amount Paid</span>
-                  <span>{formatCurrency(transaction.amount_paid)}</span>
+                  <span>{formatLL(receipt.amount_paid)}</span>
                 </div>
-                {transaction.change_given > 0 && (
+                {receipt.change_given > 0 && (
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Change</span>
-                    <span>{formatCurrency(transaction.change_given)}</span>
+                    <span>{formatLL(receipt.change_given)}</span>
                   </div>
                 )}
               </div>
@@ -286,16 +363,8 @@ export default function ReceiptPage() {
                   Powered by GoldenSquirrel POS
                 </p>
               </div>
-
             </CardContent>
           </Card>
-
-          {/* Actions */}
-          <div className="mt-6 space-y-2 print:hidden">
-            <Button className="w-full" onClick={() => router.push("/pos")}>
-              New Transaction
-            </Button>
-          </div>
         </div>
       </div>
     </div>
