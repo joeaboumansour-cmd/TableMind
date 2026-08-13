@@ -187,6 +187,33 @@ class SyncEngine {
         if (error) throw error;
         products = data || [];
         console.log(`[Sync] Incremental pull found ${products.length} changed products`);
+        
+        // CRITICAL FIX: Verify the cache is COMPLETE. Incremental sync only
+        // fetches changed products - if the cache is missing products from
+        // a previous partial fetch (or seed data), they'll never appear.
+        // Do a full fetch if the cache count is less than the store's total count.
+        try {
+          // Get total product count from Supabase
+          const { count: totalCount, error: countError } = await supabase
+            .from("products")
+            .select("id", { count: "exact", head: true })
+            .eq("store_id", this.storeId);
+          
+          if (!countError && totalCount !== null) {
+            // Get cached count
+            const cachedCount = await getCachedProductsCount(this.storeId);
+            
+            if (cachedCount < totalCount) {
+              console.log(`[Sync] Cache has ${cachedCount} products but store has ${totalCount} total — doing full pull`);
+              // Full pull to get ALL products
+              products = await fetchAllProducts(supabase, this.storeId);
+              // Update the sync timestamp (fetchAllProducts already does this)
+              return { success: true, count: products?.length || 0 };
+            }
+          }
+        } catch (e) {
+          console.warn("[Sync] Cache completeness check failed (non-fatal):", e);
+        }
       } else {
         // Full pull: paginate through all products
         products = await fetchAllProducts(supabase, this.storeId);

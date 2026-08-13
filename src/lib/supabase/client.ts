@@ -60,7 +60,11 @@ export async function fetchAllProducts(
       .from("products")
       .select("*")
       .eq("store_id", storeId)
+      // Stable pagination: order by name THEN id. Without a unique tiebreaker
+      // (id), pagination across page boundaries can skip/duplicate rows when
+      // many products share the same name (e.g. "Coffee" variants).
       .order("name")
+      .order("id")
       .range(from, to);
 
     if (error) throw error;

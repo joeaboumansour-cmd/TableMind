@@ -224,6 +224,28 @@ export async function getCachedProductById(
 }
 
 /**
+ * Decrement stock for specific products in the local cache.
+ * This gives INSTANT feedback after a transaction completes, without
+ * waiting for the next network sync (which may be delayed up to 5 minutes
+ * by the cache-freshness window).
+ */
+export async function decrementCachedStock(
+  items: Array<{ product_id: string; quantity: number }>
+): Promise<void> {
+  if (items.length === 0) return;
+
+  for (const item of items) {
+    await db.products_cache
+      .where("id")
+      .equals(item.product_id)
+      .modify((p) => {
+        p.stock_quantity = (p.stock_quantity || 0) - item.quantity;
+      });
+  }
+  console.log(`[LocalDB] Decremented cached stock for ${items.length} products`);
+}
+
+/**
  * Count cached products for a specific store.
  * If storeId is provided, only counts products for that store.
  * If omitted, counts ALL cached products (legacy behavior).

@@ -27,6 +27,7 @@ export {
   seedProductsIfNeeded,
   queueStockDecrement,
   queueStockDecrementsForTransaction,
+  decrementCachedStock,
   queueCashShiftOpen,
   queueCashShiftClose,
   queueCashAdjustment,

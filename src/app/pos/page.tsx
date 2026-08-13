@@ -705,6 +705,19 @@ export default function POSPage() {
         toast.info("Transaction saved offline - will sync when online");
       }
 
+      // Reflect stock decrement in local cache IMMEDIATELY.
+      // The server already decremented stock (or will when synced), but the
+      // local cache has a 5-minute freshness window that would otherwise
+      // show stale stock levels until the next sync.
+      try {
+        const { decrementCachedStock } = await import("@/lib/db/localDB");
+        await decrementCachedStock(
+          items.map((item) => ({ product_id: item.product_id, quantity: item.quantity }))
+        );
+      } catch (e) {
+        console.warn("[POS QuickEnd] Failed to update cached stock:", e);
+      }
+
       // Clear cart and close dialog
       clearCart();
       setIsQuickEndDialogOpen(false);

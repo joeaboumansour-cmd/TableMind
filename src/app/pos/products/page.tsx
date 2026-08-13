@@ -212,7 +212,10 @@ function StoreProductsPageContent() {
   useEffect(() => {
     if (user) {
       setStoreId(user.storeId);
-      fetchProducts(user.storeId);
+      // Force refresh on initial load to ensure ALL products are fetched
+      // (with pagination) — not just the cached subset. This is critical
+      // because the cache may only contain 1000 items while Supabase has 2276.
+      fetchProducts(user.storeId, true);
       // Sync favorites from Supabase (merge remote stars into localStorage)
       // then force re-render so star icons reflect the merged state
       syncFavoritesFromSupabase(user.storeId).then(() => {
