@@ -114,7 +114,12 @@ class Connectivity {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), HEARTBEAT_TIMEOUT_MS);
 
-      const response = await fetch(HEARTBEAT_URL, {
+      // Cache-busting query param is CRITICAL — it defeats BOTH the browser
+      // HTTP cache AND any service worker Cache Storage interception.
+      // Without this, a cached /api/health response could make the app think
+      // it's online when it's actually offline.
+      const cacheBustedUrl = `${HEARTBEAT_URL}?_=${Date.now()}`;
+      const response = await fetch(cacheBustedUrl, {
         method: "GET",
         cache: "no-store",
         signal: controller.signal,

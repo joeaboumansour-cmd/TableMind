@@ -14,6 +14,26 @@ const withPWA = withPWAInit({
   // freeze users on stale content forever (Workbox skips re-fetching when
   // the revision string hasn't changed). Static JS/CSS/font chunks are still
   // precached automatically because their filenames are content-hashed.
+  //
+  // CRITICAL: Exclude /api/health from the service worker 'apis' cache.
+  // The connectivity heartbeat probes this endpoint to detect real
+  // internet connectivity. If the SW serves a cached 200 response, the
+  // app always thinks it's online (offline banners never show, sync never
+  // triggers on reconnect). Health checks MUST always hit the real network.
+  workboxOptions: {
+    runtimeCaching: [
+      // CRITICAL: Exclude /api/health from the service worker 'apis' cache.
+      // The connectivity heartbeat probes this endpoint to detect real
+      // internet connectivity. If the SW serves a cached 200 response, the
+      // app always thinks it's online (offline banners never show, sync never
+      // triggers on reconnect). Health checks MUST always hit the real network.
+      {
+        urlPattern: ({ url }: { url: URL }) => url.pathname === "/api/health",
+        handler: "NetworkOnly" as const,
+        method: "GET",
+      },
+    ],
+  },
 });
 
 const nextConfig: NextConfig = {
