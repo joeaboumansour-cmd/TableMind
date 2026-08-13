@@ -34,7 +34,8 @@ import {
    Upload,
    Layers,
    Star,
- } from "lucide-react";
+   Check,
+  } from "lucide-react";
  import { toast } from "sonner";
 import { useAuth } from "@/lib/auth/AuthContext";
 import { PermissionGuard } from "@/lib/auth/guards";
@@ -263,6 +264,22 @@ function StoreProductsPageContent() {
     setBarcodeIndex(index);
   }, [products]);
 
+  // ---- Derived barcode validation (O(1) lookup, works offline) ----
+  const barcodeStatus = useMemo(() => {
+    const trimmed = barcode.trim();
+    if (!trimmed) return null;
+    const existing = barcodeIndex.get(trimmed);
+    if (existing) {
+      // When editing, the product's own barcode exists in the index.
+      // Allow it only if it belongs to the product currently being edited.
+      if (editingProduct && existing.id === editingProduct.id) {
+        return { valid: true };
+      }
+      return { valid: false, existingName: existing.name };
+    }
+    return { valid: true };
+  }, [barcode, barcodeIndex, editingProduct]);
+
   const fetchProducts = async (storeId: string, forceRefresh = false) => {
     try {
       // Check if online before attempting the query (heartbeat-based)
@@ -299,6 +316,14 @@ function StoreProductsPageContent() {
     e.preventDefault();
     if (!storeId) {
       toast.error("Store not found");
+      return;
+    }
+
+    // Block submission if the barcode is a duplicate of an existing product
+    if (barcode.trim() && barcodeStatus?.valid === false) {
+      toast.error(
+        `This barcode is already assigned to "${barcodeStatus.existingName}". Please use a different barcode or clear the field.`
+      );
       return;
     }
 
@@ -794,7 +819,7 @@ const filteredProducts = products.filter(
                         placeholder="e.g., 123456789"
                         value={barcode}
                         onChange={(e) => setBarcode(e.target.value)}
-                        className="h-9"
+                        className={'h-9 ' + (barcodeStatus?.valid === false ? 'border-red-500 focus:border-red-500 focus:ring-red-500' : barcodeStatus?.valid === true ? 'border-green-500 focus:border-green-500 focus:ring-green-500' : '')}
                         inputMode="numeric"
                         pattern="[0-9]*"
                       />
@@ -813,10 +838,21 @@ const filteredProducts = products.filter(
                         </Button>
                       )}
                     </div>
-                    {barcode && (
-                      <p className="text-xs text-muted-foreground">
-                        Scanned: {barcode}
-                      </p>
+                    {barcode && barcodeStatus?.valid === true && (
+                      <div className="flex items-center gap-2 mt-1">
+                        <Check className="h-4 w-4 text-green-500" />
+                        <span className="text-xs text-green-600">Barcode is available — unique</span>
+                      </div>
+                    )}
+                    {barcode && barcodeStatus?.valid === false && (
+                      <div className="border-l-2 border-red-500 pl-2 mt-1">
+                        <div className="flex items-center gap-2">
+                          <X className="h-4 w-4 text-red-500" />
+                          <span className="text-xs text-red-600">
+                            This barcode is already assigned to "{barcodeStatus.existingName}". Use a different barcode.
+                          </span>
+                        </div>
+                      </div>
                     )}
                     
                     {/* Product Variants */}

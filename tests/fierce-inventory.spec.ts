@@ -204,4 +204,200 @@ test.describe('Fierce Inventory — Products Page UI & CRUD', () => {
     await refreshBtn.click();
     await page.waitForTimeout(500);
   });
+
+  test('Barcode field shows green check for unique barcode', async ({ page }) => {
+    // Mock empty products list
+    await page.route('**/rest/v1/products*', (route) => {
+      if (route.request().method() === 'GET') {
+        route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify([]),
+        });
+      } else {
+        route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({}),
+        });
+      }
+    });
+    await navigateWithAuth(page, '/pos/products');
+    await page.waitForTimeout(1000);
+
+    // Open Add Product dialog
+    const addBtn = page.locator('button:has-text("Add")').first();
+    await expect(addBtn).toBeVisible({ timeout: 15000 });
+    await addBtn.click();
+    await page.waitForTimeout(500);
+
+    // Enter a unique barcode
+    const barcodeInput = page.locator('input#barcode');
+    await expect(barcodeInput).toBeVisible({ timeout: 5000 });
+    await barcodeInput.fill('123456789012');
+    await page.waitForTimeout(300);
+
+    // Green check + success message should be visible
+    await expect(page.locator('text=Barcode is available')).toBeVisible({ timeout: 3000 });
+  });
+
+  test('Barcode field shows red error line for duplicate barcode', async ({ page }) => {
+    // First navigate with the default empty mock so auth + page load works
+    await navigateWithAuth(page, '/pos/products');
+    await page.waitForTimeout(1000);
+
+    // Remove the default mockSupabaseApi routes, then add our custom route
+    // so it takes priority (last registered route wins in Playwright)
+    await page.unrouteAll({ behavior: 'ignoreErrors' });
+    await page.route('**/rest/v1/**', (route) => {
+      const url = route.request().url();
+      const method = route.request().method();
+      if (url.includes('/products') && method === 'GET') {
+        route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify([
+            {
+              id: 'existing-product-1',
+              store_id: 'test-store-id',
+              name: 'Existing Product',
+              barcode: 'BARCODE123',
+              cost_price: 100,
+              selling_price: 200,
+              currency: 'LL',
+              profit_percentage: 100,
+              discount_percentage: 0,
+              stock_quantity: 10,
+              min_stock_threshold: 5,
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+              parent_id: null,
+              variant_name: null,
+            },
+          ]),
+        });
+      } else if (method === 'GET') {
+        route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify([]),
+        });
+      } else {
+        route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({}),
+        });
+      }
+    });
+
+    // Click refresh to re-fetch products with our mock
+    const refreshBtn = page.locator('button svg.lucide-refresh-cw').first();
+    await refreshBtn.click();
+    await page.waitForTimeout(800);
+
+    // Open Add Product dialog
+    const addBtn = page.locator('button:has-text("Add")').first();
+    await expect(addBtn).toBeVisible({ timeout: 15000 });
+    await addBtn.click();
+    await page.waitForTimeout(500);
+
+    // Enter the duplicate barcode
+    const barcodeInput = page.locator('input#barcode');
+    await expect(barcodeInput).toBeVisible({ timeout: 5000 });
+    await barcodeInput.fill('BARCODE123');
+    await page.waitForTimeout(300);
+
+    // Red error line should be visible with the product name
+    const redError = page.locator('text=This barcode is already assigned');
+    await expect(redError).toBeVisible({ timeout: 3000 });
+    await expect(redError).toContainText('Existing Product');
+  });
+
+  test('Form submission is blocked when barcode is a duplicate', async ({ page }) => {
+    // First navigate with the default empty mock
+    await navigateWithAuth(page, '/pos/products');
+    await page.waitForTimeout(1000);
+
+    // Track if a POST/INSERT request was made
+    let insertAttempted = false;
+
+    // Remove default routes and add our custom route
+    await page.unrouteAll({ behavior: 'ignoreErrors' });
+    await page.route('**/rest/v1/**', (route) => {
+      const url = route.request().url();
+      const method = route.request().method();
+      if (method === 'POST') {
+        insertAttempted = true;
+      }
+      if (url.includes('/products') && method === 'GET') {
+        route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify([
+            {
+              id: 'existing-product-1',
+              store_id: 'test-store-id',
+              name: 'Existing Product',
+              barcode: 'DUPLICATE123',
+              cost_price: 100,
+              selling_price: 200,
+              currency: 'LL',
+              profit_percentage: 100,
+              discount_percentage: 0,
+              stock_quantity: 10,
+              min_stock_threshold: 5,
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+              parent_id: null,
+              variant_name: null,
+            },
+          ]),
+        });
+      } else if (method === 'GET') {
+        route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify([]),
+        });
+      } else {
+        route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({}),
+        });
+      }
+    });
+
+    // Click refresh to re-fetch products with our mock
+    const refreshBtn = page.locator('button svg.lucide-refresh-cw').first();
+    await refreshBtn.click();
+    await page.waitForTimeout(800);
+
+    // Open Add Product dialog
+    const addBtn = page.locator('button:has-text("Add")').first();
+    await expect(addBtn).toBeVisible({ timeout: 15000 });
+    await addBtn.click();
+    await page.waitForTimeout(500);
+
+    // Fill in duplicate barcode
+    const barcodeInput = page.locator('input#barcode');
+    await expect(barcodeInput).toBeVisible({ timeout: 5000 });
+    await barcodeInput.fill('DUPLICATE123');
+    await page.waitForTimeout(300);
+
+    // Fill in required name field
+    await page.locator('input#name').fill('New Product');
+
+    // Try to submit
+    const submitBtn = page.locator('button[type="submit"]').first();
+    await submitBtn.click();
+    await page.waitForTimeout(500);
+
+    // Verify the dialog is still open (submission was blocked)
+    await expect(page.locator('text=Add Product')).toBeVisible({ timeout: 3000 });
+
+    // Verify no insert request was actually made
+    expect(insertAttempted).toBe(false);
+  });
 });

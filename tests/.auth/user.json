@@ -5,16 +5,12 @@
       "origin": "http://localhost:3000",
       "localStorage": [
         {
-          "name": "goldensquirrel-cart",
-          "value": "{\"state\":{\"items\":[],\"store_id\":\"test-store-id\"},\"version\":0}"
-        },
-        {
           "name": "goldensquirrel_user",
           "value": "{\"id\":\"test-store-id\",\"storeId\":\"test-store-id\",\"username\":\"teststore\",\"displayName\":\"teststore\",\"isOwner\":true,\"permissions\":{\"pos\":true,\"inventory\":true,\"transactions\":true,\"receipts\":true}}"
         },
         {
           "name": "goldensquirrel_auth",
-          "value": "{\"store_id\":\"test-store-id\",\"username\":\"teststore\",\"license_expires_at\":\"2027-08-01T10:46:46.936Z\",\"timestamp\":1785581206938}"
+          "value": "{\"store_id\":\"test-store-id\",\"username\":\"teststore\",\"license_expires_at\":\"2027-08-13T12:05:18.847Z\",\"timestamp\":1786622718847}"
         }
       ]
     }
