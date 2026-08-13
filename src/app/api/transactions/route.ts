@@ -246,6 +246,25 @@ export async function POST(request: Request) {
         console.error("Transaction items error:", itemsError);
         // Transaction created but items failed - still return success but log error
       }
+
+      // CRITICAL FIX: Decrement stock server-side for each item.
+      // This ensures stock is decremented exactly once per transaction,
+      // whether the transaction was created online or synced from offline.
+      // Uses the service role client (bypasses RLS) so the RPC works reliably.
+      for (const item of body.items) {
+        if (!item.product_id) continue;
+        const { error: stockError } = await supabase.rpc("decrement_stock", {
+          product_id: item.product_id,
+          quantity: item.quantity,
+          p_store_id: store_id,
+        });
+
+        if (stockError) {
+          console.error(`[API] Stock decrement failed for product ${item.product_id}:`, stockError);
+          // Don't fail the transaction — log and continue.
+          // The transaction is already created; stock can be reconciled later.
+        }
+      }
     }
 
     return NextResponse.json({ transaction }, { status: 201 });

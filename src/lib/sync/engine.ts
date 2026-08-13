@@ -4,17 +4,16 @@
 // and flushes queued transactions to Supabase
 // =============================================
 
-import { createClient, fetchAllProducts } from "@/lib/supabase/client";
+import { createClient, fetchAllProducts, getLastSyncKey } from "@/lib/supabase/client";
 import {
   cacheProducts,
   getQueuedTransactions,
   removeQueuedTransaction,
   getCachedProductsCount,
-  getCachedProducts,
   getQueuedCount,
   getPendingWrites,
   removePendingWrite,
-  addPendingWrite,
+  reconcileProductsCache,
 } from "@/lib/db/localDB";
 import type { CachedProduct, QueuedTransaction, PendingWrite } from "@/lib/db/localDB";
 import { syncFavoritesFromSupabase, processPendingFavoriteWrites } from "@/lib/frequentlyUsed";
@@ -22,6 +21,9 @@ import { connectivity } from "@/lib/connectivity";
 
 type SyncStatus = "idle" | "syncing" | "error" | "offline";
 type SyncListener = (status: SyncStatus, pendingCount?: number) => void;
+
+// Maximum retry attempts for pending writes before they are dropped
+const MAX_PENDING_WRITE_RETRIES = 5;
 
 class SyncEngine {
   private listeners: Set<SyncListener> = new Set();
@@ -145,6 +147,9 @@ class SyncEngine {
    * Pull latest products from Supabase into IndexedDB cache.
    * Uses incremental sync: only fetches products updated since the last sync timestamp.
    * On first sync (no timestamp), fetches all products.
+   * 
+   * CRITICAL FIX: After any pull, reconciles the cache against the live product ID set.
+   * This detects deletions — products removed in Supabase are removed from the cache.
    */
   async pullProducts(): Promise<{
     success: boolean;
@@ -159,9 +164,9 @@ class SyncEngine {
       const supabase = createClient();
       
       // Check if we have a last sync timestamp for incremental sync
-      const lastSyncKey = `products_last_sync_${this.storeId}`;
+      const lastSyncKey = getLastSyncKey(this.storeId);
       const lastSync = typeof window !== "undefined" 
-        ? localStorage.getItem(lastSyncKey) 
+        ? localStorage.getItem(lastSyncKey) || localStorage.getItem('products_last_sync')
         : null;
       
       let products: any[];
@@ -210,11 +215,33 @@ class SyncEngine {
         console.log(`[Sync] Pulled ${cached.length} products to local cache`);
       }
 
-      // Update last sync timestamp
+      // CRITICAL FIX: Reconcile the cache against the live product set.
+      // On incremental sync, we only fetched changed products, so we need
+      // to fetch ALL product IDs to detect deletions.
+      // On full sync, fetchAllProducts already reconciled, but doing it again is harmless.
+      try {
+        // Fetch all product IDs for this store (lightweight — only selects id)
+        const { data: allIds, error: idError } = await supabase
+          .from("products")
+          .select("id")
+          .eq("store_id", this.storeId);
+
+        if (!idError && allIds) {
+          const liveIds = allIds.map((p: any) => p.id);
+          const removed = await reconcileProductsCache(this.storeId, liveIds);
+          if (removed > 0) {
+            console.log(`[Sync] Reconcile removed ${removed} deleted products from cache`);
+          }
+        }
+      } catch (e) {
+        console.warn("[Sync] Cache reconciliation failed (non-fatal):", e);
+      }
+
+      // Update last sync timestamp (per-store key)
       if (typeof window !== "undefined") {
         try {
           localStorage.setItem(lastSyncKey, Date.now().toString());
-          // Also update the global last sync for cache freshness checks
+          // Also update the global last sync for backward compatibility
           localStorage.setItem('products_last_sync', Date.now().toString());
         } catch {}
       }
@@ -229,8 +256,10 @@ class SyncEngine {
   /**
    * Push queued offline transactions to Supabase via the API endpoint
    * Using the API route ensures we use the service role client (bypasses RLS)
-   * Stock decrements are queued as pending_writes instead of calling RPC directly,
-   * ensuring they are retried if the RPC fails or the user goes offline.
+   * 
+   * CRITICAL FIX: Stock decrements are now handled server-side in the
+   * /api/transactions POST route. We NO LONGER queue stock decrements here,
+   * which prevents double-decrementing for offline transactions.
    */
   async pushQueuedTransactions(): Promise<{
     pushed: number;
@@ -304,23 +333,28 @@ class SyncEngine {
 
         const apiResult = await response.json();
 
-        // Queue stock decrements as pending_writes instead of calling RPC directly.
-        // This ensures stock is decremented even if the RPC fails or the user goes offline.
-        // The processPendingWrites() method will process these during sync.
-        for (const item of txn.items) {
-          const pendingWrite: PendingWrite = {
-            id: crypto.randomUUID(),
-            type: "stock_decrement",
-            payload: {
-              product_id: item.product_id,
-              quantity: item.quantity,
-              store_id: txn.store_id,
-            },
-            created_at: new Date().toISOString(),
-            retry_count: 0,
-            last_error: null,
-          };
-          await addPendingWrite(pendingWrite);
+        // NOTE: Stock decrements are handled server-side in the /api/transactions
+        // POST route. We do NOT queue stock decrements here anymore.
+        // This prevents double-decrementing for offline transactions.
+
+        // CRITICAL FIX: Clean up any legacy stock_decrement pending writes
+        // for this transaction's items. These were queued by older versions
+        // of the app and would cause double-decrementing now that the API
+        // handles stock server-side.
+        try {
+          const pendingWrites = await getPendingWrites();
+          const txnProductIds = new Set(txn.items.map((i) => i.product_id));
+          const legacyStockWrites = pendingWrites.filter(
+            (w) =>
+              w.type === "stock_decrement" &&
+              txnProductIds.has((w.payload as any)?.product_id)
+          );
+          for (const legacyWrite of legacyStockWrites) {
+            await removePendingWrite(legacyWrite.id);
+            console.log(`[Sync] Cleaned up legacy stock decrement ${legacyWrite.id} for transaction ${txn.transaction_number}`);
+          }
+        } catch (e) {
+          console.warn("[Sync] Failed to clean up legacy stock decrements:", e);
         }
 
         // Remove from queue after successful sync
@@ -377,6 +411,9 @@ class SyncEngine {
    * Process pending stock decrements from the pending_writes table.
    * Each stock decrement is processed via the Supabase RPC.
    * If a decrement fails, it is retried on the next sync cycle.
+   * 
+   * CRITICAL FIX: Added retry limit — writes that fail more than
+   * MAX_PENDING_WRITE_RETRIES times are dropped to prevent infinite retry loops.
    */
   async processPendingWrites(): Promise<{
     processed: number;
@@ -422,6 +459,15 @@ class SyncEngine {
     }
 
     for (const write of stockDecrements) {
+      // CRITICAL FIX: Drop writes that have exceeded the retry limit
+      if (write.retry_count >= MAX_PENDING_WRITE_RETRIES) {
+        console.error(`[Sync] Dropping pending write ${write.id} after ${write.retry_count} retries: ${write.last_error}`);
+        await removePendingWrite(write.id);
+        result.failed++;
+        result.errors.push(`Stock decrement ${write.id}: dropped after ${write.retry_count} retries (${write.last_error})`);
+        continue;
+      }
+
       try {
         const payload = write.payload as {
           product_id: string;
@@ -432,6 +478,7 @@ class SyncEngine {
         const { error: stockError } = await supabase.rpc("decrement_stock", {
           product_id: payload.product_id,
           quantity: payload.quantity,
+          p_store_id: payload.store_id || null,
         });
 
         if (stockError) {
@@ -505,10 +552,10 @@ class SyncEngine {
         await syncFavoritesFromSupabase(this.storeId);
       }
 
-      // Push queued transactions (also queues stock decrements as pending_writes)
+      // Push queued transactions (stock decrements handled server-side)
       const pushResult = await this.pushQueuedTransactions();
 
-      // Process pending stock decrements
+      // Process pending stock decrements (only for legacy/offline queued writes)
       const pendingResult = await this.processPendingWrites();
 
       // Process pending favorite writes (add/remove starred items)
@@ -569,7 +616,7 @@ class SyncEngine {
 
       // If syncNow() was blocked by syncInProgress (another sync already running),
       // ensure we still pull products at least once
-      const count = await getCachedProductsCount();
+      const count = await getCachedProductsCount(storeId);
       if (count === 0) {
         console.log("[Sync] Local cache still empty after syncNow, pulling directly...");
         await this.pullProducts();

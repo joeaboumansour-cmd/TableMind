@@ -191,8 +191,14 @@ export async function syncFavoritesFromSupabase(storeId: string): Promise<void> 
     const remoteIds = (data || []).map((row: { product_id: string }) => row.product_id);
     const localIds = getFrequentlyUsedProductIds(storeId);
 
+    // CRITICAL FIX: Remove local IDs that no longer exist remotely.
+    // This cleans up favorites for products that were deleted.
+    // Only keep local IDs that are still in the remote set.
+    const remoteSet = new Set(remoteIds);
+    const validLocalIds = localIds.filter((id) => remoteSet.has(id));
+
     // Merge: keep local order, append any remote-only IDs
-    const merged = [...localIds];
+    const merged = [...validLocalIds];
     for (const remoteId of remoteIds) {
       if (!merged.includes(remoteId)) {
         merged.push(remoteId);

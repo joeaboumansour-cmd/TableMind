@@ -155,6 +155,52 @@ export async function upsertSingleProduct(product: CachedProduct): Promise<void>
   console.log(`[LocalDB] Upserted single product: ${product.name} (${product.id})`);
 }
 
+/**
+ * Remove specific products from the local cache by ID.
+ * Critical for deletion sync — without this, deleted products
+ * linger in IndexedDB and reappear on refresh.
+ */
+export async function removeCachedProducts(productIds: string[]): Promise<void> {
+  if (productIds.length === 0) return;
+  await db.products_cache.bulkDelete(productIds);
+  console.log(`[LocalDB] Removed ${productIds.length} products from cache`);
+}
+
+/**
+ * Remove a single product from the local cache by ID.
+ */
+export async function removeCachedProduct(productId: string): Promise<void> {
+  await db.products_cache.delete(productId);
+  console.log(`[LocalDB] Removed product ${productId} from cache`);
+}
+
+/**
+ * Reconcile the cache against a set of "live" product IDs from Supabase.
+ * Any cached product for this store NOT in the live set is deleted.
+ * This is the ONLY reliable way to detect deletions in the cache.
+ */
+export async function reconcileProductsCache(
+  storeId: string,
+  liveProductIds: string[]
+): Promise<number> {
+  const liveSet = new Set(liveProductIds);
+  const cached = await db.products_cache
+    .where("store_id")
+    .equals(storeId)
+    .toArray();
+
+  const staleIds = cached
+    .filter((p) => !liveSet.has(p.id))
+    .map((p) => p.id);
+
+  if (staleIds.length > 0) {
+    await db.products_cache.bulkDelete(staleIds);
+    console.log(`[LocalDB] Reconcile: removed ${staleIds.length} stale products for store ${storeId}`);
+  }
+
+  return staleIds.length;
+}
+
 export async function getCachedProducts(storeId: string): Promise<CachedProduct[]> {
   return db.products_cache
     .where("store_id")
@@ -177,7 +223,18 @@ export async function getCachedProductById(
   return db.products_cache.get(id);
 }
 
-export async function getCachedProductsCount(): Promise<number> {
+/**
+ * Count cached products for a specific store.
+ * If storeId is provided, only counts products for that store.
+ * If omitted, counts ALL cached products (legacy behavior).
+ */
+export async function getCachedProductsCount(storeId?: string): Promise<number> {
+  if (storeId) {
+    return db.products_cache
+      .where("store_id")
+      .equals(storeId)
+      .count();
+  }
   return db.products_cache.count();
 }
 
@@ -318,10 +375,11 @@ export async function seedProductsIfNeeded(storeId: string): Promise<number> {
       return 0; // Already have products, no seeding needed
     }
 
-    // Also check if we have ANY products cached (from any store)
-    const totalCount = await getCachedProductsCount();
-    if (totalCount > 0) {
-      return 0; // We have some products, don't seed
+    // Also check if we have ANY products cached for THIS store
+    // (not any store — per-store isolation)
+    const storeCount = await getCachedProductsCount(storeId);
+    if (storeCount > 0) {
+      return 0; // We have products for this store, don't seed
     }
 
     // Fetch seed products from static JSON
@@ -364,6 +422,9 @@ export async function seedProductsIfNeeded(storeId: string): Promise<number> {
  * Queue a stock decrement for later sync.
  * This ensures stock is decremented even if the user goes offline
  * between transaction creation and sync.
+ *
+ * NOTE: This is now ONLY used for offline transactions. Online transactions
+ * decrement stock server-side in the /api/transactions route.
  */
 export async function queueStockDecrement(
   productId: string,
@@ -388,7 +449,7 @@ export async function queueStockDecrement(
 
 /**
  * Queue stock decrements for all items in a transaction.
- * Called when a transaction is created (both online and offline).
+ * Called when a transaction is created offline.
  */
 export async function queueStockDecrementsForTransaction(
   items: Array<{ product_id: string; quantity: number }>,
@@ -480,4 +541,3 @@ export async function queueCashAdjustment(payload: CashAdjustmentPayload): Promi
 }
 
 export { db as localDB };
-

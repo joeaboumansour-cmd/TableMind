@@ -51,7 +51,6 @@ import {
   getCachedProductByBarcode,
   getCachedProductsCount,
   seedProductsIfNeeded,
-  queueStockDecrementsForTransaction,
 } from "@/lib/db";
 import type { CachedProduct } from "@/lib/db";
 import { useFeatureFlags } from "@/hooks/useFeatureFlags";
@@ -672,12 +671,9 @@ export default function POSPage() {
         }
       }
 
-      // Queue stock decrements as pending_writes for reliable sync
-      const queueStockDecrements = () =>
-        queueStockDecrementsForTransaction(
-          items.map((item) => ({ product_id: item.product_id, quantity: item.quantity })),
-          offlineStoreId
-        );
+      // NOTE: Stock decrements are now handled server-side in the /api/transactions
+      // POST route. No client-side stock decrement queuing is needed.
+      // This prevents double-decrementing for offline transactions.
 
       let savedOnline = false;
       if (navigator.onLine) {
@@ -706,7 +702,6 @@ export default function POSPage() {
 
       if (!savedOnline) {
         await queueTransaction(offlineTxnData);
-        await queueStockDecrements();
         toast.info("Transaction saved offline - will sync when online");
       }
 

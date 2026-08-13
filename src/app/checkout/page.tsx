@@ -21,7 +21,6 @@ import {
   Printer,
 } from "lucide-react";
 import { useCartStore } from "@/lib/stores/cartStore";
-import { queueStockDecrementsForTransaction } from "@/lib/db";
 import { toast } from "sonner";
 import { formatLL, formatUSD, SELL_RATE, RETURN_RATE, convertUsdToLlForReturn } from "@/lib/utils/format";
 import { generateReceiptToken } from "@/lib/receipt/token";
@@ -256,12 +255,9 @@ function CheckoutContent() {
         }
       }
 
-      // Queue stock decrements as pending_writes for reliable sync
-      const queueStockDecrements = () =>
-        queueStockDecrementsForTransaction(
-          items.map((item) => ({ product_id: item.product_id, quantity: item.quantity })),
-          offlineStoreId
-        );
+      // NOTE: Stock decrements are now handled server-side in the /api/transactions
+      // POST route. No client-side stock decrement queuing is needed.
+      // This prevents double-decrementing for offline transactions.
 
       let savedOnline = false;
       if (navigator.onLine) {
@@ -290,7 +286,6 @@ function CheckoutContent() {
 
       if (!savedOnline) {
         await queueTransaction(offlineTxnData);
-        await queueStockDecrements();
         toast.info("Transaction saved offline - will sync when online");
       }
 

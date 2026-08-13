@@ -5,7 +5,6 @@
 // ===
 
 import { useEffect } from "react";
-import { createClient, fetchAllProducts } from "@/lib/supabase/client";
 import { getCachedProductsCount } from "@/lib/db/localDB";
 import { syncEngine } from "@/lib/sync/engine";
 import { connectivity } from "@/lib/connectivity";
@@ -24,10 +23,11 @@ export function usePreloadProducts(storeId: string | null | undefined) {
     let cancelled = false;
 
     const preload = async () => {
-      // Check if we already have cached products
-      const count = await getCachedProductsCount();
+      // Check if we already have cached products for THIS store
+      // (not any store — per-store isolation)
+      const count = await getCachedProductsCount(storeId);
       if (count > 0) {
-        console.log(`[Preload] Cache already has ${count} products, skipping preload`);
+        console.log(`[Preload] Cache already has ${count} products for store ${storeId}, skipping preload`);
         return;
       }
 

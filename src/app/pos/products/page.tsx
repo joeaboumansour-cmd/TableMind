@@ -416,6 +416,32 @@ function StoreProductsPageContent() {
 
       setIsDialogOpen(false);
       resetForm();
+
+      // CRITICAL FIX: Upsert the saved product directly into the local cache
+      // instead of relying only on a full refetch. This keeps the cache
+      // consistent even if the subsequent fetch fails or is interrupted.
+      try {
+        const { upsertSingleProduct } = await import("@/lib/db/localDB");
+        await upsertSingleProduct({
+          id: parentProductId,
+          store_id: storeId,
+          name: name,
+          barcode: barcode || null,
+          cost_price: cost,
+          selling_price: selling,
+          currency: currency,
+          profit_percentage: profit,
+          discount_percentage: discount,
+          stock_quantity: stockQty,
+          min_stock_threshold: minStock,
+          parent_id: null,
+          variant_name: null,
+          updated_at: new Date().toISOString(),
+        } as any);
+      } catch (cacheError) {
+        console.warn("[Products] Failed to update local cache after save:", cacheError);
+      }
+
       // Invalidate the cache freshness timestamp so the next fetch
       // doesn't skip the network call, then force a fresh refresh.
       try { localStorage.removeItem('products_last_sync'); } catch {}
@@ -457,16 +483,50 @@ function StoreProductsPageContent() {
         .delete()
         .eq("id", productId);
 
-      if (error) throw error;
+      if (error) {
+        // Handle FK constraint violations (product has transaction history)
+        if (error.code === "23503") {
+          toast.error(`Cannot delete "${productName}" — it has transaction history. Consider deactivating it instead.`);
+          return;
+        }
+        throw error;
+      }
+
+      // CRITICAL FIX: Remove the product from the local cache immediately.
+      // This prevents the deleted product from reappearing on refresh.
+      try {
+        const { removeCachedProducts } = await import("@/lib/db/localDB");
+
+        // Find and remove any variant products that reference this product as parent
+        const variantIds = products
+          .filter((p) => p.parent_id === productId)
+          .map((p) => p.id);
+
+        const idsToRemove = [productId, ...variantIds];
+        await removeCachedProducts(idsToRemove);
+
+        // Also remove from React state immediately
+        setProducts((prev) => prev.filter((p) => !idsToRemove.includes(p.id)));
+
+        // Clean up favorites for the deleted product and its variants
+        try {
+          const { removeFrequentlyUsedProduct } = await import("@/lib/frequentlyUsed");
+          for (const id of idsToRemove) {
+            removeFrequentlyUsedProduct(storeId, id);
+          }
+        } catch {}
+      } catch (cacheError) {
+        console.warn("[Products] Failed to update local cache after delete:", cacheError);
+      }
 
       toast.success(`Product "${productName}" deleted`);
       // Invalidate the cache freshness timestamp and force a fresh refresh
       // so the deleted product disappears from the UI immediately.
       try { localStorage.removeItem('products_last_sync'); } catch {}
       fetchProducts(storeId, true);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error deleting product:", error);
-      toast.error("Failed to delete product");
+      toast.error(error?.message || "Failed to delete product");
     }
   };
 
