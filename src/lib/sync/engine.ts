@@ -269,10 +269,6 @@ class SyncEngine {
           usd_total_amount: txn.total_usd,
           usd_amount_paid: txn.amount_paid_usd || 0,
           usd_change_given: txn.change_given_usd || 0,
-          // Include WhatsApp phone if provided
-          ...(txn.whatsapp_sent_to && {
-            whatsapp_sent_to: txn.whatsapp_sent_to,
-          }),
           // Include user info - ALWAYS send user_name, independently of user_id
           ...(txn.user_name && {
             user_name: txn.user_name,

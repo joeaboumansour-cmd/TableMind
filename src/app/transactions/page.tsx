@@ -12,13 +12,11 @@ import {
   Clock,
   Receipt,
   RefreshCw,
-  Send,
   Search,
   ChevronDown,
   ChevronUp,
   AlertCircle,
   Loader2,
-  Phone,
   Filter,
   User,
   WifiOff,
@@ -85,7 +83,6 @@ interface Transaction {
   amount_paid: number;
   change_given: number;
   created_at: string;
-  whatsapp_sent_to?: string;
   user_id?: string;
   user_name?: string;
   transaction_items: TransactionItem[];
@@ -215,7 +212,6 @@ export default function TransactionHistoryPage() {
                 amount_paid: t.amount_paid,
                 change_given: t.change_given || 0,
                 created_at: t.created_at,
-                whatsapp_sent_to: t.whatsapp_sent_to,
                 user_id: t.user_id,
                 user_name: t.user_name,
                 transaction_items: (t.transaction_items || []).map((item: any) => ({
@@ -328,7 +324,7 @@ export default function TransactionHistoryPage() {
       filtered = filtered.filter(t => new Date(t.created_at) >= cutoff);
     }
     
-    // Apply search filter - by transaction #, phone number, or amount
+    // Apply search filter - by transaction #, user, or amount
     if (searchQuery.trim()) {
       const query = searchQuery.toLowerCase();
       const numericQuery = parseFloat(searchQuery.replace(/[^0-9.]/g, ""));
@@ -336,9 +332,6 @@ export default function TransactionHistoryPage() {
        filtered = filtered.filter(t => {
         // Search by transaction number
         if (t.transaction_number.toLowerCase().includes(query)) return true;
-        // Search by phone number - only match if there are actual digits in the search
-        const digitsOnly = searchQuery.replace(/\D/g, "");
-        if (t.whatsapp_sent_to && digitsOnly && t.whatsapp_sent_to.includes(digitsOnly)) return true;
         // Search by user name
         if (t.user_name && t.user_name.toLowerCase().includes(query)) return true;
         // Search by transaction amount
@@ -351,70 +344,6 @@ export default function TransactionHistoryPage() {
     
     setFilteredTransactions(filtered);
   }, [searchQuery, dateFilter, transactions]);
-
-  const handleSendWhatsApp = async (transaction: TransactionWithChange) => {
-    const phoneNumber = prompt("Enter WhatsApp number (8 digits, e.g., 70123456):");
-    if (!phoneNumber) return;
-
-    const cleanNumber = phoneNumber.replace(/\D/g, "");
-    if (cleanNumber.length !== 8) {
-      toast.error("Please enter a valid 8-digit Lebanese number");
-      return;
-    }
-
-    // Save phone number to transaction
-    try {
-      const authData = localStorage.getItem("goldensquirrel_auth");
-      const response = await fetch(`/api/transactions/${transaction.id}/whatsapp`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-auth-data": authData || "",
-        },
-        body: JSON.stringify({ phone: cleanNumber }),
-      });
-
-      if (response.ok) {
-        setTransactions(prev => prev.map(t => 
-          t.id === transaction.id 
-            ? { ...t, whatsapp_sent_to: cleanNumber }
-            : t
-        ));
-      }
-    } catch (err) {
-      console.error("Failed to save WhatsApp phone:", err);
-    }
-
-    let storeName = "TableMind Store";
-    try {
-      const authData = JSON.parse(localStorage.getItem("goldensquirrel_auth") || "{}");
-      if (authData.username) {
-        storeName = authData.username;
-      }
-    } catch (e) {}
-
-    const receiptLines: string[] = [];
-    receiptLines.push(`*${storeName}*`);
-    receiptLines.push(`Transaction: #${transaction.transaction_number}`);
-    receiptLines.push(`Date: ${formatDateTime(transaction.created_at)}`);
-    receiptLines.push("");
-    receiptLines.push("*Items:*");
-    transaction.transaction_items.forEach((item) => {
-      receiptLines.push(`${item.product_name} x${item.quantity} - ${formatLL(item.total_price)}`);
-    });
-    receiptLines.push("");
-    receiptLines.push(`*Total:* ${formatLL(transaction.total_amount)}`);
-    receiptLines.push(`*Paid:* ${formatLL(transaction.amount_paid)}`);
-    receiptLines.push(`*Change:* ${formatLL(transaction.calculated_change)}`);
-    receiptLines.push("");
-    receiptLines.push("Status: ✓ Paid");
-    receiptLines.push("Thank you for your purchase!");
-
-    const receiptText = encodeURIComponent(receiptLines.join("\n"));
-    const whatsappUrl = `https://wa.me/${cleanNumber}?text=${receiptText}`;
-    window.open(whatsappUrl, "_blank");
-    toast.success("Opening WhatsApp...");
-  };
 
   const toggleAccordion = (id: string) => {
     setOpenAccordion(openAccordion === id ? null : id);
@@ -471,12 +400,12 @@ export default function TransactionHistoryPage() {
             </div>
           </div>
           
-           {/* Search Bar - search by transaction #, phone, user, or amount */}
+           {/* Search Bar - search by transaction #, user, or amount */}
            <div className="relative mb-2">
              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
              <Input
                type="text"
-               placeholder="Search by #, user, phone, or amount..."
+               placeholder="Search by #, user, or amount..."
                value={searchQuery}
                onChange={(e) => setSearchQuery(e.target.value)}
                className="pl-10"
@@ -589,12 +518,6 @@ export default function TransactionHistoryPage() {
                                 <span className="text-blue-600 font-medium">{transaction.user_name}</span>
                               </div>
                             )}
-                            {transaction.whatsapp_sent_to && (
-                              <div className="flex items-center gap-1 mt-1 text-xs text-green-600">
-                                <Phone className="h-3 w-3" />
-                                <span>Sent to: {transaction.whatsapp_sent_to}</span>
-                              </div>
-                            )}
                           </div>
                           <div className="text-right">
                             <div className="text-lg font-bold text-primary">{formatLL(transaction.total_amount)}</div>
@@ -666,25 +589,12 @@ export default function TransactionHistoryPage() {
                         )}
                       </div>
 
-                       <div className="flex flex-col gap-2">
-                          {transaction.whatsapp_sent_to ? (
-                            <div className="flex-1 flex items-center justify-center text-sm text-green-600 font-medium">
-                              <Send className="h-4 w-4 mr-2" />
-                              Sent to: {transaction.whatsapp_sent_to}
-                            </div>
-                          ) : (
-                            <Button variant="outline" className="flex-1" onClick={() => handleSendWhatsApp(transaction)}>
-                              <Send className="h-4 w-4 mr-2" />
-                              Send to WhatsApp
-                            </Button>
-                          )}
-                          {transaction.user_name && (
-                            <div className="flex-1 flex items-center justify-center text-xs text-muted-foreground">
-                              <User className="h-3 w-3 mr-1" />
-                              By: {transaction.user_name}
-                            </div>
-                          )}
-                       </div>
+                       {transaction.user_name && (
+                         <div className="flex items-center justify-center text-xs text-muted-foreground">
+                           <User className="h-3 w-3 mr-1" />
+                           By: {transaction.user_name}
+                         </div>
+                       )}
                      </CardContent>
                   </CollapsibleContent>
                 </Card>

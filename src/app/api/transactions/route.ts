@@ -64,8 +64,6 @@ export async function GET(request: Request) {
         amount_paid,
         change_given,
         created_at,
-        whatsapp_sent_to,
-        whatsapp_sent_at,
         user_id,
         user_name,
         transaction_items (
@@ -136,22 +134,20 @@ export async function POST(request: Request) {
           total_amount,
           amount_paid,
           change_given,
-          created_at,
-          whatsapp_sent_to,
-          whatsapp_sent_at,
-          user_id,
-          user_name,
-          transaction_items (
-            id,
-            product_name,
-            quantity,
-            unit_price,
-            total_price,
-            currency
-          )
-        `)
-        .eq("id", existingTxn.id)
-        .single();
+        created_at,
+        user_id,
+        user_name,
+        transaction_items (
+          id,
+          product_name,
+          quantity,
+          unit_price,
+          total_price,
+          currency
+        )
+      `)
+      .eq("id", existingTxn.id)
+      .single();
 
       if (fetchError) {
         return NextResponse.json({ error: fetchError.message }, { status: 500 });
@@ -179,11 +175,6 @@ export async function POST(request: Request) {
         usd_total_amount: body.usd_total_amount,
         usd_amount_paid: body.usd_amount_paid || 0,
         usd_change_given: body.usd_change_given || 0,
-        // If whatsapp_sent_to provided, save it and set timestamp
-        ...(body.whatsapp_sent_to && {
-          whatsapp_sent_to: body.whatsapp_sent_to,
-          whatsapp_sent_at: new Date().toISOString(),
-        }),
         // Always save user_name if provided (for all users: owners and employees)
         ...(body.user_name && {
           user_name: body.user_name,
@@ -210,23 +201,21 @@ export async function POST(request: Request) {
             total_amount,
             amount_paid,
             change_given,
-            created_at,
-            whatsapp_sent_to,
-            whatsapp_sent_at,
-            user_id,
-            user_name,
-            transaction_items (
-              id,
-              product_name,
-              quantity,
-              unit_price,
-              total_price,
-              currency
-            )
-          `)
-          .eq("store_id", store_id)
-          .eq("transaction_number", body.transaction_number)
-          .single();
+        created_at,
+        user_id,
+        user_name,
+        transaction_items (
+          id,
+          product_name,
+          quantity,
+          unit_price,
+          total_price,
+          currency
+        )
+      `)
+      .eq("store_id", store_id)
+      .eq("transaction_number", body.transaction_number)
+      .single();
 
         if (existing) {
           return NextResponse.json({ transaction: existing, duplicated: true }, { status: 200 });

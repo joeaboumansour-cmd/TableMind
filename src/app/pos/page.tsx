@@ -31,12 +31,17 @@ import {
   Trash2,
   Check,
   Loader2,
+  Copy,
+  Share2,
+  Printer,
 } from "lucide-react";
 import { useCartStore } from "@/lib/stores/cartStore";
 import { useAuth } from "@/lib/auth/AuthContext";
 import { Product } from "@/lib/types/product";
 import { useToastManager } from "@/hooks/useToastManager";
 import { formatCurrency, formatLL, formatUSD, convertLlToUsd, convertLlToUsdForSale, convertLlToUsdForReturn, SELL_RATE, RETURN_RATE } from "@/lib/utils/format";
+import { generateReceiptToken } from "@/lib/receipt/token";
+import QRCode from "qrcode";
 import BarcodeScanner, { playSuccessSound } from "@/components/BarcodeScanner";
 import ProductSearchBar from "@/components/ProductSearchBar";
 import { SyncIndicator } from "@/components/SyncIndicator";
@@ -88,6 +93,18 @@ export default function POSPage() {
   // Quick end transaction state
   const [isQuickEndDialogOpen, setIsQuickEndDialogOpen] = useState(false);
   const [isQuickEndProcessing, setIsQuickEndProcessing] = useState(false);
+  // Quick end completion (QR receipt) state
+  const [completedTxnNumber, setCompletedTxnNumber] = useState("");
+  const [completedReceiptUrl, setCompletedReceiptUrl] = useState("");
+  const [completedQrDataUrl, setCompletedQrDataUrl] = useState("");
+  const [isCompleteDialogOpen, setIsCompleteDialogOpen] = useState(false);
+  const [completedTotal, setCompletedTotal] = useState(0);
+  const [completedTotalUsd, setCompletedTotalUsd] = useState(0);
+  const [completedItemCount, setCompletedItemCount] = useState(0);
+  const [completedChange, setCompletedChange] = useState(0);
+  const [completedChangeUsd, setCompletedChangeUsd] = useState(0);
+  const [completedPaid, setCompletedPaid] = useState(0);
+  const [completedPaidUsd, setCompletedPaidUsd] = useState(0);
 
   const { toast } = useToastManager({ throttleMs: 1200 });
 
@@ -491,6 +508,65 @@ export default function POSPage() {
     return `TXN-${timestamp}-${random}`;
   };
 
+  // Copy receipt link to clipboard
+  const handleCopyCompletedLink = async () => {
+    try {
+      await navigator.clipboard.writeText(completedReceiptUrl);
+      toast.success("Receipt link copied to clipboard");
+    } catch (err) {
+      console.error("Failed to copy link:", err);
+      toast.error("Failed to copy link");
+    }
+  };
+
+  // Share receipt link via Web Share API
+  const handleShareCompletedReceipt = async () => {
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: `Receipt - ${completedTxnNumber}`,
+          text: `Your receipt for transaction ${completedTxnNumber}`,
+          url: completedReceiptUrl,
+        });
+      } catch (err) {
+        // User cancelled share
+      }
+    } else {
+      await handleCopyCompletedLink();
+    }
+  };
+
+  // Print the QR code (for hard-copy at the register)
+  const handlePrintCompletedQR = () => {
+    const printWindow = window.open("", "_blank", "width=400,height=500");
+    if (!printWindow) {
+      toast.error("Please allow pop-ups to print the QR code");
+      return;
+    }
+    printWindow.document.write(`
+      <html>
+        <head>
+          <title>Receipt QR - ${completedTxnNumber}</title>
+          <style>
+            body { font-family: Arial, sans-serif; text-align: center; padding: 20px; }
+            h2 { margin-bottom: 4px; }
+            p { color: #666; margin-bottom: 16px; }
+            img { max-width: 300px; }
+            .url { font-size: 12px; color: #888; word-break: break-all; margin-top: 12px; }
+          </style>
+        </head>
+        <body>
+          <h2>Scan for Digital Receipt</h2>
+          <p>Transaction #${completedTxnNumber}</p>
+          <img src="${completedQrDataUrl}" alt="Receipt QR Code" />
+          <div class="url">${completedReceiptUrl}</div>
+          <script>window.print();</script>
+        </body>
+      </html>
+    `);
+    printWindow.document.close();
+  };
+
   // Quick end transaction - immediately completes the sale without checkout
   const handleQuickEnd = async () => {
     if (items.length === 0) return;
@@ -501,6 +577,20 @@ export default function POSPage() {
       const txnNumber = generateTransactionNumber();
       const total = getTotal();
       const totalUsd = getTotalUsd();
+
+      // Generate unguessable receipt token (works fully offline)
+      const token = generateReceiptToken();
+      const receiptUrl = `${window.location.origin}/receipt/${token}`;
+      const itemCount = getItemCount();
+      setCompletedTxnNumber(txnNumber);
+      setCompletedReceiptUrl(receiptUrl);
+      setCompletedTotal(total);
+      setCompletedTotalUsd(totalUsd);
+      setCompletedItemCount(itemCount);
+      setCompletedChange(0);
+      setCompletedChangeUsd(0);
+      setCompletedPaid(total);
+      setCompletedPaidUsd(totalUsd);
 
       // Get current user info
       const currentUser = JSON.parse(localStorage.getItem("goldensquirrel_user") || "{}");
@@ -518,6 +608,7 @@ export default function POSPage() {
       // Save transaction to database
       const transactionData: any = {
         transaction_number: txnNumber,
+        receipt_token: token,
         subtotal: getSubtotal(),
         total_amount: total,
         amount_paid: total,
@@ -550,6 +641,7 @@ export default function POSPage() {
         id: crypto.randomUUID(),
         store_id: offlineStoreId,
         transaction_number: txnNumber,
+        receipt_token: token,
         subtotal: getSubtotal(),
         total_amount: total,
         amount_paid: total,
@@ -621,7 +713,21 @@ export default function POSPage() {
       // Clear cart and close dialog
       clearCart();
       setIsQuickEndDialogOpen(false);
+      setCompletedQrDataUrl("");
+      setIsCompleteDialogOpen(true);
       toast.success("Transaction completed!");
+
+      // Generate QR code for the digital receipt (client-side, works offline)
+      try {
+        const dataUrl = await QRCode.toDataURL(receiptUrl, {
+          width: 256,
+          margin: 2,
+          errorCorrectionLevel: "M",
+        });
+        setCompletedQrDataUrl(dataUrl);
+      } catch (qrError) {
+        console.error("Failed to generate QR code:", qrError);
+      }
     } catch (error) {
       console.error("Error ending transaction:", error);
       toast.error("Failed to end transaction");
@@ -1290,6 +1396,83 @@ export default function POSPage() {
               End Transaction
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Transaction Complete — Digital Receipt QR Dialog */}
+      <Dialog open={isCompleteDialogOpen} onOpenChange={setIsCompleteDialogOpen}>
+        <DialogContent className="max-w-sm">
+          <div className="text-center">
+            <div className="h-16 w-16 rounded-full bg-green-500/10 flex items-center justify-center mx-auto mb-4">
+              <Check className="h-8 w-8 text-green-500" />
+            </div>
+            <DialogHeader>
+              <DialogTitle>Transaction Complete!</DialogTitle>
+              <DialogDescription>
+                Transaction #{completedTxnNumber} • {completedItemCount} item
+                {completedItemCount !== 1 ? "s" : ""}
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="space-y-2 my-4">
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Total Amount</span>
+                <span className="font-bold">{formatLL(completedTotal)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Amount Paid</span>
+                <span className="font-bold">{formatLL(completedPaid)}</span>
+              </div>
+              {completedChange > 0 && (
+                <div className="flex justify-between text-green-500">
+                  <span>Change</span>
+                  <span className="font-bold">{formatLL(completedChange)}</span>
+                </div>
+              )}
+            </div>
+
+            {/* QR Code */}
+            {completedQrDataUrl ? (
+              <div className="mb-4 p-4 border rounded-lg bg-muted/30">
+                <h3 className="font-semibold text-sm mb-1">Digital Receipt</h3>
+                <p className="text-xs text-muted-foreground mb-3">
+                  Customer can scan this QR code to view their receipt on their phone
+                </p>
+                <div className="flex justify-center mb-3">
+                  <img
+                    src={completedQrDataUrl}
+                    alt="Digital receipt QR code"
+                    className="w-48 h-48 rounded-lg bg-white p-2"
+                  />
+                </div>
+                <div className="grid grid-cols-3 gap-2">
+                  <Button variant="outline" size="sm" onClick={handleCopyCompletedLink}>
+                    <Copy className="h-4 w-4 mr-1" />
+                    Copy
+                  </Button>
+                  <Button variant="outline" size="sm" onClick={handleShareCompletedReceipt}>
+                    <Share2 className="h-4 w-4 mr-1" />
+                    Share
+                  </Button>
+                  <Button variant="outline" size="sm" onClick={handlePrintCompletedQR}>
+                    <Printer className="h-4 w-4 mr-1" />
+                    Print
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <div className="mb-4 p-4 border rounded-lg bg-muted/30 flex items-center justify-center">
+                <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                <span className="ml-2 text-sm text-muted-foreground">Generating QR...</span>
+              </div>
+            )}
+
+            <DialogFooter>
+              <Button className="w-full" onClick={() => setIsCompleteDialogOpen(false)}>
+                New Transaction
+              </Button>
+            </DialogFooter>
+          </div>
         </DialogContent>
       </Dialog>
     </div>

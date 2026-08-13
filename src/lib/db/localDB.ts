@@ -26,7 +26,6 @@ export interface CachedTransaction {
   amount_paid: number;
   change_given: number;
   created_at: string;
-  whatsapp_sent_to?: string;
   user_id?: string;
   user_name?: string;
   transaction_items: CachedTransactionItem[];
@@ -65,7 +64,6 @@ export interface QueuedTransaction {
   change_given_usd: number;
   user_id?: string;
   user_name?: string;
-  whatsapp_sent_to?: string;
   items: QueuedTransactionItem[];
   created_at: string;
 }
