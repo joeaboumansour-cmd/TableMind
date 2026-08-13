@@ -731,13 +731,15 @@ const filteredProducts = products.filter(
   const totalCostValue = products.reduce((sum, p) => sum + (p.cost_price * p.stock_quantity), 0);
   const totalSellValue = products.reduce((sum, p) => sum + (p.selling_price * p.stock_quantity), 0);
 
-  // Show loading while auth is initializing
-  if (authLoading) {
+  // Show loading while auth is initializing OR products are being fetched.
+  // This prevents the user from seeing "0 items" while the forceRefresh
+  // network fetch is in-flight. The spinner stays until products arrive.
+  if (authLoading || isLoading) {
     return (
       <div className="h-screen flex items-center justify-center bg-background">
         <div className="text-center">
           <Loader2 className="h-8 w-8 animate-spin mx-auto text-amber-500" />
-          <p className="mt-4 text-muted-foreground">Loading...</p>
+          <p className="mt-4 text-muted-foreground">Loading products...</p>
         </div>
       </div>
     );
