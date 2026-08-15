@@ -23,14 +23,19 @@ import { isValidReceiptToken } from "@/lib/receipt/token";
 interface PublicReceiptItem {
   product_name: string;
   quantity: number;
+  unit_price: number;
+  total_price: number;
+  currency: "LL" | "USD";
 }
 
 interface PublicReceipt {
   transaction_number: string;
   created_at: string;
+  subtotal: number;
   total_amount: number;
   amount_paid: number;
   change_given: number;
+  rounding_adjustment: number;
   items: PublicReceiptItem[];
   store: {
     name: string;
@@ -314,27 +319,68 @@ export default function PublicReceiptPage() {
 
               <Separator className="my-4" />
 
-              {/* Items — name + quantity only, NO unit prices */}
-              <div className="space-y-3 mb-6">
+              {/* Column header — labels make unit price vs. line total unambiguous */}
+              <div className="grid grid-cols-12 gap-2 text-xs uppercase text-muted-foreground tracking-wider mb-1">
+                <div className="col-span-5">Item</div>
+                <div className="col-span-2 text-right">Qty</div>
+                <div className="col-span-3 text-right">Unit Price</div>
+                <div className="col-span-2 text-right">Line Total</div>
+              </div>
+
+              {/* Line items: exact unit price × quantity = line total */}
+              <div className="space-y-2.5 mb-6">
                 {receipt.items.map((item, index) => (
-                  <div key={index} className="flex justify-between text-sm">
-                    <div className="flex-1">
-                      <p className="font-medium">{item.product_name}</p>
+                  <div
+                    key={index}
+                    className="grid grid-cols-12 gap-2 text-sm items-baseline"
+                  >
+                    <div className="col-span-5 font-medium truncate">
+                      {item.product_name}
                     </div>
-                    <span className="text-muted-foreground shrink-0 ml-4">
-                      × {item.quantity}
-                    </span>
+                    <div className="col-span-2 text-right text-muted-foreground">
+                      {item.quantity}
+                    </div>
+                    <div className="col-span-3 text-right text-muted-foreground">
+                      {formatLL(item.unit_price)}
+                    </div>
+                    <div className="col-span-2 text-right font-medium">
+                      {formatLL(item.total_price)}
+                    </div>
                   </div>
                 ))}
               </div>
 
               <Separator className="my-4" />
 
-              {/* Totals */}
-              <div className="space-y-2">
-                <div className="flex justify-between text-lg font-bold">
+              {/* Totals — exact subtotal + transparent cash rounding + grand total.
+                  Always reconciles: subtotal + rounding_adjustment = total_amount */}
+              <div className="space-y-2 text-sm">
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Subtotal</span>
+                  <span>{formatLL(receipt.subtotal)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">
+                    Rounding adjustment (cash)
+                  </span>
+                  <span
+                    className={
+                      receipt.rounding_adjustment > 0
+                        ? "text-amber-600"
+                        : receipt.rounding_adjustment < 0
+                        ? "text-green-600"
+                        : ""
+                    }
+                  >
+                    {receipt.rounding_adjustment > 0 ? "+" : ""}
+                    {formatLL(receipt.rounding_adjustment)}
+                  </span>
+                </div>
+                <div className="flex justify-between text-lg font-bold pt-2 border-t border-border/60">
                   <span>Total</span>
-                  <span className="text-amber-500">{formatLL(receipt.total_amount)}</span>
+                  <span className="text-amber-500">
+                    {formatLL(receipt.total_amount)}
+                  </span>
                 </div>
               </div>
 

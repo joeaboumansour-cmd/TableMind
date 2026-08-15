@@ -28,10 +28,19 @@ function isRateLimited(token: string): boolean {
  * Returns only safe fields:
  *  - Store name + contact info (phone/whatsapp, address) for marketing
  *  - Transaction number, date
- *  - Line items: product name + quantity ONLY (no unit prices)
+ *  - Exact subtotal + cash rounding adjustment (so the receipt math always
+ *    reconciles: subtotal + rounding adjustment = total)
+ *  - Line items: product name + quantity + unit price + line total
  *  - Total, amount paid, change
  *
  * No user info, no store_id, no internal data.
+ *
+ * Rounding note: prices are stored EXACT (unrounded). Only the final total is
+ * rounded to the nearest 5,000 LL (smallest cash denomination). The
+ * "rounding adjustment" line on the receipt exposes this delta so the customer
+ * sees exactly how subtotal → total, preventing "why doesn't it add up?"
+ * skepticism. The store absorbs at most ±2,500 LL per transaction regardless
+ * of quantity, so there is no per-unit rounding loss.
  */
 export async function GET(
   request: Request,
@@ -69,6 +78,7 @@ export async function GET(
       .select(`
         id,
         transaction_number,
+        subtotal,
         total_amount,
         amount_paid,
         change_given,
@@ -82,7 +92,10 @@ export async function GET(
         transaction_items (
           id,
           product_name,
-          quantity
+          quantity,
+          unit_price,
+          total_price,
+          currency
         )
       `)
       .eq("receipt_token", token)
@@ -103,16 +116,30 @@ export async function GET(
 
     // Build the safe public response
     const store = transaction.stores as any;
+
+    // Coerce monetary values to numbers. Supabase may return DECIMAL columns
+    // as numbers or numeric strings depending on driver config, so normalise
+    // here so the receipt page never has to guess.
+    const subtotal = transaction.subtotal != null ? Number(transaction.subtotal) : 0;
+    const totalAmount = Number(transaction.total_amount);
+
     return NextResponse.json({
       receipt: {
         transaction_number: transaction.transaction_number,
         created_at: transaction.created_at,
-        total_amount: transaction.total_amount,
+        subtotal,
+        total_amount: totalAmount,
         amount_paid: transaction.amount_paid,
         change_given: transaction.change_given || 0,
+        // Delta between the exact subtotal and the cash-rounded total.
+        // Always reconciles: subtotal + rounding_adjustment = total_amount.
+        rounding_adjustment: totalAmount - subtotal,
         items: (transaction.transaction_items || []).map((item: any) => ({
           product_name: item.product_name,
-          quantity: item.quantity,
+          quantity: Number(item.quantity) || 0,
+          unit_price: Number(item.unit_price) || 0,
+          total_price: Number(item.total_price) || 0,
+          currency: (item.currency as "LL" | "USD") || "LL",
         })),
         store: {
           name: store?.username || "Store",
