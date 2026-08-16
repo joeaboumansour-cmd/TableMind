@@ -46,7 +46,7 @@ import {
   Phone,
   MapPin,
 } from "lucide-react";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { formatDateTime } from "@/lib/utils/format";
 import { SECTIONS, SectionKey } from "@/lib/auth/permissions";
 import { FEATURES, FEATURE_PRESETS, FeatureKey, getDefaultFeaturesForPreset, mergeFeaturesWithDefaults } from "@/lib/features";

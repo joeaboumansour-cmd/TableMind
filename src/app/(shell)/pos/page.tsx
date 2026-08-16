@@ -355,7 +355,7 @@ export default function POSPage() {
     // inside this effect, so including it made the effect re-fire and run a
     // full loadData() (and therefore a full sync) twice on every mount.
     // The store id is read from `user.storeId` directly instead.
-  }, [router, setStoreId, user, authLogout]);
+  }, [router, setStoreId, user, authLogout, toast]);
 
   // ---- Build O(1) barcode index whenever products change ----
   useEffect(() => {
@@ -414,12 +414,12 @@ export default function POSPage() {
       if (isDesktopMode) {
         incrementQuantity(product.id);
         playSuccessSound();
-        toast.success(`${resolvedProduct.name} qty increased to ${existingItem.quantity + 1}`);
+        toast.success(`${resolvedProduct.name} qty increased to ${existingItem.quantity + 1}`, { key: "cart-add" });
       } else {
         setHighlightedItemId(product.id);
         if (highlightTimeoutRef.current) clearTimeout(highlightTimeoutRef.current);
         highlightTimeoutRef.current = setTimeout(() => setHighlightedItemId(null), 800);
-        toast.info(`${resolvedProduct.name} is already in cart`);
+        toast.info(`${resolvedProduct.name} is already in cart`, { key: "cart-duplicate" });
         setTimeout(() => {
           const el = document.getElementById(`cart-item-${product.id}`);
           if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -429,12 +429,12 @@ export default function POSPage() {
       const added = addItem(resolvedProduct);
       if (added) {
         playSuccessSound();
-        toast.success(`Added ${resolvedProduct.name}`);
+        toast.success(`Added ${resolvedProduct.name}`, { key: "cart-add" });
       } else {
         setHighlightedItemId(product.id);
         if (highlightTimeoutRef.current) clearTimeout(highlightTimeoutRef.current);
         highlightTimeoutRef.current = setTimeout(() => setHighlightedItemId(null), 2000);
-        toast.info(`${resolvedProduct.name} is already in cart`);
+        toast.info(`${resolvedProduct.name} is already in cart`, { key: "cart-duplicate" });
         setTimeout(() => {
           const el = document.getElementById(`cart-item-${product.id}`);
           if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -443,13 +443,19 @@ export default function POSPage() {
     }
     // `items` is deliberately NOT a dependency — it is read via getState()
     // above so this callback stays referentially stable.
-  }, [addItem, incrementQuantity, isEnabled, isDesktopMode]);
+  }, [addItem, incrementQuantity, isEnabled, isDesktopMode, toast]);
 
   // Handle barcode scan from camera — O(1) local first, then live Supabase fallback to guarantee zero misses
-  const handleBarcodeScan = async (barcode: string) => {
+  // MUST stay referentially stable. This is the `onScan` prop of the memoized
+  // scanner: as a plain function it was a new identity on every POS render,
+  // which defeated React.memo AND cascaded through the scanner's own
+  // useCallbacks into its camera lifecycle effect, restarting the camera on
+  // every render. `barcodeIndex` is the only value here that legitimately
+  // changes, and only when the catalog does.
+  const handleBarcodeScan = useCallback(async (barcode: string) => {
     const trimmed = barcode.trim();
     if (!trimmed) {
-      toast.error("Empty barcode");
+      toast.error("Empty barcode", { key: "scan-miss" });
       return;
     }
 
@@ -464,7 +470,7 @@ export default function POSPage() {
     //    that exist server-side but aren't in the local cache/state yet
     if (!connectivity.isOnline) {
       playErrorSound();
-      toast.error("Product not found in local data");
+      toast.error("Product not found in local data", { key: "scan-miss" });
       return;
     }
 
@@ -489,7 +495,7 @@ export default function POSPage() {
       if (error || !data) {
         toast.dismiss("scan-fallback");
         playErrorSound();
-        toast.error("Product not found");
+        toast.error("Product not found", { key: "scan-miss" });
         return;
       }
 
@@ -541,7 +547,7 @@ export default function POSPage() {
       }
 
       toast.dismiss("scan-fallback");
-      toast.success("Found via server — added to cart");
+      toast.success("Found via server — added to cart", { key: "cart-add" });
 
       // 3. Add to cart
       handleProductAdd(mapped);
@@ -549,9 +555,9 @@ export default function POSPage() {
       console.error("[POS Scan] fallback error:", err);
       toast.dismiss("scan-fallback");
       playErrorSound();
-      toast.error("Product not found");
+      toast.error("Product not found", { key: "scan-miss" });
     }
-  };
+  }, [barcodeIndex, handleProductAdd, user?.storeId, toast]);
 
   // useCallback so the keydown effect below doesn't tear down and re-register
   // its listener on every render (this was a plain function in a dep array).

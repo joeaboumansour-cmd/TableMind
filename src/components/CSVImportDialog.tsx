@@ -11,7 +11,7 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import {
   Upload,
   FileText,
@@ -120,7 +120,7 @@ export default function CSVImportDialog({
     // Check import limits
     const limitCheck = validateImportLimits(result.data.length);
     if (!limitCheck.valid) {
-      toast.error(limitCheck.message);
+      toast.error(limitCheck.message ?? "This file exceeds the import limit");
     }
   };
 

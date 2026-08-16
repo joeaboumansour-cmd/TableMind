@@ -14,7 +14,7 @@ import {
   convertLlToUsdForSale,
 } from "@/lib/utils/format";
 import { cn } from "@/lib/utils";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 
 interface AnalyticsData {
   summary: {

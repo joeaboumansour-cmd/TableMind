@@ -153,6 +153,26 @@ function BarcodeScanner({ onScan, onClose, isActive = true, desktopMode = false,
   const internalBarcodeInputRef = useRef<HTMLInputElement | null>(null);
   const barcodeInputRef = internalBarcodeInputRef;
 
+  // EVERY MediaStream this component has ever acquired, not just the current
+  // one. streamRef alone was a camera leak: any code path that starts the
+  // camera twice overwrites it, and the orphaned stream's tracks are then
+  // unreachable — the camera stays on with no handle left to stop it.
+  const activeStreamsRef = useRef<Set<MediaStream>>(new Set());
+
+  // Bumped on every start and on every stop. An async start that finds its
+  // token stale knows a stop overtook it and must release what it acquired
+  // instead of publishing it.
+  const startTokenRef = useRef(0);
+
+  // Lets the decode callbacks reach the LATEST onScan without being rebuilt
+  // when it changes. This is the whole reason the camera used to restart on
+  // every parent render: onScan flowed into reportBarcode → captureLoop →
+  // startCamera, all of which are dependencies of the lifecycle effect below.
+  const onScanRef = useRef(onScan);
+  useEffect(() => {
+    onScanRef.current = onScan;
+  }, [onScan]);
+
   const [isScanning, setIsScanning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [manualBarcode, setManualBarcode] = useState("");
@@ -167,15 +187,34 @@ function BarcodeScanner({ onScan, onClose, isActive = true, desktopMode = false,
     return false;
   }, []);
 
+  // ---- Track / release camera streams ----
+  const trackStream = useCallback((stream: MediaStream | null | undefined) => {
+    if (stream) activeStreamsRef.current.add(stream);
+  }, []);
+
+  /** Hard stop: every track of every stream we ever opened. */
+  const stopAllStreams = useCallback(() => {
+    for (const stream of activeStreamsRef.current) {
+      for (const track of stream.getTracks()) {
+        try {
+          track.stop();
+        } catch {}
+      }
+    }
+    activeStreamsRef.current.clear();
+    streamRef.current = null;
+    quaggaStreamRef.current = null;
+  }, []);
+
   // ---- Report barcode ----
   const reportBarcode = useCallback((barcode: string) => {
     if (isDuplicate(barcode)) return;
-    onScan(barcode);
+    onScanRef.current(barcode);
     setBarcodesScanned((prev) => {
       const s = new Set([...prev, barcode]);
       return Array.from(s).slice(-20);
     });
-  }, [onScan, isDuplicate]);
+  }, [isDuplicate]);
 
   // ---- Draw video frame to canvas (Android only) ----
   const drawFrame = useCallback((): HTMLCanvasElement | null => {
@@ -269,6 +308,13 @@ function BarcodeScanner({ onScan, onClose, isActive = true, desktopMode = false,
       // whatever camera Quagga may have acquired. Without this, Quagga.start()
       // would turn the camera ON after the user turned it OFF.
       if (!isMountedRef.current) {
+        // Quagga.stop() defers its own track-stopping to a setTimeout(0), so
+        // on its own it is NOT enough here — grab the stream it already opened
+        // during init() and kill the tracks synchronously first.
+        try {
+          trackStream(Quagga.CameraAccess?.getActiveStream?.() ?? null);
+        } catch {}
+        stopAllStreams();
         try {
           const p = Quagga.stop();
           if (p && typeof (p as Promise<void>).catch === "function") {
@@ -285,7 +331,9 @@ function BarcodeScanner({ onScan, onClose, isActive = true, desktopMode = false,
       // Capture the live MediaStream Quagga owns so we can stop its tracks
       // synchronously on teardown (iOS camera-release fix).
       try {
-        quaggaStreamRef.current = Quagga.CameraAccess?.getActiveStream?.() ?? null;
+        const active = Quagga.CameraAccess?.getActiveStream?.() ?? null;
+        quaggaStreamRef.current = active;
+        trackStream(active);
       } catch {}
 
       Quagga.onDetected((result: any) => {
@@ -308,7 +356,7 @@ function BarcodeScanner({ onScan, onClose, isActive = true, desktopMode = false,
         setIsScanning(true);
       }
     }
-  }, [captureLoop, reportBarcode]);
+  }, [captureLoop, reportBarcode, trackStream, stopAllStreams]);
 
   // ---- Stop Quagga (iOS only) ----
   // IMPORTANT: Quagga.stop() -> CameraAccess.release() stops the video tracks inside
@@ -336,16 +384,13 @@ function BarcodeScanner({ onScan, onClose, isActive = true, desktopMode = false,
 
       // 2. Synchronously stop the camera tracks — releases iOS camera hardware now.
       //    Quagga.CameraAccess.getActiveStream() returns the live MediaStream it owns.
-      let stream: MediaStream | null = null;
+      //    It is registered rather than stopped inline so that a stream Quagga
+      //    swapped in mid-session is released too, not just the latest one.
       try {
-        stream = quagga.CameraAccess?.getActiveStream?.() ?? quaggaStreamRef.current;
+        trackStream(quagga.CameraAccess?.getActiveStream?.() ?? null);
       } catch {}
-      if (stream) {
-        stream.getTracks().forEach((t: MediaStreamTrack) => {
-          try { t.stop(); } catch {}
-        });
-      }
-      quaggaStreamRef.current = null;
+      trackStream(quaggaStreamRef.current);
+      stopAllStreams();
 
       // 3. Pause + detach Quagga's internal <video> element so it releases its hold
       //    before stopEverything removes it from the DOM.
@@ -370,12 +415,20 @@ function BarcodeScanner({ onScan, onClose, isActive = true, desktopMode = false,
       quaggaRef.current = null;
     } catch {}
     quaggaInitRef.current = false;
-  }, []);
+  }, [trackStream, stopAllStreams]);
 
   // ---- Start camera ----
   const startCamera = useCallback(async () => {
     if (!isMountedRef.current) return;
     if (desktopMode) return; // Skip camera in desktop mode
+
+    // Claim this start. Any stop (or a newer start) invalidates the token, and
+    // every await below re-checks it — otherwise a getUserMedia that resolves
+    // after the user switched the scanner off happily hands us a live camera
+    // that nothing is left holding a reference to.
+    const token = ++startTokenRef.current;
+    const isStale = () => token !== startTokenRef.current || !isMountedRef.current;
+
     try {
       setError(null);
 
@@ -387,8 +440,12 @@ function BarcodeScanner({ onScan, onClose, isActive = true, desktopMode = false,
       if (!cachedTargetCameraId) {
         try {
           const tempStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+          // Tracked before the next await: if a stop lands in between, the
+          // probe stream is still reachable and gets released with the rest.
+          trackStream(tempStream);
           const devices = await navigator.mediaDevices.enumerateDevices();
           tempStream.getTracks().forEach(t => t.stop());
+          activeStreamsRef.current.delete(tempStream);
           const videoDevices = devices.filter(d => d.kind === "videoinput");
 
           if (isIOS()) {
@@ -413,6 +470,10 @@ function BarcodeScanner({ onScan, onClose, isActive = true, desktopMode = false,
           }
         } catch {}
       }
+
+      // The camera-enumeration probe above is async; bail if it outlived the
+      // user's intent.
+      if (isStale()) return;
 
       if (isIOS()) {
         // ================================================================
@@ -440,7 +501,11 @@ function BarcodeScanner({ onScan, onClose, isActive = true, desktopMode = false,
           },
         });
 
-        if (!isMountedRef.current) { stream.getTracks().forEach(t => t.stop()); return; }
+        // Register FIRST, then check staleness. Registering before the check
+        // means that even a stream acquired a beat too late is reachable by
+        // stopAllStreams() and cannot become an orphan.
+        trackStream(stream);
+        if (isStale()) { stopAllStreams(); return; }
         streamRef.current = stream;
 
         const video = document.createElement("video");
@@ -468,15 +533,16 @@ function BarcodeScanner({ onScan, onClose, isActive = true, desktopMode = false,
 
         video.onloadedmetadata = () => video.play().catch(() => {});
         video.oncanplay = () => {
-          if (!isMountedRef.current) return;
+          if (isStale()) return;
           setIsScanning(true);
+          if (captureTimerRef.current) clearInterval(captureTimerRef.current);
           captureTimerRef.current = setInterval(captureLoop, CAPTURE_INTERVAL_MS);
         };
 
         // Fallback start after 1s
         setTimeout(() => {
-          if (!isMountedRef.current) return;
-          if (video.readyState >= 2 && !isScanning) {
+          if (isStale()) return;
+          if (video.readyState >= 2 && !captureTimerRef.current) {
             setIsScanning(true);
             captureTimerRef.current = setInterval(captureLoop, CAPTURE_INTERVAL_MS);
           }
@@ -484,25 +550,42 @@ function BarcodeScanner({ onScan, onClose, isActive = true, desktopMode = false,
       }
     } catch (err: any) {
       console.error("[Scanner] Camera error:", err);
-      if (!isMountedRef.current) return;
+      if (isStale()) return;
       if (err.name?.includes("NotAllowed") || err.name?.includes("Permission")) setError("Camera permission denied.");
       else if (err.name?.includes("NotFound")) setError("No camera found.");
     }
-  }, [captureLoop, startQuagga, desktopMode]);
+  }, [captureLoop, startQuagga, desktopMode, trackStream, stopAllStreams]);
 
   // ---- Stop ----
   const stopEverything = useCallback(() => {
+    // Invalidate any startCamera() still sitting on an await, so it releases
+    // whatever it acquires instead of publishing it after we are gone.
+    startTokenRef.current++;
+
     stopQuagga();
     if (captureTimerRef.current) { clearInterval(captureTimerRef.current); captureTimerRef.current = null; }
     if (zxingReaderRef.current) { zxingReaderRef.current.reset(); zxingReaderRef.current = null; }
-    if (streamRef.current) { streamRef.current.getTracks().forEach(t => t.stop()); streamRef.current = null; }
-    if (videoRef.current) { videoRef.current.srcObject = null; videoRef.current = null; }
+
+    // Detach the <video> BEFORE killing the tracks: a still-attached element
+    // keeps its own reference to the stream on iOS WKWebView, which is enough
+    // to keep the camera indicator lit.
+    if (videoRef.current) {
+      try { videoRef.current.pause(); } catch {}
+      try { videoRef.current.srcObject = null; } catch {}
+      try { videoRef.current.load(); } catch {}
+      videoRef.current = null;
+    }
+
+    // The single source of truth for camera release — covers streamRef, the
+    // Quagga stream, and anything a racing start acquired.
+    stopAllStreams();
+
     if (videoContainerRef.current) videoContainerRef.current.innerHTML = "";
     barcodeDetectorRef.current = null;
     canvasRef.current = null;
     setIsScanning(false);
     setBarcodesScanned([]);
-  }, [stopQuagga]);
+  }, [stopQuagga, stopAllStreams]);
 
   // ---- Lifecycle ----
   useEffect(() => {

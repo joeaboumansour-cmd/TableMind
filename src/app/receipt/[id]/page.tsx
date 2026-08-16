@@ -16,7 +16,7 @@ import {
   MessageCircle,
   Receipt,
 } from "lucide-react";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { formatLL, formatDateTime } from "@/lib/utils/format";
 import { isValidReceiptToken } from "@/lib/receipt/token";
 

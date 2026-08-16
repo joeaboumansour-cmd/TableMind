@@ -33,7 +33,7 @@ import {
   Share2,
 } from "lucide-react";
 import { useCartStore } from "@/lib/stores/cartStore";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import {
   formatLL,
   formatLLParts,

@@ -28,7 +28,7 @@ import {
   CalendarDays,
   Users,
 } from "lucide-react";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { useAuth } from "@/lib/auth/AuthContext";
 import { useFeatureFlags } from "@/hooks/useFeatureFlags";
 import { formatLL, formatUSD, formatDateTime } from "@/lib/utils/format";

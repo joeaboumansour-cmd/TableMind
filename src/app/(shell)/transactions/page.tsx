@@ -46,7 +46,7 @@ import {
   convertLlToUsdForSale,
   formatLLParts,
 } from "@/lib/utils/format";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { useAuth } from "@/lib/auth/AuthContext";
 import { useFeatureFlags } from "@/hooks/useFeatureFlags";
 import { cn } from "@/lib/utils";

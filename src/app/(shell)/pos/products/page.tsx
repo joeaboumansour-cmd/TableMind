@@ -37,7 +37,7 @@ import {
    MoreHorizontal,
    WifiOff,
   } from "lucide-react";
- import { toast } from "sonner";
+ import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import ProductRow from "@/components/pos/ProductRow";
 import type { InventoryProduct } from "@/components/pos/ProductRow";
@@ -825,10 +825,10 @@ function StoreProductsPageContent() {
   const toggleFavourite = (product: InventoryProduct) => {
     if (isFrequentlyUsed(favStoreId, product.id)) {
       removeFrequentlyUsedProduct(favStoreId, product.id);
-      toast.info(`${product.name} removed from quick access`);
+      toast.info(`${product.name} removed from quick access`, { key: "favourite" });
     } else {
       addFrequentlyUsedProduct(favStoreId, product.id);
-      toast.success(`${product.name} added to quick access`);
+      toast.success(`${product.name} added to quick access`, { key: "favourite" });
     }
     setFreqVersion((v) => v + 1);
   };
@@ -1558,7 +1558,7 @@ function StoreProductsPageContent() {
                   setStockFilter("all");
                   setShowScanSearch(false);
                   playSuccessSound();
-                  toast.success(`Found: ${product.name}`);
+                  toast.success(`Found: ${product.name}`, { key: "scan-find" });
 
                   setTimeout(() => {
                     const element = document.getElementById(`product-${product.id}`);
@@ -1569,7 +1569,7 @@ function StoreProductsPageContent() {
 
                   setTimeout(() => setHighlightedProductId(null), 1600);
                 } else {
-                  toast.error("No product with that barcode");
+                  toast.error("No product with that barcode", { key: "scan-find" });
                   setShowScanSearch(false);
                 }
               }}
