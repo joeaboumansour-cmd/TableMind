@@ -819,7 +819,7 @@ export default function AdminPage() {
 
       {/* Feature Management Dialog */}
       <Dialog open={isFeatureDialogOpen} onOpenChange={setIsFeatureDialogOpen}>
-        <DialogContent className="max-w-lg mx-4 max-h-[90vh] overflow-y-auto">
+        <DialogContent className="max-w-lg mx-4 max-h-[90vh] overflow-y-auto overscroll-contain">
           <DialogHeader>
             <DialogTitle>Features — {featureStoreName}</DialogTitle>
             <DialogDescription>
@@ -967,7 +967,7 @@ export default function AdminPage() {
         setIsEmployeeDialogOpen(open);
         if (!open) resetEmployeeForm();
       }}>
-        <DialogContent className="max-w-2xl mx-4 max-h-[90vh] overflow-y-auto">
+        <DialogContent className="max-w-2xl mx-4 max-h-[90vh] overflow-y-auto overscroll-contain">
           <DialogHeader>
             <DialogTitle>Employees — {selectedStoreName}</DialogTitle>
             <DialogDescription>

@@ -643,7 +643,7 @@ function BarcodeScanner({ onScan, onClose, isActive = true, desktopMode = false,
               <Button size="sm" onClick={() => handleManualSubmit(manualBarcode)}>Add</Button>
             </div>
             {children && (
-              <div className="flex-1 overflow-y-auto min-h-0">
+              <div className="flex-1 overflow-y-auto overscroll-contain min-h-0">
                 {children}
               </div>
             )}

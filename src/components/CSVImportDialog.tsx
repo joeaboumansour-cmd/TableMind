@@ -263,7 +263,7 @@ export default function CSVImportDialog({
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto overscroll-contain">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Upload className="h-5 w-5" />
@@ -397,7 +397,7 @@ export default function CSVImportDialog({
                       </Button>
 
                       {showErrors && (
-                        <div className="max-h-40 overflow-y-auto text-xs space-y-1 p-2 bg-destructive/10 rounded">
+                        <div className="max-h-40 overflow-y-auto overscroll-contain text-xs space-y-1 p-2 bg-destructive/10 rounded">
                           {validationErrors.slice(0, 20).map((err, i) => (
                             <div key={i} className="text-destructive">
                               Row {err.row}: {err.field} - {err.message}

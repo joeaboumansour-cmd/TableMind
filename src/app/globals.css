@@ -207,6 +207,19 @@
 html {
   touch-action: manipulation;
   -ms-touch-action: manipulation;
+
+  /* ---- Kill pull-to-refresh ----
+     Android Chrome reloads the page when a downward drag reaches the viewport
+     with the scroll position already at the top. In a POS that is a reload
+     mid-sale, triggered by nothing more than a clumsy swipe over the cart.
+
+     This MUST be on the ROOT element. The same declaration already existed on
+     <body>, but overscroll-behavior is only guaranteed to affect the viewport
+     when it is set on the root — propagation from <body> is not reliable, and
+     that is why the gesture still fired.
+
+     `none` (not `contain`) also removes the rubber-band glow at the edges. */
+  overscroll-behavior: none;
 }
 
 /* Prevent double-tap zoom on all elements */
@@ -409,10 +422,15 @@ html {
 }
 
 /* The cart list and the keypad are their own scroll worlds; a visible bar
-   inside them just adds noise on a 6" screen. */
+   inside them just adds noise on a 6" screen.
+   Every element carrying this class is an internal scroller, so it also gets
+   scroll containment: reaching the top or bottom of a list must not chain the
+   gesture out to the viewport, which is the other half of how a stray swipe
+   turns into a pull-to-refresh. */
 .no-scrollbar {
   scrollbar-width: none;
   -ms-overflow-style: none;
+  overscroll-behavior: contain;
 }
 
 .no-scrollbar::-webkit-scrollbar {
