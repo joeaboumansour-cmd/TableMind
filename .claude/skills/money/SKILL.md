@@ -88,4 +88,4 @@ Do not treat surrounding code as correct — several places here are known-wrong
 - [ ] Is rounding applied at the total only, not per item?
 - [ ] Is the rate direction right — is money going *to* the store (SELL) or *back to* the customer (RETURN)?
 - [ ] Does `formatLL` wrap the LL branch and `formatUSD` the USD branch?
-- [ ] There are 21 real unit tests covering this in `src/tests/cash-shift.test.ts` — run `npm run test` and add cases for what you changed.
+- [ ] **There is no automated test suite** — it was removed at the owner's direction and QA is done by humans. Nothing will catch a rounding or rate mistake for you, so hand-check the arithmetic on a real example (e.g. $2.07 × 90,000 = 186,300 → rounds to 185,000) and state in your summary exactly what you verified and how.

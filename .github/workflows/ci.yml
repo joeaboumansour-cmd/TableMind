@@ -22,9 +22,6 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
-      - name: Unit tests
-        run: npm run test
-
       # Lint is advisory for now. It had been silently broken since the Next 16
       # upgrade (`next lint` was removed), so it surfaced ~134 pre-existing
       # errors the first time it ran. Burn those down, then drop this line so

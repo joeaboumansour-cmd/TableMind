@@ -10,14 +10,6 @@
 !.yarn/releases
 !.yarn/versions
 
-# testing
-/coverage
-/test-results/
-/playwright-report/
-/blob-report/
-tests/.auth/
-test-results-*.json
-
 # next.js
 /.next/
 /out/

@@ -30,16 +30,14 @@ Copy `.env.example` to `.env.local` and fill in from your Supabase project setti
 
 ```bash
 npm run dev          # dev server
-npm run build        # production build
+npm run build        # production build + service-worker verification
+npm run verify:sw    # assert the generated public/sw.js has the required rules
+npm run analyze      # production build with the bundle treemap
 npm run typecheck    # tsc --noEmit
 npm run lint         # eslint .
-npm run test         # vitest — unit tests (src/tests/)
-npm run test:watch   # vitest in watch mode
-npm run test:e2e     # playwright — 253 E2E tests (tests/)
-npm run test:e2e:ui  # playwright interactive UI
 ```
 
-Unit tests and E2E tests are strictly separated: vitest only looks at `src/tests/`, Playwright only at `tests/`.
+There is **no automated test suite** — verification is done by a human QA team. `typecheck` and `lint` are the only automated gates.
 
 ## Stack
 
@@ -61,8 +59,7 @@ src/
     supabase/   Supabase clients
     stores/     Zustand (cart)
     utils/      format.ts — money + date formatting, single source of truth
-  tests/        vitest unit tests
-tests/          Playwright E2E
+scripts/        build-time checks (verify-sw.mjs)
 supabase/       SQL migrations
 docs/           documentation (archive/ holds superseded docs)
 ```

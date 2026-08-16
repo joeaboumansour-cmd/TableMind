@@ -111,4 +111,4 @@ The client is offline-first. Any route the POS calls during a sale needs a queue
 
 ## Verify
 
-There are **no API route tests** (`supertest` was installed for this and never used — audit P2-12). At minimum, exercise the route manually with `curl`, and explicitly test the **cross-tenant case**: authenticate as store A, request store B's data, confirm `403`/`404`.
+There is **no automated test suite** — it was removed at the owner's direction and QA is done by humans. Exercise the route manually with `curl`, and explicitly check the **cross-tenant case**: authenticate as store A, request store B's data, confirm `403`/`404`. Report what you actually ran.

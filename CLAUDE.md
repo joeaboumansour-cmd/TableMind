@@ -170,17 +170,27 @@ npm run verify:sw    # assert the generated public/sw.js has the required rules
 npm run analyze      # production build with the bundle treemap (ANALYZE=true)
 npm run typecheck    # tsc --noEmit
 npm run lint         # eslint .
-npm run test         # vitest — unit tests, src/tests/ only
-npm run test:e2e     # playwright — 253 tests, tests/ only
 ```
 
-**Baseline:** `typecheck` is clean and unit tests pass. **36 of 253 Playwright tests fail and always have** — see `docs/AUDIT-2026-08.md` P2-12 for the per-file breakdown. Compare against that baseline, not against green.
+**Baseline:** `typecheck` must be clean before you hand anything over.
 
 If `tsc` reports errors inside `.next/types/**` referring to files that no longer exist, that's a stale build artifact after a route move — `rm -rf .next` and rebuild.
 
-Vitest and Playwright are strictly separated: `vitest.config.ts` includes only `src/tests/**` and **excludes `tests/**`**. Don't put a Playwright spec in `src/tests/`.
+### There is no automated test suite — this is deliberate
 
-Note: `vitest` runs in the **`node`** environment. `@testing-library/react` cannot work until a DOM env (`jsdom`/`happy-dom`) is added, so there are no component tests yet.
+Vitest, Playwright, and both test directories were **removed on 2026-08-16 at the owner's direction**. Verification is done by a human QA team. **Do not add test files, test frameworks, or test scripts unless the owner asks for them.**
+
+What this means for you:
+
+- `npm run typecheck` and `npm run lint` are the only automated gates. Run them.
+- Nothing will catch a regression for you. On money, offline sync, and auth, that raises the bar on care — reason through the change and say explicitly what you verified and how, per §11.
+- Prefer small reversible changes over clever ones, and keep pure logic in pure functions (e.g. `evaluateReconcile` in `src/lib/sync/engine.ts`) so it can be reasoned about directly.
+
+If the suite is ever wanted back, it is in git history at commit `744ad0d`:
+
+```bash
+git checkout 744ad0d -- tests src/tests playwright.config.ts vitest.config.ts
+```
 
 ---
 
