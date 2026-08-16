@@ -155,10 +155,12 @@
    ============================================================ */
 
 /* Height of the persistent bottom tab bar, including the iOS home-indicator
-   inset. The bar is position:fixed so nothing in a page's own layout can push
-   it off-screen; content areas reserve exactly this much room instead.
-   Anything else that floats near the bottom (the PWA install prompt) offsets
-   by it too, so it can never sit on top of navigation. */
+   inset.
+
+   The bar itself does NOT use this — it is a normal flex child of the app
+   shell and simply occupies its own height. This exists for FIXED-position
+   things that float near the bottom of the viewport (the PWA install prompt),
+   so they can offset above the bar instead of landing on top of it. */
 :root {
   /* 3.5rem tab height + 1px top border + the home-indicator inset. */
   --tab-bar-h: calc(3.5rem + 1px + env(safe-area-inset-bottom, 0px));

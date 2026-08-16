@@ -3,42 +3,36 @@
 // =============================================
 // App shell
 //
-// The screen fills the viewport minus the bottom tab bar, and the bar itself
-// is position:fixed on top of everything (see BottomTabBar). Content does not
-// sit *under* it — the shell reserves exactly --tab-bar-h of room — so the two
-// never overlap, and no page's own layout can push navigation off-screen or
-// let an overlay cover it.
+// One flex column: the screen fills the space it is given, and the bottom tab
+// bar is a permanent sibling below it. Every screen inside the shell therefore
+// gets a fixed, known height and is expected to lay itself out with `h-full`
+// and its own internal scrolling, rather than growing the page.
 //
-// Every screen inside the shell therefore gets a fixed, known height and is
-// expected to lay itself out with `h-full` and its own internal scrolling,
-// rather than growing the page.
+// The bar is IN FLOW on purpose. It was briefly position:fixed with the shell
+// reserving space via a --tab-bar-h padding, which introduced a race: the
+// shell and the bar each decided independently whether tabs were visible, via
+// separate useFeatureFlags() instances that resolve on different ticks. On a
+// reload the bar could render before the shell reserved room for it, and the
+// content underneath — the cart's Done / Checkout buttons — stayed trapped
+// under the bar.
+//
+// In flow there is nothing to keep in sync: the bar occupies its own space or
+// none at all. It cannot be pushed off either, being flex-shrink-0 inside a
+// clipped, fixed-height column. Overlays covering it (the original problem)
+// are solved by its z-index, not by its positioning.
 //
 // Shared by the (shell) route group and /checkout so the bar cannot drift out
 // of sync between them.
 // =============================================
 
-import BottomTabBar, { useHasBottomTabs } from "@/components/BottomTabBar";
-import { cn } from "@/lib/utils";
+import BottomTabBar from "@/components/BottomTabBar";
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
-  // No bar rendered (desktop, or a user with a single permitted section) means
-  // no space reserved — otherwise those users get a dead strip at the bottom.
-  const hasTabs = useHasBottomTabs();
-
   return (
-    // dvh (not vh) so the shell tracks the real visible viewport on iOS Safari
-    // rather than extending behind the browser chrome.
-    <div className="relative h-dvh overflow-hidden">
-      <div
-        className={cn(
-          "h-full overflow-hidden",
-          // border-box sizing means this padding comes out of the 100%, so the
-          // content box is exactly the space above the bar.
-          hasTabs && "pb-[var(--tab-bar-h)]"
-        )}
-      >
-        {children}
-      </div>
+    // dvh (not vh) so the bar sits on the real visible viewport on iOS Safari
+    // rather than behind the browser chrome.
+    <div className="flex h-dvh flex-col overflow-hidden">
+      <div className="min-h-0 flex-1 overflow-hidden">{children}</div>
       <BottomTabBar />
     </div>
   );

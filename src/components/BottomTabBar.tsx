@@ -74,11 +74,14 @@ const TABS: Tab[] = [
 ];
 
 /**
- * Which tabs this user can actually see. Exported so the app shell can reserve
- * exactly the right amount of room for the bar — and none at all when there is
- * no bar to render.
+ * Which tabs this user can actually see.
+ *
+ * Deliberately NOT exported. It was, so the shell could reserve room for a
+ * fixed bar — but that meant two independent useFeatureFlags() instances
+ * deciding the same question and resolving on different ticks. The bar is in
+ * flow now, so this is the only place that needs the answer.
  */
-export function useVisibleTabs(): Tab[] {
+function useVisibleTabs(): Tab[] {
   const { user, canAccess } = useAuth();
   const { isEnabled } = useFeatureFlags();
 
@@ -86,11 +89,6 @@ export function useVisibleTabs(): Tab[] {
   return TABS.filter(
     (t) => canAccess(t.section) && (!t.feature || isEnabled(t.feature))
   );
-}
-
-/** A single destination is not navigation. */
-export function useHasBottomTabs(): boolean {
-  return useVisibleTabs().length >= 2;
 }
 
 export default function BottomTabBar() {
@@ -109,14 +107,15 @@ export default function BottomTabBar() {
     <nav
       aria-label="Main"
       className={cn(
-        // FIXED to the viewport, not a flex sibling. As a flex child it was
-        // structurally safe but visually not: any fixed-position overlay with
-        // a z-index simply covered it (the PWA install prompt sat at z-50).
+        // In flow (see AppShell for why), but with an explicit stacking
+        // position so nothing paints over it. That was the real defect behind
+        // "the nav bar disappears": as an unpositioned flex child it had no
+        // z-index at all, and the PWA install prompt — fixed, z-50 — simply
+        // covered it.
         //
-        // z-40 is deliberately BELOW the z-50 used by dialogs — a modal should
-        // cover navigation — but above ambient floating UI, which now sits at
-        // z-30 and is offset by --tab-bar-h anyway.
-        "md:hidden fixed inset-x-0 bottom-0 z-40 border-t border-white/[0.07] bg-card",
+        // z-40 is deliberately BELOW the z-50 used by dialogs, because a modal
+        // SHOULD cover navigation, and above ambient floating UI at z-30.
+        "md:hidden relative z-40 flex-shrink-0 border-t border-white/[0.07] bg-card",
         // Clears the iOS home indicator; the page paints under it because
         // layout.tsx sets viewportFit: 'cover'.
         "safe-bottom"
