@@ -1,3 +1,13 @@
+> # ⚠️ ARCHIVED — DO NOT USE
+>
+> **Archived 2026-08-16. Superseded, and factually contradicts shipped behaviour.**
+>
+> A manual QA checklist from April 2026. It describes a **48-hour** retention policy throughout — that was replaced by migration `011_store_controlled_retention.sql` (90-day / max-5000, store-configurable). It also documents a WhatsApp send flow that migration `023_remove_whatsapp_send.sql` removed. Every checkbox is unticked, so it's unclear it was ever run.
+>
+> Superseded by the real Playwright suite: `tests/transaction-history.spec.ts` (42 tests).
+
+---
+
 # Transaction History Module - Test Guide
 
 ## Overview

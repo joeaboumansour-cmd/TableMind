@@ -1,3 +1,15 @@
+> # ⚠️ ARCHIVED — DO NOT USE
+>
+> **Archived 2026-08-16. This document is almost entirely fiction relative to the shipped codebase.**
+>
+> It is a pre-implementation design doc from April 2026 that was never reconciled with what was actually built. Verified wrong: the stack table (says Next 14 / React 18 / Tailwind 3 / Zustand 4 — actual is Next 16 / React 19 / Tailwind 4 / Zustand 5, and it lists React Hook Form which isn't a dependency); the entire project tree (`src/app/inventory/`, `reports/`, `customers/`, `settings/`, `src/components/pos/*`, `src/hooks/useScanner` — **none exist**); the schema (`merchants`, `customers`, `credit_transactions`, `merchant_id`, `tax_rate` — **none exist**; the real schema uses `stores` + `store_id`); the API table (`/api/auth/*`, `/api/customers/*`, `/api/reports/*` — **none exist**); the Zustand stores (only `cartStore` exists); and the manifest sample.
+>
+> **Planning from this document will produce wrong changes.** See `CLAUDE.md` for ground truth and `ARCHITECTURE.md` for the real architecture.
+>
+> Kept only as a record of the original intent.
+
+---
+
 # GoldenSquirrel Mobile POS - Technical Specifications
 
 ## 1. Technology Stack

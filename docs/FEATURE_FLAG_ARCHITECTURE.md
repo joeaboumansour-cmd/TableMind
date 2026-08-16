@@ -1,5 +1,22 @@
 # Feature Flag Architecture — Store-Level Feature Toggles
 
+> ## ⚠️ Corrections — verified against source 2026-08-16
+>
+> **The design in this document is accurate and still describes what's built.** The *file paths and code listings* have drifted. Trust §1, §2, §5 (the playbook), §6, and §7. Verify §3 (file tree), §4 (code listings), and §9 (file status table) against source, applying these corrections:
+>
+> | This doc says | Actual |
+> |---|---|
+> | migration `016_store_feature_flags.sql` | **`017_store_feature_flags.sql`** (`016` is `016_transaction_unique_number.sql`) |
+> | `src/components/FeatureFlagGuard.tsx` (§3) | **`src/lib/auth/featureGuard.tsx`** (§4.4 has this right; §3 does not) |
+> | `src/app/api/admin/stores/[id]/features/route.ts` | **`src/app/api/admin/stores/features/route.ts`** |
+> | `PATCH /api/admin/stores/{id}/features` | **`GET`/`PATCH /api/admin/stores/features?store_id=…`** — query param, not a path segment |
+> | `src/app/pos/settings/features/page.tsx` (§3) | Does not exist |
+> | `FEATURES` has 6 keys | **8 keys** — the doc omits `desktop_shortcuts` and `cash_register` |
+> | preset `product_discount: true` | **`false`** (`src/lib/features.ts:100`) |
+> | the `useFeatureFlags` listing | The real hook also uses `mergeFeaturesWithDefaults()` and `connectivity.isOnline` |
+>
+> `src/lib/features.ts` is the authoritative registry. See also `CLAUDE.md` §7.
+
 > **Purpose**: This document defines the architecture for a store-level feature flagging system. All new features added to this codebase must be registered in the feature bank and gated behind feature flags. The admin manages which features are enabled per store via the admin panel.
 >
 > **Audience**: AI agents, developers, and maintainers adding features to TableMind POS.

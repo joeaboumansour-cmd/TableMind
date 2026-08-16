@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Route } from '@playwright/test';
 import {
   injectAuth,
   injectFeatureFlags,
@@ -102,7 +102,7 @@ async function seedProductsIntoIndexedDB(page: any): Promise<boolean> {
     },
   ];
 
-  const count = await page.evaluate(async (products) => {
+  const count = await page.evaluate(async (products: typeof cachedProducts) => {
     return new Promise<number>((resolve) => {
       const request = indexedDB.open('GoldenSquirrelPOS', 2);
       request.onsuccess = (event) => {
@@ -171,7 +171,7 @@ async function setupPos(page: any, isMobile: boolean) {
   await page.unrouteAll({ behavior: 'ignoreErrors' });
 
   // Now set up our product mock (higher priority since registered last)
-  await page.route('**/rest/v1/products*', (route) => {
+  await page.route('**/rest/v1/products*', (route: Route) => {
     route.fulfill({
       status: 200,
       contentType: 'application/json',

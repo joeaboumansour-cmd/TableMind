@@ -1,37 +1,25 @@
 "use client";
 
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ThemeProvider } from "next-themes";
 import { Toaster } from "sonner";
-import { useState } from "react";
 import { AuthProvider } from "@/lib/auth/AuthContext";
 
+// NOTE: TanStack Query was previously mounted here but never used — there were
+// zero useQuery/useMutation calls in the app. It was removed in the Aug 2026
+// cleanup. Data fetching is done with plain fetch in useEffect; if you
+// reintroduce a query library, re-add the provider here.
 export function Providers({ children }: { children: React.ReactNode }) {
-  const [queryClient] = useState(
-    () =>
-      new QueryClient({
-        defaultOptions: {
-          queries: {
-            staleTime: 60 * 1000,
-            refetchOnWindowFocus: false,
-          },
-        },
-      })
-  );
-
   return (
-    <QueryClientProvider client={queryClient}>
-      <AuthProvider>
-        <ThemeProvider
-          attribute="class"
-          defaultTheme="dark"
-          enableSystem={false}
-          forcedTheme="dark"
-        >
-          {children}
-          <Toaster theme="dark" richColors position="top-center" />
-        </ThemeProvider>
-      </AuthProvider>
-    </QueryClientProvider>
+    <AuthProvider>
+      <ThemeProvider
+        attribute="class"
+        defaultTheme="dark"
+        enableSystem={false}
+        forcedTheme="dark"
+      >
+        {children}
+        <Toaster theme="dark" richColors position="top-center" />
+      </ThemeProvider>
+    </AuthProvider>
   );
 }

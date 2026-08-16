@@ -1,4 +1,26 @@
-# GoldenSquirrel Mobile POS - Functional Requirements
+# GoldenSquirrel POS — Product Wishlist (aspirational)
+
+> ## ⚠️ This is a wishlist, not a specification of current behaviour
+>
+> Written April 2026 and never updated. **Roughly 40% of it is built.** Do not treat any requirement here as describing how the system works today — check the code. Reviewed against source 2026-08-16.
+>
+> **Built:** §1 login/roles · §2.1 & §2.3 product CRUD and stock · §3 barcode scanning · §4.1 cart · §5.3.1 receipts · §7 reports/analytics (partial) · §8 PWA offline + install.
+>
+> **Not built at all:**
+> - **§5.1** card payment, split payment, credit/tab — `checkout` hardcodes `payment_method: "cash"`
+> - **§5.2.2** tax calculation — no `tax_rate` column exists in any migration
+> - **§6 Credit Management** — entirely absent; no customers table, no `/api/customers`, no UI
+> - **§2.1.5** product images — no `image_url` on the Product type
+> - **§4.2.2** swipe gestures, **§4.2.3** haptics
+> - **§9 Settings** — there is no settings page
+> - **§4.3.2** "Squirrel mascot integration"
+>
+> For what actually exists, see `ARCHITECTURE.md`. For what to work on next, see `docs/AUDIT-2026-08.md`.
+
+---
+
+## Original document
+
 
 ## 1. User Authentication & Authorization
 

@@ -1,3 +1,15 @@
+> # ⚠️ ARCHIVED — DO NOT USE
+>
+> **Archived 2026-08-16. The checkbox state is misleading in both directions.**
+>
+> Written April 2026 and never updated. Only 4 boxes are ticked (all in Phase 1.1), yet Phases 2, 3, 4, 6, and 7 are demonstrably shipped in production. Meanwhile Phase 5 (customers / credit) is genuinely never built. So neither "ticked" nor "unticked" tells you anything about what exists.
+>
+> **Do not use this to decide what to build next.** The live backlog is `docs/AUDIT-2026-08.md`.
+>
+> Kept only as a record of the original plan.
+
+---
+
 # GoldenSquirrel Mobile POS - Development Roadmap
 
 ## Version 1.0 - Core POS Features

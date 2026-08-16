@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import { useCartStore } from "@/lib/stores/cartStore";
 
 /**
  * PWAUpdateListener — silently keeps the installed PWA up to date.
@@ -15,9 +16,11 @@ import { useEffect, useRef } from "react";
  * What it does (all silent, no UI, negligible cost):
  *   1. On first load, if a SW is already controlling the page, register a
  *      `controllerchange` listener. When a new SW activates via skipWaiting(),
- *      the listener reloads the page once so the user gets fresh content.
- *      (We skip the reload on the very first install — no SW was controlling
- *      yet — to avoid an unnecessary refresh.)
+ *      the listener reloads the page once so the user gets fresh content —
+ *      but only while the cart is empty, so a deploy can never interrupt a
+ *      sale in progress. If a sale is open, the reload is deferred until the
+ *      cart clears. (We also skip the reload on the very first install — no
+ *      SW was controlling yet — to avoid an unnecessary refresh.)
  *   2. On `visibilitychange` (user switches back to the PWA / unlocks phone),
  *      call `registration.update()`. This is the key fix for iOS: it forces
  *      a byte-compare of sw.js every time the app is foregrounded, bypassing
@@ -44,11 +47,32 @@ export default function PWAUpdateListener() {
 
     // 1) Auto-reload when a new SW takes control (skipWaiting + clientsClaim
     //    are already called in the generated sw.js).
+    //    NEVER reload while a sale is in progress. skipWaiting() fires on
+    //    install, not on a user gesture, so without this guard a deploy can
+    //    hard-reload the cashier's tab mid-transaction. Zustand `persist`
+    //    saves the cart, but in-flight payment state (change due, open modal,
+    //    scanner focus, an in-flight POST) is lost. If the cart is non-empty
+    //    we defer and retry once it empties.
+    const reloadIfIdle = () => {
+      if (reloadedRef.current) return;
+      if (useCartStore.getState().items.length > 0) return; // sale in progress
+      reloadedRef.current = true;
+      window.location.reload();
+    };
+
+    let unsubscribeCart: (() => void) | null = null;
+
     const handleControllerChange = () => {
       if (reloadedRef.current) return;
       if (!wasControlled) return; // first install — no reload needed
-      reloadedRef.current = true;
-      window.location.reload();
+
+      reloadIfIdle();
+      if (reloadedRef.current || unsubscribeCart) return;
+
+      // Cart was non-empty — wait for it to clear, then apply the update.
+      unsubscribeCart = useCartStore.subscribe((state) => {
+        if (state.items.length === 0) reloadIfIdle();
+      });
     };
 
     navigator.serviceWorker.addEventListener("controllerchange", handleControllerChange);
@@ -76,6 +100,7 @@ export default function PWAUpdateListener() {
       navigator.serviceWorker.removeEventListener("controllerchange", handleControllerChange);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
       clearInterval(interval);
+      unsubscribeCart?.();
     };
   }, []);
 
