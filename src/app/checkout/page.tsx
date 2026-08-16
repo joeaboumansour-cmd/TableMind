@@ -460,9 +460,11 @@ function CheckoutContent() {
   // ===================== COMPLETE =====================
   if (transactionComplete) {
     return (
-      <div className="flex min-h-dvh flex-col bg-background">
-        <div className="safe-top" />
-        <div className="mx-auto flex w-full max-w-md flex-1 flex-col px-5 py-8">
+      <div className="flex h-full flex-col bg-background">
+        <div className="safe-top flex-shrink-0" />
+        {/* Only this middle band scrolls, and only on a short phone — the
+            "New sale" button below it never moves. */}
+        <div className="no-scrollbar mx-auto flex w-full max-w-md flex-1 flex-col overflow-y-auto px-5 pb-2 pt-6">
           <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-full bg-emerald-500/10">
             <Check className="h-8 w-8 text-emerald-400" />
           </div>
@@ -509,7 +511,7 @@ function CheckoutContent() {
                 <img
                   src={qrDataUrl}
                   alt="Digital receipt QR code"
-                  className="h-44 w-44 rounded-xl bg-white p-2"
+                  className="h-36 w-36 rounded-xl bg-white p-2"
                 />
               </div>
               <div className="grid grid-cols-3 gap-2">
@@ -529,12 +531,13 @@ function CheckoutContent() {
             </div>
           )}
 
-          <div className="flex-1" />
+        </div>
 
+        <div className="mx-auto w-full max-w-md flex-shrink-0 px-5 pb-3 pt-2">
           <button
             type="button"
             onClick={handleNewTransaction}
-            className="tap safe-bottom mt-6 h-14 w-full rounded-2xl bg-primary text-base font-bold text-primary-foreground"
+            className="tap h-14 w-full rounded-2xl bg-primary text-base font-bold text-primary-foreground"
           >
             New sale
           </button>
@@ -565,7 +568,7 @@ function CheckoutContent() {
         : null;
 
   return (
-    <div className="flex h-dvh flex-col overflow-hidden bg-background">
+    <div className="flex h-full flex-col overflow-hidden bg-background">
       {/* ---- Header ---- */}
       <header className="safe-top flex-shrink-0 px-4 pt-3">
         <div className="flex items-center gap-3">
@@ -729,8 +732,10 @@ function CheckoutContent() {
         </button>
       </div>
 
-      {/* ---- Confirm ---- */}
-      <div className="safe-bottom flex-shrink-0 px-5 pb-3">
+      {/* ---- Confirm ----
+           No safe-bottom here: the tab bar below now owns the home-indicator
+           inset, and doubling it just wastes a keypad row. */}
+      <div className="flex-shrink-0 px-5 pb-3">
         <button
           type="button"
           onClick={handleProcessPayment}
@@ -818,7 +823,7 @@ function CheckoutContent() {
 
 export default function CheckoutPage() {
   return (
-    <Suspense fallback={<div className="h-dvh bg-background" />}>
+    <Suspense fallback={<div className="h-full bg-background" />}>
       <CheckoutContent />
     </Suspense>
   );

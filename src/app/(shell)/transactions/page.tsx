@@ -649,16 +649,16 @@ export default function TransactionHistoryPage() {
         )}
       </header>
 
-      {/* ---- Body ---- */}
-      <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto">
-        {viewMode === "analytics" && showAnalytics ? (
-          <div className="px-4 py-4">
-            <TransactionAnalytics dateFilter={dateFilter} storeId={user?.storeId || ""} />
-          </div>
-        ) : (
-          <>
-            {/* ---- Takings ---- */}
-            <div className="px-4 pt-4">
+      {/* ---- Analytics takes the whole body ---- */}
+      {viewMode === "analytics" && showAnalytics ? (
+        <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto px-4 py-4">
+          <TransactionAnalytics dateFilter={dateFilter} storeId={user?.storeId || ""} />
+        </div>
+      ) : (
+        <>
+          {/* ---- Takings — pinned. The day's number is the reason the screen
+                 exists; it must not scroll away behind the feed. ---- */}
+          <div className="flex-shrink-0 px-4 pt-4">
               <div className="rounded-3xl border border-white/10 bg-gradient-to-b from-primary/[0.09] to-transparent px-4 py-4">
                 <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-muted-foreground">
                   {activeFilter.long} · {rangeCount} sale{rangeCount !== 1 ? "s" : ""}
@@ -710,7 +710,7 @@ export default function TransactionHistoryPage() {
 
             {/* ---- Notices ---- */}
             {isOffline && (
-              <div className="mx-4 mt-3 flex items-start gap-3 rounded-2xl border border-primary/30 bg-primary/[0.07] px-4 py-3">
+              <div className="mx-4 mt-3 flex flex-shrink-0 items-start gap-3 rounded-2xl border border-primary/30 bg-primary/[0.07] px-4 py-3">
                 <WifiOff className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
                 <p className="text-xs text-muted-foreground">
                   {isShowingCached
@@ -721,13 +721,14 @@ export default function TransactionHistoryPage() {
             )}
 
             {error && !isShowingCached && (
-              <div className="mx-4 mt-3 flex items-start gap-3 rounded-2xl border border-destructive/40 bg-destructive/[0.07] px-4 py-3">
+              <div className="mx-4 mt-3 flex flex-shrink-0 items-start gap-3 rounded-2xl border border-destructive/40 bg-destructive/[0.07] px-4 py-3">
                 <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
                 <p className="text-xs text-destructive">{error}</p>
               </div>
             )}
 
-            {/* ---- Feed ---- */}
+            {/* ---- Feed — the only part of this screen that scrolls ---- */}
+            <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto">
             {isLoading && transactions.length === 0 ? (
               <div className="mt-4 space-y-px">
                 {Array.from({ length: 6 }).map((_, i) => (
@@ -876,9 +877,9 @@ export default function TransactionHistoryPage() {
                 <div className="h-4" />
               </div>
             )}
+            </div>
           </>
         )}
-      </div>
 
       {/* ---- Date range ---- */}
       <Dialog open={showFilters} onOpenChange={setShowFilters}>

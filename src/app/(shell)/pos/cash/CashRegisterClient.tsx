@@ -379,8 +379,8 @@ export function CashRegisterPage() {
 
   if (authLoading || isLoading) {
     return (
-      <div className="min-h-dvh flex items-center justify-center bg-background">
-        <Loader2 className="h-8 w-8 animate-spin text-amber-500" />
+      <div className="flex h-full items-center justify-center bg-background">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
       </div>
     );
   }
@@ -388,8 +388,12 @@ export function CashRegisterPage() {
   const variance = computeVariance(closingTotal, expectedTotal);
 
   return (
-    <div className="min-h-dvh bg-background">
-      <header className="sticky top-0 z-50 bg-background border-b">
+    // h-full + an internal scroller, not min-h-dvh: this screen sits inside the
+    // app shell, which is exactly the viewport minus the tab bar and clips its
+    // child. A min-h-dvh child was taller than that box and simply had its
+    // bottom cut off with no way to reach it.
+    <div className="flex h-full flex-col overflow-hidden bg-background">
+      <header className="safe-top flex-shrink-0 border-b bg-background">
         <div className="container mx-auto px-4 py-3">
           <div className="flex items-center gap-4">
             <Button variant="ghost" size="icon" onClick={() => router.push("/pos")}>
@@ -412,7 +416,7 @@ export function CashRegisterPage() {
         </div>
       </header>
 
-      <div className="container mx-auto px-4 py-6 max-w-3xl space-y-4">
+      <div className="no-scrollbar container mx-auto min-h-0 flex-1 max-w-3xl space-y-4 overflow-y-auto px-4 py-6">
         {/* Date display */}
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <CalendarDays className="h-4 w-4" />

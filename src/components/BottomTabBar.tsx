@@ -42,8 +42,10 @@ const TABS: Tab[] = [
     label: "Sell",
     icon: ScanLine,
     section: "pos",
-    // /pos only — NOT /pos/products or /pos/cash, which are their own tabs.
-    matches: (p) => p === "/pos",
+    // /pos and /checkout — NOT /pos/products or /pos/cash, which are their own
+    // tabs. Checkout is the back half of the same sale, so leaving every tab
+    // unlit there would read as "you are nowhere".
+    matches: (p) => p === "/pos" || p.startsWith("/checkout"),
   },
   {
     href: "/transactions",

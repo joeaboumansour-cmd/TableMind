@@ -925,7 +925,7 @@ function StoreProductsPageContent() {
       </div>
 
       {/* ---- Filters ---- */}
-      <div className="no-scrollbar flex flex-shrink-0 gap-2 overflow-x-auto px-4 pb-3 pt-3">
+      <div className="flex flex-shrink-0 gap-2 px-4 pb-3 pt-3">
         {FILTERS.map((f) => (
           <button
             key={f.key}
