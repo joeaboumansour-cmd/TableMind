@@ -34,7 +34,11 @@ import {
   Copy,
   Share2,
   Printer,
+  Power,
+  ScanLine,
 } from "lucide-react";
+import { cn } from "@/lib/utils";
+import CartSheet from "@/components/pos/CartSheet";
 import { useCartStore } from "@/lib/stores/cartStore";
 import { useAuth } from "@/lib/auth/AuthContext";
 import { Product } from "@/lib/types/product";
@@ -98,7 +102,6 @@ export default function POSPage() {
   const [merchant, setMerchant] = useState<any>(null);
   // Throttles the focus-triggered refresh (see the load effect below)
   const lastFocusSyncRef = useRef(0);
-  const [isCharge, setIsCharge] = useState(true); // true = charge (green), false = credit (red)
   const [highlightedItemId, setHighlightedItemId] = useState<string | null>(null);
   const highlightTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   // O(1) barcode lookup — rebuilt whenever products change
@@ -894,624 +897,571 @@ export default function POSPage() {
     });
   }, [products, user?.storeId]);
 
+  // ---- Layout measurements for the scan-first mobile layout ----
+  //
+  // The cart sheet needs to know how much room it is allowed to take, and the
+  // floating search bar sits between the camera and the sheet. Both are
+  // measured rather than assumed: the POS surface is the viewport minus the
+  // tab bar minus the iOS safe areas, and none of those are knowable
+  // statically. Callback refs (not useRef + useEffect) because the elements
+  // mount after the loading gate below, which a mount-time effect would miss.
+  const [posHeight, setPosHeight] = useState(0);
+  const [searchBlockHeight, setSearchBlockHeight] = useState(76);
+
+  const posObserverRef = useRef<ResizeObserver | null>(null);
+  const searchObserverRef = useRef<ResizeObserver | null>(null);
+
+  const posSurfaceRef = useCallback((el: HTMLDivElement | null) => {
+    posObserverRef.current?.disconnect();
+    if (!el) return;
+    const ro = new ResizeObserver(() => setPosHeight(el.clientHeight));
+    ro.observe(el);
+    posObserverRef.current = ro;
+    setPosHeight(el.clientHeight);
+  }, []);
+
+  const searchBlockRef = useCallback((el: HTMLDivElement | null) => {
+    searchObserverRef.current?.disconnect();
+    if (!el) return;
+    const ro = new ResizeObserver(() => setSearchBlockHeight(el.offsetHeight));
+    ro.observe(el);
+    searchObserverRef.current = ro;
+    setSearchBlockHeight(el.offsetHeight);
+  }, []);
+
+  useEffect(
+    () => () => {
+      posObserverRef.current?.disconnect();
+      searchObserverRef.current?.disconnect();
+    },
+    []
+  );
+
+  // Clearing the cart is destructive and one tap away, so it keeps its confirm.
+  const handleClearCart = () => {
+    if (window.confirm("Clear all items from the cart?")) {
+      clearCart();
+      toast.success("Cart cleared");
+    }
+  };
+
   if (isLoading || authLoading) {
     return (
-      <div className="h-dvh flex items-center justify-center bg-background">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-amber-500 mx-auto"></div>
-          <p className="mt-4 text-muted-foreground">Loading...</p>
+      <div className="flex h-full items-center justify-center bg-background">
+        <div className="flex flex-col items-center gap-3">
+          <div className="h-9 w-9 animate-spin rounded-full border-2 border-primary/25 border-t-primary" />
+          <p className="text-sm text-muted-foreground">Loading…</p>
         </div>
       </div>
     );
   }
 
-  return (
-    <div className="h-dvh flex flex-col bg-background overflow-hidden">
-      {/* Header */}
-      {/* safe-top clears the iOS status bar / notch, which the page paints
-          under because appleWebApp.statusBarStyle is 'black-translucent'. */}
-      <header className="flex-shrink-0 bg-background border-b safe-top">
-        <div className="px-4 py-3">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="h-10 w-10 rounded-lg bg-amber-500 flex items-center justify-center">
-                <Squirrel className="h-5 w-5 text-white" />
-              </div>
-              <div>
-                <h1 className="font-bold text-lg">GoldenSquirrel</h1>
-                <p className="text-xs text-muted-foreground">Point of Sale</p>
-              </div>
-            </div>
-
-            {/* Desktop Buttons */}
-            <div className="hidden md:flex items-center gap-2">
-              <SyncIndicator />
-              {canViewCash && (
-                <Button variant="ghost" size="sm" onClick={() => router.push("/pos/cash")}>
-                  <Banknote className="h-4 w-4 mr-1" />
-                  Cash
-                </Button>
-              )}
-              {canViewTransactions && isEnabled("transactions") && (
-                <Button variant="ghost" size="sm" onClick={() => router.push("/transactions")}>
-                  <History className="h-4 w-4 mr-1" />
-                  History
-                </Button>
-              )}
-              {canViewInventory && (
-                <Button variant="ghost" size="sm" onClick={() => router.push("/pos/products")}>
-                  <Package className="h-4 w-4 mr-1" />
-                  Inventory
-                </Button>
-              )}
-              <Button variant="ghost" size="icon" onClick={handleLogout}>
-                <LogOut className="h-5 w-5" />
-              </Button>
-            </div>
-
-            {/* Mobile header actions.
-                The hamburger dropdown that used to live here is gone: Cash,
-                History and Inventory are now permanent tabs in the bottom bar
-                (see src/components/BottomTabBar.tsx), one tap instead of two.
-                Only sync status and logout remain, and both fit inline — no
-                dropdown, no outside-click handler, no open/closed state. */}
-            <div className="md:hidden flex items-center gap-1">
-              <SyncIndicator compact />
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={handleLogout}
-                aria-label="Log out"
-                className="h-11 w-11"
-              >
-                <LogOut className="h-5 w-5" />
-              </Button>
-            </div>
-          </div>
-        </div>
-      </header>
-
-      {/* Main Content */}
-      {isDesktopMode ? (
-        /* ===== DESKTOP SPLIT LAYOUT ===== */
-        <div className="flex-1 flex flex-col overflow-hidden p-4 gap-4">
-          {/* Top Bar: Product Search + Action Buttons */}
-          <div className="flex-shrink-0 flex items-center gap-3">
-            <ProductSearchBar
-              products={products}
-              onSelect={handleProductAdd}
-              placeholder="Search products by name or barcode..."
-              className="flex-1"
-              inputRef={searchInputRef}
-            />
-            {!isEmpty() && (
-              <div className="flex gap-2 flex-shrink-0">
-                <Button
-                  className="h-10 font-bold bg-green-600 hover:bg-green-700"
-                  onClick={() => setIsQuickEndDialogOpen(true)}
-                >
-                  <Check className="h-4 w-4 mr-1" />
-                  Done
-                </Button>
-                <Button
-                  className="h-10 font-bold"
-                  onClick={() => router.push(`/checkout?method=${isCharge ? "cash" : "card"}`)}
-                >
-                  <CreditCard className="h-4 w-4 mr-1" />
-                  Checkout
-                </Button>
-              </div>
-            )}
-          </div>
-
-          {/* Split: Cart + Scanner */}
-          <div className="flex-1 flex flex-row overflow-hidden gap-4 min-h-0">
-            {/* Left side: Cart — 65% */}
-            <div className="flex-[65] flex flex-col overflow-hidden min-w-0">
-              <Card className="flex-1 flex flex-col overflow-hidden min-h-0">
-                {/* Cart Items - Scrollable */}
-                <div className="flex-1 overflow-y-auto p-4">
-                  {isEmpty() ? (
-                    <div className="h-full flex flex-col items-center justify-center text-muted-foreground">
-                      <Scan className="h-16 w-16 mb-4 opacity-30" />
-                      <p className="text-xl font-medium">Scan items to add</p>
-                      <p className="text-sm mt-1">Use the scanner on the right</p>
-                    </div>
-                  ) : (
-                    <div className="space-y-3">
-                      {items.map((item) => (
-                        <div
-                          key={item.product_id}
-                          id={`cart-item-${item.product_id}`}
-                          className={`p-1 rounded-lg transition-all duration-300 animate-cart-item-in ${
-                            highlightedItemId === item.product_id
-                              ? "bg-yellow-300 border-4 border-yellow-600 shadow-lg scale-[1.02]"
-                              : "bg-muted/50 border-2 border-transparent"
-                          }`}
-                        >
-                          <div className="mb-2">
-                            <p className="font-semibold text-base leading-tight">
-                              {item.product_name}
-                            </p>
-                            {item.discount_percentage > 0 ? (
-                              <>
-                                <p className="text-xs text-muted-foreground text-center">
-                                  <span className="line-through">{formatLL(item.original_unit_price)}</span>{' '}
-                                  <span className="text-green-600 font-semibold">{formatLL(item.unit_price)}</span> each
-                                </p>
-                                <p className="text-xs text-muted-foreground text-center">
-                                  <span className="line-through">{formatUSD(item.original_unit_price_usd)}</span>{' '}
-                                  <span className="text-green-600 font-semibold">{formatUSD(item.unit_price_usd)}</span> each
-                                </p>
-                                <div className="flex justify-center mt-1">
-                                  <Badge variant="default" className="text-xs bg-green-500">
-                                    -{item.discount_percentage}%
-                                  </Badge>
-                                </div>
-                              </>
-                            ) : (
-                              <>
-                                <p className="text-xs text-muted-foreground text-center">
-                                  {formatLL(item.unit_price)} each
-                                </p>
-                                <p className="text-xs text-muted-foreground text-center">
-                                  {formatUSD(item.unit_price_usd)} each
-                                </p>
-                              </>
-                            )}
-                          </div>
-                          <div className="flex items-center justify-between">
-                            <div className="flex items-center gap-2">
-                              <Button
-                                variant="outline"
-                                size="icon"
-                                className="h-11 w-11 rounded"
-                                onClick={() => decrementQuantity(item.product_id)}
-                              >
-                                <Minus className="h-4 w-4" />
-                              </Button>
-                              <span className="w-8 text-center text-base font-bold">
-                                {item.quantity}
-                              </span>
-                              <Button
-                                variant="outline"
-                                size="icon"
-                                className="h-11 w-11 rounded"
-                                onClick={() => incrementQuantity(item.product_id)}
-                              >
-                                <Plus className="h-4 w-4" />
-                              </Button>
-                            </div>
-                            <div className="text-right">
-                              <p className="font-semibold text-base text-amber-600">
-                                {formatLL(item.total_price)}
-                              </p>
-                              <p className="text-s text-muted-foreground">
-                                {formatUSD(item.total_price_usd)}
-                              </p>
-                            </div>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
-                {/* Cart Footer */}
-                {!isEmpty() && (
-                  <div className="flex-shrink-0 p-4 pt-3 border-t">
-                    <div className="space-y-3">
-                      <div className="space-y-2">
-                        <div className="flex justify-between items-center">
-                          <Button
-                            variant="destructive"
-                            size="sm"
-                            className="flex items-center gap-2"
-                            onClick={() => {
-                              if (window.confirm("Are you sure you want to clear all items from the cart?")) {
-                                clearCart();
-                                toast.success("Cart cleared");
-                              }
-                            }}
-                          >
-                            <Trash2 className="h-4 w-4" />
-                            Clear All
-                          </Button>
-                          <div className="text-right">
-                            {getTotalDiscount() > 0 && (
-                              <>
-                                <div className="text-sm text-muted-foreground">
-                                  Subtotal: {formatLL(getTotalOriginal())}
-                                </div>
-                                <div className="text-sm text-red-500">
-                                  Discount: -{formatLL(getTotalDiscount())}
-                                </div>
-                              </>
-                            )}
-                            {getRoundingAdjustment() !== 0 && (
-                              <div className="text-sm text-muted-foreground">
-                                Rounding: {formatLL(getRoundingAdjustment())}
-                              </div>
-                            )}
-                            <div className="text-2xl font-bold text-amber-500">
-                              {formatLL(getTotal())}
-                            </div>
-                            <div className="text-s text-muted-foreground">
-                              {formatUSD(getTotalUsd())}
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </Card>
-            </div>
-
-            {/* Right side: Scanner + Grid — 35% */}
-            <div className="flex-[35] flex flex-col gap-4 min-w-0">
-              {/* Barcode Scanner + Grid — scrollable area */}
-              <div className="flex-1 flex flex-col overflow-hidden min-h-0">
-                <BarcodeScanner
-                  onScan={handleBarcodeScan}
-                  isActive={true}
-                  desktopMode={true}
-                  barcodeInputRef={barcodeInputRef}
-                >
-                  {savedProducts.length > 0 && (
-                    <div className="grid grid-cols-2 gap-3">
-                      {savedProducts.map(product => (
-                        <div key={product.id}>
-                          <Button
-                            variant="outline"
-                            className="w-full min-h-[80px] flex-col py-2 px-3 text-center justify-center"
-                            onClick={() => handleProductAdd(product)}
-                          >
-                            <span className="text-sm leading-tight font-semibold break-words">{product.name}</span>
-                            <span className="text-xs text-muted-foreground mt-1.5">
-                              {formatLL(product.selling_price)}
-                            </span>
-                          </Button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </BarcodeScanner>
-              </div>
-            </div>
-          </div>
-        </div>
-      ) : (
-        /* ===== MOBILE LAYOUT (vertical stack) ===== */
-        <div className="flex-1 flex flex-col overflow-hidden p-4 gap-3">
-          {/* Product Search Bar - Always visible */}
-          <div className="flex-shrink-0">
-            <ProductSearchBar
-              products={products}
-              onSelect={handleProductAdd}
-              placeholder="Search products by name or barcode..."
-            />
-          </div>
-
-          {/* Barcode Scanner - Toggleable */}
-          <div className="flex-shrink-0">
-            <div className="flex items-center justify-between mb-2">
-              <Button
-                variant={isScannerActive ? "default" : "outline"}
-                size="sm"
-                onClick={toggleScanner}
-                className="flex items-center gap-1"
-              >
-                <Scan className="h-4 w-4" />
-                {isScannerActive ? "Turn Off Scanner" : "Turn On Scanner"}
-              </Button>
-              <Badge variant={isScannerActive ? "default" : "secondary"}>
-                {isScannerActive ? "ON" : "OFF"}
-              </Badge>
-            </div>
-            {/* Unmounted (not merely deactivated) when off. Unmount runs the
-                scanner's stopEverything() cleanup — stop all MediaStream
-                tracks, reset ZXing, tear down Quagga — and removes the <video>
-                element from the DOM entirely. That is what actually releases
-                the camera, and it replaces the full window.location.reload()
-                this toggle used to do on iOS/Android. */}
-            {isScannerActive ? (
-              <BarcodeScanner
-                onScan={handleBarcodeScan}
-                isActive={true}
-                desktopMode={false}
-                showManualInput={false}
-              />
-            ) : (
-              <div className="h-[200px] flex flex-col items-center justify-center rounded-lg border border-dashed text-muted-foreground">
-                <Scan className="h-8 w-8 mb-2 opacity-30" />
-                <p className="text-sm">Scanner is off</p>
-              </div>
-            )}
-          </div>
-
-          {/* Cart Section - Largest Element */}
-          <Card className="flex-1 flex flex-col overflow-hidden min-h-0">
-            {/* Cart Items - Scrollable */}
-            <div className="flex-1 overflow-y-auto p-4">
-              {isEmpty() ? (
-                <div className="h-full flex flex-col items-center justify-center text-muted-foreground">
-                  <Scan className="h-16 w-16 mb-4 opacity-30" />
-                  <p className="text-xl font-medium">Scan items to add</p>
-                  <p className="text-sm mt-1">Use the camera above to scan barcodes</p>
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  {items.map((item) => (
-                    <div
-                      key={item.product_id}
-                      id={`cart-item-${item.product_id}`}
-                      className={`p-1 rounded-lg transition-all duration-300 animate-cart-item-in ${
-                        highlightedItemId === item.product_id
-                          ? "bg-yellow-300 border-4 border-yellow-600 shadow-lg scale-[1.02]"
-                          : "bg-muted/50 border-2 border-transparent"
-                      }`}
-                    >
-                      <div className="mb-2">
-                        <p className="font-semibold text-base leading-tight">
-                          {item.product_name}
-                        </p>
-                        {item.discount_percentage > 0 ? (
-                          <>
-                            <p className="text-xs text-muted-foreground text-center">
-                              <span className="line-through">{formatLL(item.original_unit_price)}</span>{' '}
-                              <span className="text-green-600 font-semibold">{formatLL(item.unit_price)}</span> each
-                            </p>
-                            <p className="text-xs text-muted-foreground text-center">
-                              <span className="line-through">{formatUSD(item.original_unit_price_usd)}</span>{' '}
-                              <span className="text-green-600 font-semibold">{formatUSD(item.unit_price_usd)}</span> each
-                            </p>
-                            <div className="flex justify-center mt-1">
-                              <Badge variant="default" className="text-xs bg-green-500">
-                                -{item.discount_percentage}%
-                              </Badge>
-                            </div>
-                          </>
-                        ) : (
-                          <>
-                            <p className="text-xs text-muted-foreground text-center">
-                              {formatLL(item.unit_price)} each
-                            </p>
-                            <p className="text-xs text-muted-foreground text-center">
-                              {formatUSD(item.unit_price_usd)} each
-                            </p>
-                          </>
-                        )}
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <Button
-                            variant="outline"
-                            size="icon"
-                            className="h-11 w-11 rounded"
-                            onClick={() => decrementQuantity(item.product_id)}
-                          >
-                            <Minus className="h-4 w-4" />
-                          </Button>
-                          <span className="w-8 text-center text-base font-bold">
-                            {item.quantity}
-                          </span>
-                          <Button
-                            variant="outline"
-                            size="icon"
-                            className="h-11 w-11 rounded"
-                            onClick={() => incrementQuantity(item.product_id)}
-                          >
-                            <Plus className="h-4 w-4" />
-                          </Button>
-                        </div>
-                        <div className="text-right">
-                          <p className="font-semibold text-base text-amber-600">
-                            {formatLL(item.total_price)}
-                          </p>
-                          <p className="text-s text-muted-foreground">
-                            {formatUSD(item.total_price_usd)}
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {/* Cart Footer */}
-            {!isEmpty() && (
-              <div className="flex-shrink-0 p-4 pt-3 border-t">
-                <div className="space-y-3">
-                  <div className="space-y-2">
-                    <div className="flex justify-between items-center">
-                      <Button
-                        variant="destructive"
-                        size="sm"
-                        className="flex items-center gap-2"
-                        onClick={() => {
-                          if (window.confirm("Are you sure you want to clear all items from the cart?")) {
-                            clearCart();
-                            toast.success("Cart cleared");
-                          }
-                        }}
-                      >
-                        <Trash2 className="h-4 w-4" />
-                        Clear All
-                      </Button>
-                      <div className="text-right">
-                        {getTotalDiscount() > 0 && (
-                          <>
-                            <div className="text-sm text-muted-foreground">
-                              Subtotal: {formatLL(getTotalOriginal())}
-                            </div>
-                            <div className="text-sm text-red-500">
-                              Discount: -{formatLL(getTotalDiscount())}
-                            </div>
-                          </>
-                        )}
-                        {getRoundingAdjustment() !== 0 && (
-                          <div className="text-sm text-muted-foreground">
-                            Rounding: {formatLL(getRoundingAdjustment())}
-                          </div>
-                        )}
-                        <div className="text-2xl font-bold text-amber-500">
-                          {formatLL(getTotal())}
-                        </div>
-                        <div className="text-s text-muted-foreground">
-                          {formatUSD(getTotalUsd())}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-          </Card>
-
-          {/* Action Buttons: Quick Done + Checkout */}
-          {!isEmpty() && (
-            /* safe-bottom keeps the primary actions clear of the iOS home
-               indicator — the page paints under it (viewportFit: 'cover'). */
-            <div className="flex-shrink-0 safe-bottom">
-              <div className="grid grid-cols-2 gap-3">
-                <Button
-                  className="h-14 text-lg font-bold bg-green-600 hover:bg-green-700"
-                  size="lg"
-                  onClick={() => setIsQuickEndDialogOpen(true)}
-                >
-                  <Check className="h-5 w-5 mr-2" />
-                  Done
-                </Button>
-                <Button
-                  className="h-14 text-lg font-bold"
-                  size="lg"
-                  onClick={() => router.push(`/checkout?method=${isCharge ? "cash" : "card"}`)}
-                >
-                  <CreditCard className="h-5 w-5 mr-2" />
-                  Checkout
-                </Button>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Quick End Confirmation Dialog */}
+  // Shared by both layouts. Held as JSX rather than an inner component so it
+  // is not a fresh component type on every render — that would remount the
+  // dialogs (and drop their open/close animation) on every cart change.
+  const dialogs = (
+    <>
+      {/* ---- Confirm quick sale ---- */}
       <Dialog open={isQuickEndDialogOpen} onOpenChange={setIsQuickEndDialogOpen}>
-        <DialogContent className="max-w-sm">
+        <DialogContent className="max-w-sm rounded-3xl">
           <DialogHeader>
-            <DialogTitle>End Transaction?</DialogTitle>
+            <DialogTitle>Finish this sale?</DialogTitle>
             <DialogDescription>
-              Complete this sale for{" "}
-              <span className="font-semibold text-foreground">{formatLL(getTotal())}</span>{" "}
-              ({formatUSD(getTotalUsd())}) with {getItemCount()} item
-              {getItemCount() !== 1 ? "s" : ""}? This will skip checkout and immediately
-              record the transaction.
+              Records {getItemCount()} item{getItemCount() !== 1 ? "s" : ""} immediately and
+              skips checkout. No change is calculated.
             </DialogDescription>
           </DialogHeader>
+
+          <div className="rounded-2xl bg-muted/50 px-4 py-3">
+            <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-muted-foreground">
+              Total
+            </p>
+            <p className="text-3xl font-extrabold leading-tight text-primary tnum">
+              {formatLL(getTotal())}
+            </p>
+            <p className="text-sm text-muted-foreground tnum">{formatUSD(getTotalUsd())}</p>
+          </div>
+
           <DialogFooter className="flex gap-2 sm:justify-between">
             <Button
               variant="outline"
-              className="flex-1"
+              className="h-12 flex-1 rounded-2xl"
               onClick={() => setIsQuickEndDialogOpen(false)}
               disabled={isQuickEndProcessing}
             >
               Cancel
             </Button>
             <Button
-              className="flex-1 bg-green-600 hover:bg-green-700"
+              className="h-12 flex-1 rounded-2xl font-bold"
               onClick={handleQuickEnd}
               disabled={isQuickEndProcessing}
             >
               {isQuickEndProcessing ? (
-                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                <Loader2 className="h-4 w-4 animate-spin" />
               ) : (
-                <Check className="h-4 w-4 mr-2" />
+                <Check className="h-4 w-4" />
               )}
-              End Transaction
+              Done
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      {/* Transaction Complete — Digital Receipt QR Dialog */}
+      {/* ---- Sale complete — digital receipt ---- */}
       <Dialog open={isCompleteDialogOpen} onOpenChange={setIsCompleteDialogOpen}>
-        <DialogContent className="max-w-sm">
+        <DialogContent className="max-w-sm rounded-3xl">
           <div className="text-center">
-            <div className="h-16 w-16 rounded-full bg-green-500/10 flex items-center justify-center mx-auto mb-4">
-              <Check className="h-8 w-8 text-green-500" />
+            <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-emerald-500/10">
+              <Check className="h-7 w-7 text-emerald-400" />
             </div>
             <DialogHeader>
-              <DialogTitle>Transaction Complete!</DialogTitle>
-              <DialogDescription>
-                Transaction #{completedTxnNumber} • {completedItemCount} item
+              <DialogTitle>Sale complete</DialogTitle>
+              <DialogDescription className="tnum">
+                #{completedTxnNumber} · {completedItemCount} item
                 {completedItemCount !== 1 ? "s" : ""}
               </DialogDescription>
             </DialogHeader>
 
-            <div className="space-y-2 my-4">
+            <div className="my-4 space-y-2 rounded-2xl bg-muted/50 px-4 py-3 text-sm">
               <div className="flex justify-between">
-                <span className="text-muted-foreground">Total Amount</span>
-                <span className="font-bold">{formatLL(completedTotal)}</span>
+                <span className="text-muted-foreground">Total</span>
+                <span className="font-bold tnum">{formatLL(completedTotal)}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-muted-foreground">Amount Paid</span>
-                <span className="font-bold">{formatLL(completedPaid)}</span>
+                <span className="text-muted-foreground">Paid</span>
+                <span className="font-bold tnum">{formatLL(completedPaid)}</span>
               </div>
               {completedChange > 0 && (
-                <div className="flex justify-between text-green-500">
+                <div className="flex justify-between text-emerald-400">
                   <span>Change</span>
-                  <span className="font-bold">{formatLL(completedChange)}</span>
+                  <span className="font-bold tnum">{formatLL(completedChange)}</span>
                 </div>
               )}
             </div>
 
-            {/* QR Code */}
             {completedQrDataUrl ? (
-              <div className="mb-4 p-4 border rounded-lg bg-muted/30">
-                <h3 className="font-semibold text-sm mb-1">Digital Receipt</h3>
-                <p className="text-xs text-muted-foreground mb-3">
-                  Customer can scan this QR code to view their receipt on their phone
+              <div className="mb-4 rounded-2xl border p-4">
+                <p className="mb-3 text-xs text-muted-foreground">
+                  Customer scans this for their receipt
                 </p>
-                <div className="flex justify-center mb-3">
+                <div className="mb-3 flex justify-center">
                   <img
                     src={completedQrDataUrl}
                     alt="Digital receipt QR code"
-                    className="w-48 h-48 rounded-lg bg-white p-2"
+                    className="h-44 w-44 rounded-xl bg-white p-2"
                   />
                 </div>
                 <div className="grid grid-cols-3 gap-2">
-                  <Button variant="outline" size="sm" onClick={handleCopyCompletedLink}>
-                    <Copy className="h-4 w-4 mr-1" />
+                  <Button variant="outline" size="sm" className="rounded-xl" onClick={handleCopyCompletedLink}>
+                    <Copy className="h-4 w-4" />
                     Copy
                   </Button>
-                  <Button variant="outline" size="sm" onClick={handleShareCompletedReceipt}>
-                    <Share2 className="h-4 w-4 mr-1" />
+                  <Button variant="outline" size="sm" className="rounded-xl" onClick={handleShareCompletedReceipt}>
+                    <Share2 className="h-4 w-4" />
                     Share
                   </Button>
-                  <Button variant="outline" size="sm" onClick={handlePrintCompletedQR}>
-                    <Printer className="h-4 w-4 mr-1" />
+                  <Button variant="outline" size="sm" className="rounded-xl" onClick={handlePrintCompletedQR}>
+                    <Printer className="h-4 w-4" />
                     Print
                   </Button>
                 </div>
               </div>
             ) : (
-              <div className="mb-4 p-4 border rounded-lg bg-muted/30 flex items-center justify-center">
-                <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-                <span className="ml-2 text-sm text-muted-foreground">Generating QR...</span>
+              <div className="mb-4 flex items-center justify-center gap-2 rounded-2xl border p-6 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Generating QR…
               </div>
             )}
 
             <DialogFooter>
-              <Button className="w-full" onClick={() => setIsCompleteDialogOpen(false)}>
-                New Transaction
+              <Button
+                className="h-12 w-full rounded-2xl font-bold"
+                onClick={() => setIsCompleteDialogOpen(false)}
+              >
+                New sale
               </Button>
             </DialogFooter>
           </div>
         </DialogContent>
       </Dialog>
+    </>
+  );
+
+  // ===================== MOBILE: SCAN-FIRST =====================
+  // The camera is the page. Everything else floats over it: a header chip, a
+  // search pill, and the draggable cart sheet. Nothing is stacked in flow, so
+  // dragging the sheet never re-lays-out the live video behind it.
+  if (!isDesktopMode) {
+    return (
+      <div ref={posSurfaceRef} className="relative h-full w-full overflow-hidden bg-black">
+        {/* ---- Camera layer ---- */}
+        <div className="absolute inset-0">
+          {isScannerActive ? (
+            /* Unmounted (not merely deactivated) when off. Unmount runs the
+               scanner's stopEverything() cleanup — stop all MediaStream
+               tracks, reset ZXing, tear down Quagga — and removes the <video>
+               element from the DOM entirely. That is what actually releases
+               the camera. */
+            <BarcodeScanner
+              onScan={handleBarcodeScan}
+              isActive={true}
+              desktopMode={false}
+              showManualInput={false}
+              fullBleed
+            />
+          ) : (
+            <div className="absolute inset-0 flex flex-col items-center justify-center bg-zinc-950">
+              <ScanLine className="h-9 w-9 text-zinc-700" />
+              <p className="mt-3 text-sm text-zinc-500">Scanner is off</p>
+              <button
+                type="button"
+                onClick={toggleScanner}
+                className="tap mt-4 rounded-full bg-white/10 px-4 py-2 text-sm font-semibold text-white"
+              >
+                Turn on
+              </button>
+            </div>
+          )}
+
+          {/* Keeps the header chips readable when the camera is pointed at a
+              bright shelf. */}
+          <div className="pointer-events-none absolute inset-x-0 top-0 h-44 bg-gradient-to-b from-black/75 via-black/30 to-transparent" />
+        </div>
+
+        {/* ---- Floating header ---- */}
+        {/* safe-top clears the iOS status bar / notch, which the page paints
+            under because appleWebApp.statusBarStyle is 'black-translucent'. */}
+        <header className="safe-top absolute inset-x-0 top-0 z-20 px-4 pt-3">
+          <div className="flex items-center justify-between gap-3">
+            <div className="glass flex items-center gap-2 rounded-full py-1.5 pl-1.5 pr-3.5 ring-1 ring-white/10">
+              <span className="flex h-7 w-7 items-center justify-center rounded-full bg-primary text-sm font-black text-primary-foreground">
+                G
+              </span>
+              <span className="text-[15px] font-bold leading-none">GoldenSquirrel</span>
+              <SyncIndicator dot />
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={toggleScanner}
+                aria-label={isScannerActive ? "Turn scanner off" : "Turn scanner on"}
+                aria-pressed={isScannerActive}
+                className={cn(
+                  "tap glass flex h-11 w-11 items-center justify-center rounded-full ring-1 ring-white/10",
+                  isScannerActive ? "text-primary" : "text-muted-foreground"
+                )}
+              >
+                <Scan className="h-5 w-5" />
+              </button>
+              <button
+                type="button"
+                onClick={handleLogout}
+                aria-label="Log out"
+                className="tap glass flex h-11 w-11 items-center justify-center rounded-full text-muted-foreground ring-1 ring-white/10"
+              >
+                <Power className="h-5 w-5" />
+              </button>
+            </div>
+          </div>
+        </header>
+
+        {/* ---- Search pill + cart sheet ---- */}
+        <div className="absolute inset-x-0 bottom-0 z-20">
+          <div ref={searchBlockRef} className="px-4 pb-3">
+            <ProductSearchBar
+              products={products}
+              onSelect={handleProductAdd}
+              placeholder="Search or type a barcode"
+              dropUp
+              inputClassName="glass h-[52px] rounded-2xl border-white/10 text-[15px]"
+            />
+          </div>
+
+          <CartSheet
+            items={items}
+            itemCount={getItemCount()}
+            total={getTotal()}
+            totalUsd={getTotalUsd()}
+            totalDiscount={getTotalDiscount()}
+            roundingAdjustment={getRoundingAdjustment()}
+            availableHeight={Math.max(0, posHeight - searchBlockHeight)}
+            highlightedItemId={highlightedItemId}
+            onIncrement={incrementQuantity}
+            onDecrement={decrementQuantity}
+            onClear={handleClearCart}
+            onDone={() => setIsQuickEndDialogOpen(true)}
+            onCheckout={() => router.push("/checkout")}
+          />
+        </div>
+
+        {dialogs}
+      </div>
+    );
+  }
+
+  // ===================== DESKTOP: HARDWARE-SCANNER SPLIT =====================
+  // A till with a wedge scanner and a keyboard, not a phone. The cart gets the
+  // width, the barcode field keeps focus, and F2 / F3 / F4 drive the whole
+  // flow without the mouse.
+  return (
+    <div className="flex h-full flex-col overflow-hidden bg-background">
+      <header className="safe-top flex-shrink-0 border-b bg-background">
+        <div className="flex items-center justify-between px-5 py-3">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary">
+              <Squirrel className="h-5 w-5 text-primary-foreground" />
+            </div>
+            <div>
+              <h1 className="text-lg font-bold leading-tight">GoldenSquirrel</h1>
+              <p className="text-xs text-muted-foreground">Point of Sale</p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <SyncIndicator />
+            {canViewCash && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="rounded-xl"
+                onClick={() => router.push("/pos/cash")}
+              >
+                <Banknote className="h-4 w-4" />
+                Cash
+              </Button>
+            )}
+            {canViewTransactions && isEnabled("transactions") && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="rounded-xl"
+                onClick={() => router.push("/transactions")}
+              >
+                <History className="h-4 w-4" />
+                History
+              </Button>
+            )}
+            {canViewInventory && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="rounded-xl"
+                onClick={() => router.push("/pos/products")}
+              >
+                <Package className="h-4 w-4" />
+                Inventory
+              </Button>
+            )}
+            <Button
+              variant="ghost"
+              size="icon"
+              className="rounded-xl"
+              onClick={handleLogout}
+              aria-label="Log out"
+            >
+              <LogOut className="h-5 w-5" />
+            </Button>
+          </div>
+        </div>
+      </header>
+
+      <div className="flex flex-1 flex-col gap-4 overflow-hidden p-4">
+        {/* ---- Search + primary actions ---- */}
+        <div className="flex flex-shrink-0 items-center gap-3">
+          <ProductSearchBar
+            products={products}
+            onSelect={handleProductAdd}
+            placeholder="Search products by name or barcode…   F2"
+            className="flex-1"
+            inputClassName="h-11 rounded-2xl"
+            inputRef={searchInputRef}
+          />
+          {!isEmpty() && (
+            <div className="flex flex-shrink-0 gap-2">
+              <Button
+                className="tap h-11 rounded-2xl bg-secondary px-5 font-bold text-secondary-foreground hover:bg-secondary/80"
+                onClick={() => setIsQuickEndDialogOpen(true)}
+              >
+                <Check className="h-4 w-4 text-emerald-400" />
+                Done
+              </Button>
+              <Button
+                className="tap h-11 rounded-2xl px-5 font-bold"
+                onClick={() => router.push("/checkout")}
+              >
+                <CreditCard className="h-4 w-4" />
+                Checkout
+              </Button>
+            </div>
+          )}
+        </div>
+
+        <div className="flex min-h-0 flex-1 flex-row gap-4 overflow-hidden">
+          {/* ---- Cart — 65% ---- */}
+          <div className="flex min-w-0 flex-[65] flex-col overflow-hidden">
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-3xl border bg-card">
+              {isEmpty() ? (
+                <div className="flex h-full flex-col items-center justify-center text-muted-foreground">
+                  <ScanLine className="mb-4 h-12 w-12 opacity-25" />
+                  <p className="text-lg font-semibold">Scan items to add</p>
+                  <p className="mt-1 text-sm">Barcode field is on the right — F3 to focus</p>
+                </div>
+              ) : (
+                <>
+                  <div className="flex flex-shrink-0 items-baseline justify-between px-5 pb-2 pt-4">
+                    <h2 className="text-lg font-bold">
+                      Cart{" "}
+                      <span className="text-sm font-medium text-muted-foreground">
+                        · {getItemCount()} item{getItemCount() !== 1 ? "s" : ""}
+                      </span>
+                    </h2>
+                    <button
+                      type="button"
+                      onClick={handleClearCart}
+                      className="tap -mr-2 rounded-lg px-2 py-1 text-sm font-semibold text-destructive"
+                    >
+                      Clear
+                    </button>
+                  </div>
+
+                  <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto px-2">
+                    {items.map((item) => (
+                      <div
+                        key={item.product_id}
+                        id={`cart-item-${item.product_id}`}
+                        className={cn(
+                          "animate-cart-item-in flex items-center gap-3 rounded-2xl px-3 py-2.5 transition-colors duration-300",
+                          highlightedItemId === item.product_id
+                            ? "bg-primary/15 ring-1 ring-primary/60"
+                            : "ring-1 ring-transparent"
+                        )}
+                      >
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-[15px] font-semibold leading-tight">
+                            {item.product_name}
+                          </p>
+                          <p className="mt-0.5 truncate text-xs text-muted-foreground tnum">
+                            {item.discount_percentage > 0 ? (
+                              <>
+                                <span className="line-through opacity-60">
+                                  {formatLL(item.original_unit_price)}
+                                </span>{" "}
+                                <span className="font-semibold text-emerald-400">
+                                  {formatLL(item.unit_price)}
+                                </span>{" "}
+                                each · −{item.discount_percentage}%
+                              </>
+                            ) : (
+                              <>
+                                {formatLL(item.unit_price)} · {formatUSD(item.unit_price_usd)} each
+                              </>
+                            )}
+                          </p>
+                        </div>
+
+                        <div className="flex flex-shrink-0 items-center rounded-xl bg-muted/70">
+                          <button
+                            type="button"
+                            aria-label={`Decrease ${item.product_name}`}
+                            onClick={() => decrementQuantity(item.product_id)}
+                            className="tap flex h-9 w-9 items-center justify-center rounded-xl text-muted-foreground"
+                          >
+                            <Minus className="h-4 w-4" />
+                          </button>
+                          <span className="w-6 text-center text-[15px] font-bold tnum">
+                            {item.quantity}
+                          </span>
+                          <button
+                            type="button"
+                            aria-label={`Increase ${item.product_name}`}
+                            onClick={() => incrementQuantity(item.product_id)}
+                            className="tap flex h-9 w-9 items-center justify-center rounded-xl text-primary"
+                          >
+                            <Plus className="h-4 w-4" />
+                          </button>
+                        </div>
+
+                        <div className="w-[132px] flex-shrink-0 text-right">
+                          <p className="text-[15px] font-semibold tnum">
+                            {formatLL(item.total_price)}
+                          </p>
+                          <p className="text-xs text-muted-foreground tnum">
+                            {formatUSD(item.total_price_usd)}
+                          </p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="flex flex-shrink-0 items-end justify-between gap-3 border-t px-5 py-4">
+                    <div className="min-w-0">
+                      <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-muted-foreground">
+                        Total
+                        {getRoundingAdjustment() !== 0 && (
+                          <span className="tnum">
+                            {" · Rounded "}
+                            {getRoundingAdjustment() > 0 ? "+" : "−"}
+                            {Math.abs(Math.round(getRoundingAdjustment())).toLocaleString("en-US")}
+                          </span>
+                        )}
+                      </p>
+                      {getTotalDiscount() > 0 && (
+                        <p className="mt-0.5 text-xs font-semibold text-emerald-400 tnum">
+                          Saved {formatLL(getTotalDiscount())}
+                        </p>
+                      )}
+                      <p className="mt-0.5 text-sm text-muted-foreground tnum">
+                        {formatUSD(getTotalUsd())}
+                      </p>
+                    </div>
+                    <p
+                      key={getTotal()}
+                      className="animate-value-bump flex-shrink-0 text-[34px] font-extrabold leading-none text-primary tnum"
+                    >
+                      {formatLL(getTotal())}
+                    </p>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+
+          {/* ---- Barcode field + saved products — 35% ---- */}
+          <div className="flex min-w-0 flex-[35] flex-col gap-4">
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+              <BarcodeScanner
+                onScan={handleBarcodeScan}
+                isActive={true}
+                desktopMode={true}
+                barcodeInputRef={barcodeInputRef}
+              >
+                {savedProducts.length > 0 && (
+                  <div className="grid grid-cols-2 gap-2">
+                    {savedProducts.map((product) => (
+                      <button
+                        key={product.id}
+                        type="button"
+                        onClick={() => handleProductAdd(product)}
+                        className="tap flex min-h-[76px] flex-col items-center justify-center gap-1.5 rounded-2xl border bg-background px-3 py-2 text-center hover:bg-muted/50"
+                      >
+                        <span className="break-words text-sm font-semibold leading-tight">
+                          {product.name}
+                        </span>
+                        <span className="text-xs text-muted-foreground tnum">
+                          {formatLL(product.selling_price)}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </BarcodeScanner>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {dialogs}
     </div>
   );
 }

@@ -74,6 +74,10 @@ interface BarcodeScannerProps {
   /** When false, hides the manual barcode input section (use when an external
    *  product search bar replaces manual entry). Defaults to true. */
   showManualInput?: boolean;
+  /** Renders the camera as an edge-to-edge layer that fills its positioned
+   *  parent, with no card chrome and no manual input — the mobile POS
+   *  scan-first layout, where the cart sheet floats over the viewfinder. */
+  fullBleed?: boolean;
   /** Rendered in desktop mode below the barcode input (e.g. saved product buttons). */
   children?: React.ReactNode;
   /** Exposes the barcode input ref so parent can focus it (desktop mode). */
@@ -132,7 +136,7 @@ function isValidBarcode(raw: string): boolean {
 // MAIN COMPONENT
 // ============================================================
 
-function BarcodeScanner({ onScan, onClose, isActive = true, desktopMode = false, showManualInput = true, children, barcodeInputRef: externalBarcodeInputRef }: BarcodeScannerProps) {
+function BarcodeScanner({ onScan, onClose, isActive = true, desktopMode = false, showManualInput = true, fullBleed = false, children, barcodeInputRef: externalBarcodeInputRef }: BarcodeScannerProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const videoContainerRef = useRef<HTMLDivElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -568,6 +572,54 @@ function BarcodeScanner({ onScan, onClose, isActive = true, desktopMode = false,
           </div>
         </CardContent>
       </Card>
+    );
+  }
+
+  // Full-bleed mode: the camera IS the screen. No card, no border, no manual
+  // input — the POS floats its own search bar and cart sheet on top.
+  if (fullBleed) {
+    return (
+      <div className="absolute inset-0 bg-black">
+        <div
+          ref={videoContainerRef}
+          // Quagga (iOS) appends its own debug-overlay canvas next to the
+          // video. opacity-0 rather than hidden: it stays laid out exactly as
+          // Quagga sized it, we just don't show its detection boxes.
+          className="absolute inset-0 [&_video]:h-full [&_video]:w-full [&_video]:object-cover [&_canvas]:opacity-0"
+        />
+
+        {/* Reticle. Sits at ~32% of the height rather than dead centre: the
+            cart sheet owns the bottom half, so an optically centred target
+            would land underneath it. */}
+        {!error && (
+          <div className="pointer-events-none absolute inset-0">
+            <div className="absolute left-1/2 top-[32%] w-[64%] max-w-[280px] -translate-x-1/2 -translate-y-1/2">
+              <div className="relative aspect-[16/9]">
+                <div className="absolute left-0 top-0 h-9 w-9 rounded-tl-md border-l-[3px] border-t-[3px] border-primary" />
+                <div className="absolute right-0 top-0 h-9 w-9 rounded-tr-md border-r-[3px] border-t-[3px] border-primary" />
+                <div className="absolute bottom-0 left-0 h-9 w-9 rounded-bl-md border-b-[3px] border-l-[3px] border-primary" />
+                <div className="absolute bottom-0 right-0 h-9 w-9 rounded-br-md border-b-[3px] border-r-[3px] border-primary" />
+                {isScanning && (
+                  <div className="animate-reticle-sweep absolute inset-x-3 top-1/2 h-px bg-gradient-to-r from-transparent via-primary to-transparent" />
+                )}
+              </div>
+              <p className="mt-6 text-center text-sm font-semibold text-white/60">
+                Point at a barcode
+              </p>
+            </div>
+          </div>
+        )}
+
+        {error && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center px-8 text-center">
+            <Camera className="mb-4 h-10 w-10 text-zinc-600" />
+            <p className="mb-4 text-sm text-zinc-300">{error}</p>
+            <Button onClick={() => window.location.reload()} className="rounded-xl">
+              Retry
+            </Button>
+          </div>
+        )}
+      </div>
     );
   }
 

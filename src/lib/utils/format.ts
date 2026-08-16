@@ -84,6 +84,23 @@ export function formatLL(amount: number): string {
 }
 
 /**
+ * The same string formatLL() produces, split into its number and its unit.
+ *
+ * Purely a display helper for the headline figures (cart total, amount due,
+ * change) where the "LL" suffix is set at a smaller size than the digits.
+ * It delegates to formatLL so there is still exactly one place that decides
+ * how an LL amount is written — callers must never hand-roll the split.
+ */
+export function formatLLParts(amount: number): { value: string; unit: string } {
+  const formatted = formatLL(amount);
+  const unit = ' LL';
+  return {
+    value: formatted.slice(0, formatted.length - unit.length),
+    unit: 'LL',
+  };
+}
+
+/**
  * Format amount as USD
  */
 export function formatUSD(amount: number): string {

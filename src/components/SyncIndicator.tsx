@@ -12,7 +12,15 @@ import { useEffect, useState } from "react";
 import { syncEngine } from "@/lib/sync/engine";
 import { connectivity } from "@/lib/connectivity";
 
-export function SyncIndicator({ compact = false }: { compact?: boolean }) {
+export function SyncIndicator({
+  compact = false,
+  dot = false,
+}: {
+  compact?: boolean;
+  /** Bare status dot — no label. Used inside the POS header chip, where the
+   *  store name is the subject and connectivity is an ambient detail. */
+  dot?: boolean;
+}) {
   const [isOnline, setIsOnline] = useState(connectivity.isOnline);
   const [pendingCount, setPendingCount] = useState(0);
   const [isSyncing, setIsSyncing] = useState(false);
@@ -45,6 +53,29 @@ export function SyncIndicator({ compact = false }: { compact?: boolean }) {
       });
     }
   };
+
+  if (dot) {
+    // Three states, one glyph: offline (red), work waiting to go up
+    // (amber, pinging), everything settled (green).
+    const state = !isOnline
+      ? { color: "bg-red-500", label: "Offline" }
+      : pendingCount > 0 || isSyncing
+        ? { color: "bg-amber-400", label: `${pendingCount} waiting to sync` }
+        : { color: "bg-emerald-400", label: "Online" };
+
+    return (
+      <span className="relative flex h-2.5 w-2.5 shrink-0" title={state.label}>
+        <span className="sr-only">{state.label}</span>
+        {(pendingCount > 0 || isSyncing || !isOnline) && (
+          <span
+            className={`animate-status-ping absolute inline-flex h-full w-full rounded-full ${state.color}`}
+            aria-hidden
+          />
+        )}
+        <span className={`relative inline-flex h-2.5 w-2.5 rounded-full ${state.color}`} aria-hidden />
+      </span>
+    );
+  }
 
   if (compact) {
     // Compact version for mobile

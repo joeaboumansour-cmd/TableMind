@@ -532,7 +532,7 @@ export default function CSVImportDialog({
                   </div>
                 </label>
 
-                <label className="flex items-start gap-3 p-3 border border-red-200 rounded-lg cursor-pointer hover:bg-red-50 transition-colors">
+                <label className="flex items-start gap-3 p-3 border border-destructive/40 rounded-xl cursor-pointer hover:bg-destructive/10 transition-colors">
                   <input
                     type="radio"
                     name="importMode"
@@ -543,7 +543,7 @@ export default function CSVImportDialog({
                     disabled={isImporting}
                   />
                   <div>
-                    <span className="text-sm font-medium text-red-600">
+                    <span className="text-sm font-medium text-destructive">
                       Replace All
                     </span>
                     <p className="text-xs text-muted-foreground">
@@ -557,10 +557,10 @@ export default function CSVImportDialog({
 
           {/* Import Result */}
           {importResult && (
-            <div className="p-4 bg-green-50 border border-green-200 rounded-lg space-y-3">
+            <div className="p-4 bg-emerald-500/10 border border-emerald-500/30 rounded-2xl space-y-3">
               <div className="flex items-center gap-2">
-                <CheckCircle className="h-5 w-5 text-green-600" />
-                <span className="font-medium text-green-800">
+                <CheckCircle className="h-5 w-5 text-emerald-400" />
+                <span className="font-medium text-emerald-400">
                   Import Completed Successfully!
                 </span>
               </div>
@@ -572,25 +572,25 @@ export default function CSVImportDialog({
                 </div>
                 <div>
                   <span className="text-muted-foreground">Successful:</span>
-                  <span className="ml-2 font-medium text-green-600">
+                  <span className="ml-2 font-medium text-emerald-400">
                     {importResult.successful}
                   </span>
                 </div>
                 <div>
                   <span className="text-muted-foreground">Failed:</span>
-                  <span className="ml-2 font-medium text-red-600">
+                  <span className="ml-2 font-medium text-destructive">
                     {importResult.failed}
                   </span>
                 </div>
                 <div>
                   <span className="text-muted-foreground">Updated:</span>
-                  <span className="ml-2 font-medium text-blue-600">
+                  <span className="ml-2 font-medium text-sky-400">
                     {importResult.updated}
                   </span>
                 </div>
                 <div>
                   <span className="text-muted-foreground">Created:</span>
-                  <span className="ml-2 font-medium text-blue-600">
+                  <span className="ml-2 font-medium text-sky-400">
                     {importResult.created}
                   </span>
                 </div>

@@ -1,8 +1,6 @@
 "use client";
 
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { formatLL } from "@/lib/utils/format";
+import { cn } from "@/lib/utils";
 
 interface SlowMovingProduct {
   product_name: string;
@@ -16,58 +14,51 @@ interface SlowMovingProductsProps {
 }
 
 export function SlowMovingProducts({ products }: SlowMovingProductsProps) {
-  if (products.length === 0) {
-    return (
-      <Card>
-        <CardContent className="py-8">
-          <p className="text-center text-muted-foreground">
-            No slow-moving products detected. Great job!
-          </p>
-        </CardContent>
-      </Card>
-    );
-  }
-
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-lg">Slow Moving / Dead Stock</CardTitle>
-        <p className="text-sm text-muted-foreground">
-          Products with only 1 or fewer sales
-        </p>
-      </CardHeader>
-      <CardContent>
-        <div className="space-y-3">
-          {products.map((product, index) => (
-            <div
-              key={index}
-              className="flex items-center justify-between p-3 border rounded-lg"
-            >
-              <div className="flex-1">
-                <p className="font-medium">{product.product_name}</p>
-                <p className="text-sm text-muted-foreground">
-                  Qty sold: {product.totalQuantity}
-                </p>
-              </div>
-              <div className="text-right">
-                <Badge
-                  variant={
-                    product.daysSinceLastSale > 30
-                      ? "destructive"
-                      : product.daysSinceLastSale > 14
-                      ? "secondary"
-                      : "outline"
-                  }
+    <section>
+      <h3 className="mb-2 text-[11px] font-bold uppercase tracking-[0.14em] text-muted-foreground">
+        Slow moving stock
+      </h3>
+      <div className="rounded-3xl border border-white/10 bg-card p-4">
+        {products.length === 0 ? (
+          <p className="py-6 text-center text-sm text-muted-foreground">
+            Nothing is sitting still — every product sold more than once.
+          </p>
+        ) : (
+          <>
+            <p className="mb-3 text-xs text-muted-foreground">
+              Sold once or less in this range
+            </p>
+            <ul className="space-y-2.5">
+              {products.map((product, index) => (
+                <li
+                  key={`${product.product_name}-${index}`}
+                  className="flex items-center justify-between gap-3"
                 >
-                  {product.lastSold
-                    ? `${product.daysSinceLastSale} days ago`
-                    : "Never sold"}
-                </Badge>
-              </div>
-            </div>
-          ))}
-        </div>
-      </CardContent>
-    </Card>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium">{product.product_name}</p>
+                    <p className="text-xs text-muted-foreground tnum">
+                      {product.totalQuantity} sold
+                    </p>
+                  </div>
+                  <span
+                    className={cn(
+                      "flex-none rounded-lg px-2 py-1 text-xs font-semibold tnum",
+                      product.daysSinceLastSale > 30
+                        ? "bg-destructive/15 text-destructive"
+                        : product.daysSinceLastSale > 14
+                          ? "bg-primary/15 text-primary"
+                          : "bg-muted/70 text-muted-foreground"
+                    )}
+                  >
+                    {product.lastSold ? `${product.daysSinceLastSale}d ago` : "Never sold"}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
+      </div>
+    </section>
   );
 }

@@ -94,7 +94,7 @@ export default function BottomTabBar() {
     <nav
       aria-label="Main"
       className={cn(
-        "md:hidden flex-shrink-0 border-t bg-background",
+        "md:hidden flex-shrink-0 border-t border-white/[0.07] bg-card",
         // Clears the iOS home indicator; the page paints under it because
         // layout.tsx sets viewportFit: 'cover'.
         "safe-bottom"
@@ -121,22 +121,29 @@ export default function BottomTabBar() {
                 className={cn(
                   // 56px min target — comfortably above the 44px guideline,
                   // and reachable one-handed.
-                  "flex flex-col items-center justify-center gap-0.5 min-h-14 py-2 px-1",
-                  "transition-colors active:bg-muted/60",
+                  "tap flex flex-col items-center justify-center gap-1 min-h-14 py-2 px-1",
                   active
                     ? "text-primary"
                     : "text-muted-foreground hover:text-foreground"
                 )}
               >
                 {isPending && !active ? (
-                  <Loader2 className="h-5 w-5 animate-spin" aria-hidden />
+                  <Loader2 className="h-[22px] w-[22px] animate-spin" aria-hidden />
                 ) : (
                   <Icon
-                    className={cn("h-5 w-5", active && "scale-110")}
+                    className={cn(
+                      "h-[22px] w-[22px] transition-transform",
+                      active && "scale-110"
+                    )}
                     aria-hidden
                   />
                 )}
-                <span className="text-[11px] font-medium leading-none">
+                <span
+                  className={cn(
+                    "text-[11px] leading-none",
+                    active ? "font-semibold" : "font-medium"
+                  )}
+                >
                   {tab.label}
                 </span>
               </Link>

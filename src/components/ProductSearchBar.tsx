@@ -17,6 +17,13 @@ interface ProductSearchBarProps {
   className?: string;
   autoFocus?: boolean;
   inputRef?: React.Ref<HTMLInputElement>;
+  /** Extra classes for the input itself — lets the POS render this as a
+   *  floating pill over the camera without forking the component. */
+  inputClassName?: string;
+  /** Open the results above the field instead of below. Required wherever the
+   *  bar sits near the bottom of the screen (the mobile POS), otherwise the
+   *  list renders behind the cart sheet. */
+  dropUp?: boolean;
 }
 
 export default function ProductSearchBar({
@@ -26,6 +33,8 @@ export default function ProductSearchBar({
   className,
   autoFocus = false,
   inputRef: externalInputRef,
+  inputClassName,
+  dropUp = false,
 }: ProductSearchBarProps) {
   const [query, setQuery] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
@@ -205,7 +214,7 @@ export default function ProductSearchBar({
               setIsOpen(true);
             }
           }}
-          className="pl-10 pr-8 h-10"
+          className={cn("pl-10 pr-8 h-10", inputClassName)}
           autoComplete="off"
           autoCorrect="off"
           spellCheck={false}
@@ -231,7 +240,10 @@ export default function ProductSearchBar({
       {showDropdown && (
         <div
           ref={dropdownRef}
-          className="absolute z-50 w-full mt-1 bg-background border rounded-lg shadow-lg max-h-[320px] overflow-y-auto"
+          className={cn(
+            "absolute z-50 w-full overflow-y-auto rounded-2xl border bg-popover shadow-2xl max-h-[320px] no-scrollbar",
+            dropUp ? "bottom-full mb-2" : "mt-1"
+          )}
         >
           {filteredProducts.length === 0 ? (
             <div className="px-4 py-6 text-center text-sm text-muted-foreground">
@@ -249,39 +261,25 @@ export default function ProductSearchBar({
                   }}
                   onMouseEnter={() => setActiveIndex(index)}
                   className={cn(
-                    "px-3 py-2 cursor-pointer transition-colors flex items-center justify-between gap-3 rounded-sm",
-                    activeIndex === index
-                      ? "bg-amber-200 dark:bg-amber-700"
-                      : "hover:bg-muted/50"
+                    "mx-1 flex cursor-pointer items-center justify-between gap-3 rounded-xl px-3 py-2.5 transition-colors",
+                    activeIndex === index ? "bg-primary/15" : "hover:bg-muted/50"
                   )}
                 >
                   <div className="min-w-0 flex-1">
-                    <p className={cn(
-                      "font-semibold text-sm leading-tight truncate",
-                      activeIndex === index ? "text-amber-900 dark:text-white" : ""
-                    )}>
+                    <p className="truncate text-sm font-semibold leading-tight">
                       {product.name}
                     </p>
-                    <p className={cn(
-                      "text-xs mt-0.5 truncate",
-                      activeIndex === index ? "text-amber-800 dark:text-amber-100" : "text-muted-foreground"
-                    )}>
+                    <p className="mt-0.5 truncate text-xs text-muted-foreground tnum">
                       {product.barcode || "No barcode"}
                     </p>
                   </div>
-                  <div className="text-right flex-shrink-0">
-                    <p className={cn(
-                      "text-sm font-semibold",
-                      activeIndex === index ? "text-amber-900 dark:text-white" : "text-amber-600"
-                    )}>
+                  <div className="flex-shrink-0 text-right">
+                    <p className="text-sm font-semibold text-primary tnum">
                       {product.currency === "USD"
                         ? formatUSD(product.selling_price)
                         : formatLL(product.selling_price)}
                     </p>
-                    <p className={cn(
-                      "text-xs",
-                      activeIndex === index ? "text-amber-800 dark:text-amber-100" : "text-muted-foreground"
-                    )}>
+                    <p className="text-xs text-muted-foreground tnum">
                       {product.currency === "USD"
                         ? formatLL(product.selling_price * SELL_RATE)
 

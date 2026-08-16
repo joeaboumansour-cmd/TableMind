@@ -1,18 +1,19 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ProductPerformanceChart } from "@/components/charts/TransactionCharts";
 import { HourlySalesHeatmap } from "@/components/charts/HourlySalesHeatmap";
 import { DayOfWeekChart } from "@/components/charts/DayOfWeekChart";
 import { SlowMovingProducts } from "@/components/SlowMovingProducts";
 import {
   formatLL,
+  formatLLParts,
   formatPercent,
+  formatUSD,
   convertLlToUsdForSale,
 } from "@/lib/utils/format";
+import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 
 interface AnalyticsData {
@@ -57,6 +58,48 @@ interface TransactionAnalyticsProps {
   storeId: string;
 }
 
+/** Section wrapper — one heading style for the whole panel. */
+function Panel({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <section>
+      <h3 className="mb-2 text-[11px] font-bold uppercase tracking-[0.14em] text-muted-foreground">
+        {title}
+      </h3>
+      <div className="rounded-3xl border border-white/10 bg-card p-4">{children}</div>
+    </section>
+  );
+}
+
+/** Headline figure tile. */
+function Stat({
+  label,
+  value,
+  sub,
+  tone = "default",
+}: {
+  label: string;
+  value: string;
+  sub?: string;
+  tone?: "default" | "primary" | "positive" | "negative";
+}) {
+  return (
+    <div className="rounded-2xl border border-white/10 bg-card px-4 py-3">
+      <p className="text-xs text-muted-foreground">{label}</p>
+      <p
+        className={cn(
+          "mt-1 text-xl font-extrabold leading-tight tnum",
+          tone === "primary" && "text-primary",
+          tone === "positive" && "text-emerald-400",
+          tone === "negative" && "text-destructive"
+        )}
+      >
+        {value}
+      </p>
+      {sub && <p className="mt-0.5 text-xs text-muted-foreground tnum">{sub}</p>}
+    </div>
+  );
+}
+
 export function TransactionAnalytics({
   dateFilter,
   storeId,
@@ -64,7 +107,6 @@ export function TransactionAnalytics({
   const [analytics, setAnalytics] = useState<AnalyticsData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [viewMode, setViewMode] = useState<"dashboard" | "list">("dashboard");
 
   const fetchAnalytics = useCallback(async () => {
     if (!storeId) return;
@@ -107,195 +149,121 @@ export function TransactionAnalytics({
   }, [fetchAnalytics]);
 
   if (isLoading) {
+    // Skeletons in the real shape of the panel, so nothing jumps when the
+    // numbers land.
     return (
-      <Card>
-        <CardContent className="flex items-center justify-center py-12">
-          <div className="text-center">
-            <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent mx-auto mb-4" />
-            <p className="text-muted-foreground">Loading analytics...</p>
+      <div className="space-y-4">
+        <div className="grid grid-cols-2 gap-3">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="rounded-2xl border border-white/10 bg-card px-4 py-3">
+              <div className="skeleton h-3 w-16" />
+              <div className="skeleton mt-2 h-6 w-24" />
+              <div className="skeleton mt-2 h-3 w-14" />
+            </div>
+          ))}
+        </div>
+        {Array.from({ length: 2 }).map((_, i) => (
+          <div key={i} className="rounded-3xl border border-white/10 bg-card p-4">
+            <div className="skeleton h-40 w-full rounded-xl" />
           </div>
-        </CardContent>
-      </Card>
+        ))}
+      </div>
     );
   }
 
   if (error || !analytics) {
     return (
-      <Card>
-        <CardContent className="flex flex-col items-center justify-center py-12">
-          <p className="text-destructive mb-4">{error || "No analytics data"}</p>
-          <Button onClick={fetchAnalytics} variant="outline">
-            Retry
-          </Button>
-        </CardContent>
-      </Card>
+      <div className="flex flex-col items-center justify-center rounded-3xl border border-white/10 bg-card py-14 text-center">
+        <p className="mb-4 text-sm text-destructive">{error || "No analytics data"}</p>
+        <Button onClick={fetchAnalytics} variant="outline" className="rounded-2xl">
+          Retry
+        </Button>
+      </div>
     );
   }
 
+  const { summary } = analytics;
+  const maxQuantity = Math.max(
+    1,
+    ...analytics.topProductsByQuantity.map((p) => p.totalQuantity)
+  );
+
   return (
-    <div className="space-y-6">
-      {/* View Toggle */}
-      <div className="flex items-center justify-between">
-        <h2 className="text-2xl font-bold">Transaction Analytics</h2>
-        <Tabs
-          value={viewMode}
-          onValueChange={(v) => setViewMode(v as "dashboard" | "list")}
-        >
-          <TabsList>
-            <TabsTrigger value="dashboard">📊 Dashboard</TabsTrigger>
-            <TabsTrigger value="list">📋 List</TabsTrigger>
-          </TabsList>
-        </Tabs>
+    <div className="space-y-5">
+      {/* ---- Headline ---- */}
+      <div className="grid grid-cols-2 gap-3">
+        <Stat
+          label="Revenue"
+          value={formatLLParts(summary.totalRevenue).value}
+          sub={formatUSD(convertLlToUsdForSale(summary.totalRevenue))}
+          tone="primary"
+        />
+        <Stat
+          label="Profit"
+          value={formatLLParts(summary.totalProfit).value}
+          sub={`Margin ${formatPercent(summary.profitMargin)}`}
+          tone={summary.totalProfit >= 0 ? "positive" : "negative"}
+        />
+        <Stat
+          label="Sales"
+          value={String(summary.totalTransactions)}
+          sub={`Avg. ${formatLLParts(summary.averageTransactionValue).value}`}
+        />
+        <Stat label="Items sold" value={String(summary.totalItemsSold)} />
       </div>
 
-      {viewMode === "dashboard" ? (
-        <>
-          {/* Summary Cards */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-muted-foreground">
-                  Total Revenue
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold text-primary">
-                  {formatLL(analytics.summary.totalRevenue)}
+      {/* ---- When the store is busy ---- */}
+      <Panel title="Sales by hour">
+        <HourlySalesHeatmap data={analytics.hourlySales} />
+      </Panel>
+
+      <Panel title="Revenue by day of week">
+        <DayOfWeekChart data={analytics.dayOfWeekSales} />
+      </Panel>
+
+      {/* ---- What sells ---- */}
+      <Panel title="Top products by revenue">
+        <ProductPerformanceChart products={analytics.topProductsByRevenue} />
+      </Panel>
+
+      <Panel title="Top products by quantity">
+        {analytics.topProductsByQuantity.length === 0 ? (
+          <p className="py-6 text-center text-sm text-muted-foreground">
+            Nothing sold in this range.
+          </p>
+        ) : (
+          <ol className="space-y-2.5">
+            {analytics.topProductsByQuantity.map((product, index) => (
+              <li key={`${product.product_name}-${index}`}>
+                <div className="flex items-baseline justify-between gap-3">
+                  <span className="min-w-0 flex-1 truncate text-sm font-medium">
+                    <span className="mr-2 text-xs text-muted-foreground tnum">
+                      {index + 1}
+                    </span>
+                    {product.product_name}
+                  </span>
+                  <span className="flex-none text-right text-sm">
+                    <span className="font-semibold tnum">×{product.totalQuantity}</span>
+                    <span className="ml-2 text-xs text-muted-foreground tnum">
+                      {formatLL(product.totalRevenue)}
+                    </span>
+                  </span>
                 </div>
-                <p className="text-xs text-muted-foreground mt-1">
-                  ${convertLlToUsdForSale(analytics.summary.totalRevenue).toFixed(2)} USD
-                </p>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-muted-foreground">
-                  Total Profit
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div
-                  className={`text-2xl font-bold ${
-                    analytics.summary.totalProfit >= 0
-                      ? "text-green-600"
-                      : "text-red-600"
-                  }`}
-                >
-                  {formatLL(analytics.summary.totalProfit)}
+                {/* A bar reads faster than a column of numbers when you only
+                    want to know which few products carry the store. */}
+                <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-muted/60">
+                  <div
+                    className="h-full rounded-full bg-primary"
+                    style={{ width: `${(product.totalQuantity / maxQuantity) * 100}%` }}
+                  />
                 </div>
-                <p className="text-xs text-muted-foreground mt-1">
-                  Margin: {formatPercent(analytics.summary.profitMargin)}
-                </p>
-              </CardContent>
-            </Card>
+              </li>
+            ))}
+          </ol>
+        )}
+      </Panel>
 
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-muted-foreground">
-                  Transactions
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">
-                  {analytics.summary.totalTransactions}
-                </div>
-                <p className="text-xs text-muted-foreground mt-1">
-                  Avg: {formatLL(analytics.summary.averageTransactionValue)}
-                </p>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium text-muted-foreground">
-                  Items Sold
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="text-2xl font-bold">
-                  {analytics.summary.totalItemsSold}
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-
-          {/* Charts Row 1 */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <Card>
-              <CardHeader>
-                <CardTitle>Hourly Sales Heatmap</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <HourlySalesHeatmap data={analytics.hourlySales} />
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle>Revenue by Day of Week</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <DayOfWeekChart data={analytics.dayOfWeekSales} />
-              </CardContent>
-            </Card>
-          </div>
-
-          {/* Charts Row 2 */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <Card>
-              <CardHeader>
-                <CardTitle>Top 10 Products by Revenue</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <ProductPerformanceChart products={analytics.topProductsByRevenue} />
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle>Top 10 Products by Quantity</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-2">
-                  {analytics.topProductsByQuantity.map((product, index) => (
-                    <div
-                      key={index}
-                      className="flex items-center justify-between p-2 border-b border-border/50 last:border-0"
-                    >
-                      <div className="flex-1">
-                        <span className="font-medium text-sm">
-                          {product.product_name}
-                        </span>
-                      </div>
-                      <div className="flex gap-4 text-sm">
-                        <span className="text-muted-foreground">
-                          Qty: {product.totalQuantity}
-                        </span>
-                        <span className="font-medium">
-                          {formatLL(product.totalRevenue)}
-                        </span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
-          </div>
-
-          {/* Slow Moving Products */}
-          <SlowMovingProducts products={analytics.slowMovingProducts} />
-        </>
-      ) : (
-        <Card>
-          <CardContent className="py-8">
-            <p className="text-center text-muted-foreground">
-              Switch to the Transactions page to view the detailed transaction
-              list.
-            </p>
-          </CardContent>
-        </Card>
-      )}
+      <SlowMovingProducts products={analytics.slowMovingProducts} />
     </div>
   );
 }

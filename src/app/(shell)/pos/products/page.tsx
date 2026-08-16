@@ -26,17 +26,21 @@ import {
    Trash2,
    RefreshCw,
    LogOut,
-   ArrowLeft,
+   ChevronLeft,
    Search,
    Scan,
    X,
    Download,
    Upload,
-   Layers,
    Star,
    Check,
+   MoreHorizontal,
+   WifiOff,
   } from "lucide-react";
  import { toast } from "sonner";
+import { cn } from "@/lib/utils";
+import ProductRow from "@/components/pos/ProductRow";
+import type { InventoryProduct } from "@/components/pos/ProductRow";
 import { useAuth } from "@/lib/auth/AuthContext";
 import { PermissionGuard } from "@/lib/auth/guards";
 import { formatLL, formatUSD, convertLlToUsdForSale, SELL_RATE, RETURN_RATE, convertLlToUsdForReturn } from "@/lib/utils/format";
@@ -68,6 +72,13 @@ interface Product {
   parent_id?: string | null;
   variant_name?: string | null;
 }
+
+type StockFilter = "all" | "low" | "out";
+
+/** Row shapes the virtualiser renders — section headers share the list. */
+type ListRow =
+  | { kind: "header"; id: string; label: string; count: number }
+  | { kind: "product"; id: string; product: InventoryProduct };
 
 const BarcodeScanner = dynamic(() => import("@/components/BarcodeScanner"), {
   ssr: false,
@@ -111,6 +122,14 @@ function StoreProductsPageContent() {
   const [isDesktopMode, setIsDesktopMode] = useState(false);
   // Force re-render when star is toggled (localStorage change)
   const [freqVersion, setFreqVersion] = useState(0);
+  // Which stock bucket the list is narrowed to.
+  const [stockFilter, setStockFilter] = useState<StockFilter>("all");
+  // Only one row may have its swipe actions revealed at a time.
+  const [openRowId, setOpenRowId] = useState<string | null>(null);
+  // Row tapped open for the read-only detail sheet.
+  const [detailProduct, setDetailProduct] = useState<InventoryProduct | null>(null);
+  // Import / export / refresh / sign out, kept out of the header.
+  const [showMore, setShowMore] = useState(false);
 
   // Track online/offline status for UI (heartbeat-based)
   useEffect(() => {
@@ -707,625 +726,827 @@ function StoreProductsPageContent() {
           product.name.toLowerCase().includes(q) ||
           product.barcode?.toLowerCase().includes(q)
       )
-      .map((product: any) => {
+      .map((product): InventoryProduct => {
         const isParent = parentIds.has(product.id);
         const isVariant = !!product.parent_id;
 
-        // Determine product type badge
-        let _typeLabel: string | null = null;
-        let _typeColor: string = '';
-        if (isVariant) {
-          _typeLabel = 'Variant';
-          _typeColor = 'bg-purple-100 text-purple-700 border-purple-300';
-        } else if (isParent) {
-          _typeLabel = 'Parent';
-          _typeColor = 'bg-amber-100 text-amber-700 border-amber-300';
-        }
-
-        // Enhance variant products with their full name
-        if (isVariant && product.variant_name) {
-          return {
-            ...product,
-            _displayName: `${product.name} - ${product.variant_name}`,
-            _isVariant: true,
-            _isParent: false,
-            _parentId: product.parent_id,
-            _typeLabel,
-            _typeColor,
-          };
-        }
         return {
           ...product,
-          _displayName: product.name,
-          _isVariant: false,
+          // Variants read as "Parent - Flavour" so a search result is
+          // unambiguous without opening it.
+          _displayName:
+            isVariant && product.variant_name
+              ? `${product.name} - ${product.variant_name}`
+              : product.name,
+          _isVariant: isVariant,
           _isParent: isParent,
-          _parentId: null,
-          _typeLabel,
-          _typeColor,
         };
       });
   }, [products, debouncedSearch, parentIds]);
 
-
-  // Virtual scrolling setup for product list
-  const parentRef = useRef<HTMLDivElement>(null);
-  const virtualizer = useVirtualizer({
-    count: filteredProducts.length,
-    getScrollElement: () => parentRef.current,
-    estimateSize: () => 160, // estimated card height in px
-    overscan: 5, // render 5 extra items offscreen for smooth scrolling
-  });
-
-  // Stats calculations — one pass over `products`, memoized, instead of four
-  // separate full traversals on every render.
-  const { totalProducts, lowStockCount, totalCostValue, totalSellValue } = useMemo(() => {
+  // Counts for the filter chips. Always over the whole catalogue, not the
+  // current filter — a chip that reports the count of its own selection is
+  // useless for deciding whether to tap it.
+  const { totalProducts, lowStockCount, outOfStockCount } = useMemo(() => {
     let low = 0;
-    let cost = 0;
-    let sell = 0;
+    let out = 0;
     for (const p of products) {
-      if (p.stock_quantity <= p.min_stock_threshold) low++;
-      cost += p.cost_price * p.stock_quantity;
-      sell += p.selling_price * p.stock_quantity;
+      if (p.stock_quantity <= 0) out++;
+      else if (p.stock_quantity <= p.min_stock_threshold) low++;
     }
     return {
       totalProducts: products.length,
       lowStockCount: low,
-      totalCostValue: cost,
-      totalSellValue: sell,
+      outOfStockCount: out,
     };
   }, [products]);
 
-  // Show loading while auth is initializing OR products are being fetched.
-  // This prevents the user from seeing "0 items" while the forceRefresh
-  // network fetch is in-flight. The spinner stays until products arrive.
-  if (authLoading || isLoading) {
-    return (
-      <div className="h-dvh flex items-center justify-center bg-background">
-        <div className="text-center">
-          <Loader2 className="h-8 w-8 animate-spin mx-auto text-amber-500" />
-          <p className="mt-4 text-muted-foreground">Loading products...</p>
-        </div>
-      </div>
-    );
-  }
+  // The rendered list: a flat array so section headers can be virtualised
+  // alongside the rows instead of forcing the whole catalogue into the DOM.
+  const listRows = useMemo(() => {
+    const rows: ListRow[] = [];
+
+    const needsRestock = (p: InventoryProduct) =>
+      p.stock_quantity <= 0 || p.stock_quantity <= p.min_stock_threshold;
+
+    if (stockFilter === "low") {
+      const set = filteredProducts.filter(
+        (p) => p.stock_quantity > 0 && p.stock_quantity <= p.min_stock_threshold
+      );
+      set.forEach((product) => rows.push({ kind: "product", id: product.id, product }));
+      return rows;
+    }
+
+    if (stockFilter === "out") {
+      const set = filteredProducts.filter((p) => p.stock_quantity <= 0);
+      set.forEach((product) => rows.push({ kind: "product", id: product.id, product }));
+      return rows;
+    }
+
+    // "All" splits the list: anything at or below its restock line floats to
+    // the top, because that is the only part of a 2,500-row catalogue that
+    // needs a decision today.
+    const restock = filteredProducts.filter(needsRestock);
+    const rest = filteredProducts.filter((p) => !needsRestock(p));
+
+    if (restock.length > 0) {
+      rows.push({
+        kind: "header",
+        id: "h-restock",
+        label: "Needs restock",
+        count: restock.length,
+      });
+      restock.forEach((product) => rows.push({ kind: "product", id: product.id, product }));
+    }
+    if (rest.length > 0) {
+      rows.push({
+        kind: "header",
+        id: "h-all",
+        label: restock.length > 0 ? "All products" : "Products",
+        count: rest.length,
+      });
+      rest.forEach((product) => rows.push({ kind: "product", id: product.id, product }));
+    }
+    return rows;
+  }, [filteredProducts, stockFilter]);
+
+  // Virtual scrolling setup for product list
+  const parentRef = useRef<HTMLDivElement>(null);
+  const virtualizer = useVirtualizer({
+    count: listRows.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: (index) => (listRows[index]?.kind === "header" ? 36 : 69),
+    overscan: 8,
+    getItemKey: (index) => listRows[index]?.id ?? index,
+  });
+
+  const favStoreId = user?.storeId || "";
+
+  const toggleFavourite = (product: InventoryProduct) => {
+    if (isFrequentlyUsed(favStoreId, product.id)) {
+      removeFrequentlyUsedProduct(favStoreId, product.id);
+      toast.info(`${product.name} removed from quick access`);
+    } else {
+      addFrequentlyUsedProduct(favStoreId, product.id);
+      toast.success(`${product.name} added to quick access`);
+    }
+    setFreqVersion((v) => v + 1);
+  };
+
+  const FILTERS: { key: StockFilter; label: string; count: number }[] = [
+    { key: "all", label: "All", count: 0 },
+    { key: "low", label: "Low", count: lowStockCount },
+    { key: "out", label: "Out", count: outOfStockCount },
+  ];
+
+  // Auth resolving, or the first product fetch still in flight. Skeleton rows
+  // rather than a full-screen spinner: the page keeps its shape, so nothing
+  // jumps when the catalogue lands.
+  const isBusy = authLoading || isLoading;
+  const needsRestockTotal = lowStockCount + outOfStockCount;
 
   return (
-    <div className="h-dvh flex flex-col bg-background overflow-hidden">
-      {/* Compact Header */}
-      <header className="flex-shrink-0 bg-background border-b">
-        <div className="px-3 py-2">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Button 
-                variant="ghost" 
-                size="sm" 
-                onClick={() => router.push("/pos")}
-                className="h-8 w-8 p-0"
-              >
-                <ArrowLeft className="h-4 w-4" />
-              </Button>
-              <div className="h-8 w-8 rounded-lg bg-amber-500 flex items-center justify-center">
-                <Package className="h-4 w-4 text-white" />
-              </div>
-              <div>
-                <h1 className="font-bold text-sm">Products</h1>
-              </div>
+    <div className="flex h-full flex-col overflow-hidden bg-background">
+      {/* ---- Header ---- */}
+      <header className="safe-top flex-shrink-0 px-4 pt-3">
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex min-w-0 items-start gap-1">
+            <button
+              type="button"
+              onClick={() => router.push("/pos")}
+              aria-label="Back to sale"
+              className="tap -ml-2 mt-0.5 flex h-9 w-9 flex-none items-center justify-center rounded-full text-muted-foreground md:hidden"
+            >
+              <ChevronLeft className="h-6 w-6" />
+            </button>
+            <div className="min-w-0">
+              <h1 className="text-[26px] font-bold leading-none">Inventory</h1>
+              <p className="mt-1.5 text-xs text-muted-foreground tnum">
+                {totalProducts} product{totalProducts !== 1 ? "s" : ""}
+                {needsRestockTotal > 0 && ` · ${needsRestockTotal} need restock`}
+              </p>
             </div>
+          </div>
 
-            <div className="flex items-center gap-1">
-              <Button 
-                variant="ghost" 
-                size="sm" 
-                onClick={() => fetchProducts(storeId)}
-                className="h-8 w-8 p-0"
-              >
-                <RefreshCw className="h-3 w-3" />
-              </Button>
-              <Button 
-                variant="ghost" 
-                size="sm" 
-                onClick={handleLogout}
-                className="h-8 w-8 p-0"
-              >
-                <LogOut className="h-3 w-3" />
-              </Button>
-            </div>
+          <div className="flex flex-none items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setShowMore(true)}
+              aria-label="More actions"
+              className="tap flex h-11 w-11 items-center justify-center rounded-2xl bg-muted/60 text-muted-foreground"
+            >
+              <MoreHorizontal className="h-5 w-5" />
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                resetForm();
+                setIsDialogOpen(true);
+              }}
+              disabled={isOffline}
+              aria-label="Add product"
+              className="tap flex h-11 w-11 items-center justify-center rounded-2xl bg-primary text-primary-foreground disabled:opacity-40"
+            >
+              <Plus className="h-5 w-5" />
+            </button>
           </div>
         </div>
       </header>
 
-      {/* Offline Notice */}
+      {/* ---- Search + scan ---- */}
+      <div className="flex flex-shrink-0 gap-2 px-4 pt-3">
+        <div className="relative flex-1">
+          <Search className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            placeholder="Search name or barcode"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="pl-10 pr-10"
+          />
+          {searchQuery && (
+            <button
+              type="button"
+              onClick={() => setSearchQuery("")}
+              aria-label="Clear search"
+              className="tap absolute right-2.5 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full bg-muted text-muted-foreground"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          )}
+        </div>
+        <button
+          type="button"
+          onClick={() => setShowScanSearch(true)}
+          aria-label="Scan to find a product"
+          className="tap flex h-11 w-11 flex-none items-center justify-center rounded-xl border border-primary/40 text-primary"
+        >
+          <Scan className="h-5 w-5" />
+        </button>
+      </div>
+
+      {/* ---- Filters ---- */}
+      <div className="no-scrollbar flex flex-shrink-0 gap-2 overflow-x-auto px-4 pb-3 pt-3">
+        {FILTERS.map((f) => (
+          <button
+            key={f.key}
+            type="button"
+            onClick={() => {
+              setStockFilter(f.key);
+              setOpenRowId(null);
+            }}
+            aria-pressed={stockFilter === f.key}
+            className={cn(
+              "tap flex h-9 flex-none items-center gap-1.5 rounded-full px-4 text-sm font-semibold",
+              stockFilter === f.key
+                ? "bg-foreground text-background"
+                : "bg-muted/60 text-muted-foreground"
+            )}
+          >
+            {f.label}
+            {f.count > 0 && (
+              <span
+                className={cn(
+                  "rounded-full px-1.5 text-xs font-bold tnum",
+                  stockFilter === f.key
+                    ? "bg-background/20"
+                    : f.key === "out"
+                      ? "bg-destructive/20 text-destructive"
+                      : "bg-primary/20 text-primary"
+                )}
+              >
+                {f.count}
+              </span>
+            )}
+          </button>
+        ))}
+      </div>
+
+      {/* ---- Offline notice ---- */}
       {isOffline && (
-        <div className="flex-shrink-0 bg-amber-500/10 border-b border-amber-500/30 px-3 py-2">
-          <p className="text-sm text-amber-600 text-center font-medium">
-            You're offline. Inventory viewing, adding, editing, deleting, or importing products requires an internet connection.
+        <div className="mx-4 mb-3 flex flex-shrink-0 items-start gap-3 rounded-2xl border border-primary/30 bg-primary/[0.07] px-4 py-3">
+          <WifiOff className="mt-0.5 h-4 w-4 flex-none text-primary" />
+          <p className="text-xs text-muted-foreground">
+            You&rsquo;re offline. Browsing works; adding, editing, deleting and importing
+            need a connection.
           </p>
         </div>
       )}
 
-      {/* Main Content */}
-      <div className="flex-1 flex flex-col overflow-hidden p-3 gap-3">
-        {/* Stats Row */}
-        <div className="flex gap-2 text-sm overflow-x-auto">
-          <div className="flex items-center gap-1 px-2 py-1 bg-muted/50 rounded-lg whitespace-nowrap">
-            <Package className="h-3 w-3 text-amber-500" />
-            <span className="font-bold">{totalProducts}</span>
-            <span className="text-muted-foreground text-xs">items</span>
-          </div>
-          {lowStockCount > 0 && (
-            <div className="flex items-center gap-1 px-2 py-1 bg-red-50 text-red-600 rounded-lg whitespace-nowrap">
-              <span className="font-bold">{lowStockCount}</span>
-              <span className="text-xs">low</span>
-            </div>
-          )}
-        </div>
-
-        {/* Search and Add */}
-        <div className="flex gap-2">
-          <div className="relative flex-1">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-            <Input
-              placeholder="Search products..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-10 pr-10 h-10 md:h-9"
-            />
-            {searchQuery && (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setSearchQuery("")}
-                className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7 p-0 bg-muted/80 hover:bg-muted text-foreground rounded-full"
+      {/* ---- List ---- */}
+      <div ref={parentRef} className="no-scrollbar min-h-0 flex-1 overflow-y-auto">
+        {isBusy ? (
+          <div>
+            {Array.from({ length: 9 }).map((_, i) => (
+              <div
+                key={i}
+                className="flex items-center gap-3 border-b border-white/[0.05] px-4 py-3"
               >
-                <X className="h-4 w-4" />
+                <div className="skeleton h-10 w-10 rounded-xl" />
+                <div className="flex-1 space-y-2">
+                  <div className="skeleton h-3.5 w-40" />
+                  <div className="skeleton h-3 w-24" />
+                </div>
+                <div className="skeleton h-7 w-9" />
+              </div>
+            ))}
+          </div>
+        ) : listRows.length === 0 ? (
+          <div className="flex flex-col items-center justify-center px-8 py-20 text-center">
+            <Package className="mb-4 h-12 w-12 text-muted-foreground/30" />
+            <h3 className="text-lg font-semibold">
+              {products.length === 0 ? "No products yet" : "Nothing matches"}
+            </h3>
+            <p className="mt-1 text-sm text-muted-foreground">
+              {products.length === 0
+                ? "Add your first product to start selling."
+                : "Try another search or a different filter."}
+            </p>
+            {products.length === 0 && (
+              <Button
+                className="mt-5 rounded-2xl"
+                disabled={isOffline}
+                onClick={() => {
+                  resetForm();
+                  setIsDialogOpen(true);
+                }}
+              >
+                <Plus className="h-4 w-4" />
+                Add product
               </Button>
             )}
           </div>
-          <Button variant="outline" size="sm" onClick={() => setShowScanSearch(true)} className="h-9 px-3">
-            <Scan className="h-4 w-4" />
-          </Button>
-          <Button variant="outline" size="sm" onClick={handleExportProducts} className="h-9 px-3 hidden md:inline-flex" disabled={products.length === 0 || isOffline}>
-            <Download className="h-4 w-4" />
-          </Button>
-          <Button variant="outline" size="sm" onClick={() => setShowImportDialog(true)} className="h-9 px-3 hidden md:inline-flex" disabled={isOffline}>
-            <Upload className="h-4 w-4" />
-          </Button>
-          <Dialog open={isDialogOpen} onOpenChange={(open) => {
-            setIsDialogOpen(open);
-            if (!open) resetForm();
-          }}>
-            <DialogTrigger asChild>
-              <Button size="sm" className="h-9 px-2 md:px-3" disabled={isOffline}>
-                <Plus className="h-4 w-4" />
-                <span className="hidden md:inline ml-1">Add</span>
-              </Button>
-            </DialogTrigger>
-            <DialogContent className="max-w-md mx-4">
-              <DialogHeader>
-                <DialogTitle className="text-lg">{editingProduct ? "Edit Product" : "Add Product"}</DialogTitle>
-                <DialogDescription className="text-sm">
-                  {editingProduct ? "Update product details." : "Add a new product to your store."}
-                </DialogDescription>
-              </DialogHeader>
-              <form onSubmit={handleCreateProduct}>
-                <div className="space-y-4 py-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="name" className="text-sm">Product Name</Label>
-                    <Input
-                      id="name"
-                      placeholder="e.g., Coffee"
-                      value={name}
-                      onChange={(e) => setName(e.target.value)}
-                      required
-                      className="h-9"
+        ) : (
+          <div
+            style={{
+              height: `${virtualizer.getTotalSize()}px`,
+              width: "100%",
+              position: "relative",
+            }}
+          >
+            {virtualizer.getVirtualItems().map((virtualItem) => {
+              const row = listRows[virtualItem.index];
+              if (!row) return null;
+              return (
+                <div
+                  key={row.id}
+                  style={{
+                    position: "absolute",
+                    top: 0,
+                    left: 0,
+                    width: "100%",
+                    transform: `translateY(${virtualItem.start}px)`,
+                  }}
+                  ref={virtualizer.measureElement}
+                  data-index={virtualItem.index}
+                >
+                  {row.kind === "header" ? (
+                    <div className="flex items-baseline justify-between bg-background px-4 pb-1.5 pt-3">
+                      <h2 className="text-[11px] font-bold uppercase tracking-[0.14em] text-muted-foreground">
+                        {row.label}
+                      </h2>
+                      <span className="text-[11px] font-semibold text-muted-foreground tnum">
+                        {row.count}
+                      </span>
+                    </div>
+                  ) : (
+                    <ProductRow
+                      product={row.product}
+                      isFavourite={isFrequentlyUsed(favStoreId, row.product.id)}
+                      isHighlighted={highlightedProductId === row.product.id}
+                      isOpen={openRowId === row.product.id}
+                      disabled={isOffline}
+                      onOpenChange={(open) => setOpenRowId(open ? row.product.id : null)}
+                      onSelect={() => setDetailProduct(row.product)}
+                      onEdit={() => handleEditProduct(row.product)}
+                      onDelete={() => handleDeleteProduct(row.product.id, row.product.name)}
+                      onToggleFavourite={() => toggleFavourite(row.product)}
                     />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="barcode" className="text-sm">Barcode</Label>
-                    <div className="flex gap-2">
-                      <Input
-                        id="barcode"
-                        placeholder="e.g., 123456789"
-                        value={barcode}
-                        onChange={(e) => setBarcode(e.target.value)}
-                        className={'h-9 ' + (barcodeStatus?.valid === false ? 'border-red-500 focus:border-red-500 focus:ring-red-500' : barcodeStatus?.valid === true ? 'border-green-500 focus:border-green-500 focus:ring-green-500' : '')}
-                        inputMode="numeric"
-                        pattern="[0-9]*"
-                      />
-                      <Button type="button" variant="outline" size="sm" onClick={() => setShowBarcodeScanner(true)}>
-                        <Scan className="h-4 w-4" />
-                      </Button>
-                      {barcode && (
-                        <Button 
-                          type="button" 
-                          variant="outline" 
-                          size="sm"
-                          onClick={() => setBarcode("")}
-                          className="text-red-500 hover:text-red-700"
-                        >
-                          <X className="h-4 w-4" />
-                        </Button>
-                      )}
-                    </div>
-                    {barcode && barcodeStatus?.valid === true && (
-                      <div className="flex items-center gap-2 mt-1">
-                        <Check className="h-4 w-4 text-green-500" />
-                        <span className="text-xs text-green-600">Barcode is available — unique</span>
-                      </div>
-                    )}
-                    {barcode && barcodeStatus?.valid === false && (
-                      <div className="border-l-2 border-red-500 pl-2 mt-1">
-                        <div className="flex items-center gap-2">
-                          <X className="h-4 w-4 text-red-500" />
-                          <span className="text-xs text-red-600">
-                            This barcode is already assigned to "{barcodeStatus.existingName}". Use a different barcode.
-                          </span>
-                        </div>
-                      </div>
-                    )}
-                    
-                    {/* Product Variants */}
-                    <div className="mt-2">
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        onClick={addVariant}
-                        className="w-full h-7 text-xs border border-dashed border-muted-foreground/30 hover:border-amber-500 hover:text-amber-600"
-                      >
-                        <Plus className="h-3 w-3 mr-1" />
-                        Add Variant Barcode
-                      </Button>
-                      
-                      {variants.map((variant, index) => (
-                        <div key={index} className="flex gap-2 mt-2 items-end">
-                          <div className="flex-1 space-y-1">
-                            <Label className="text-xs text-muted-foreground">Variant {index + 1}</Label>
-                            <div className="flex gap-1">
-                              <Input
-                                placeholder="Barcode"
-                                value={variant.barcode}
-                                onChange={(e) => updateVariant(index, 'barcode', e.target.value)}
-                                className="h-8 text-sm flex-1"
-                                inputMode="numeric"
-                              />
-                              <Button
-                                type="button"
-                                variant="outline"
-                                size="sm"
-                                onClick={() => {
-                                  // Store which variant we are scanning for
-                                  (window as any).currentScanningVariantIndex = index;
-                                  setShowBarcodeScanner(true);
-                                }}
-                                className="h-8 w-8 p-0"
-                              >
-                                <Scan className="h-3.5 w-3.5" />
-                              </Button>
-                              <Input
-                                placeholder="Flavor Name"
-                                value={variant.variantName}
-                                onChange={(e) => updateVariant(index, 'variantName', e.target.value)}
-                                className="h-8 text-sm flex-1"
-                              />
-                            </div>
-                          </div>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => removeVariant(index)}
-                            className="h-8 w-8 p-0 text-red-500 hover:text-red-700"
-                          >
-                            <X className="h-4 w-4" />
-                          </Button>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="currency" className="text-sm">Currency</Label>
-                    <select
-                      id="currency"
-                      value={currency}
-                      onChange={(e) => setCurrency(e.target.value as 'LL' | 'USD')}
-                      className="h-9 px-3 rounded-md border border-input bg-background text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      <option value="LL">LL (Lebanese Lira)</option>
-                      <option value="USD">USD (US Dollar)</option>
-                    </select>
-                  </div>
-                    <div className="grid grid-cols-2 gap-4">
-                      <div className="space-y-2">
-                        <Label htmlFor="costPrice" className="text-sm">Cost Price ({currency})</Label>
-                        <Input
-                          id="costPrice"
-                          type="number"
-                          step="0.01"
-                          placeholder="0"
-                          value={costPrice}
-                          onChange={(e) => handleCostPriceChange(e.target.value)}
-                          className="h-9"
-                          inputMode="decimal"
-                        />
-                    </div>
-                    <div className="space-y-2">
-                        <Label htmlFor="profitPercentage" className="text-sm">Profit %</Label>
-                        <Input
-                          id="profitPercentage"
-                          type="number"
-                          step="0.1"
-                          placeholder="0"
-                          value={profitPercentage}
-                          onChange={(e) => handleProfitPercentageChange(e.target.value)}
-                          className="h-9"
-                          inputMode="decimal"
-                        />
-                    </div>
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="sellingPrice" className="text-sm">Selling Price ({currency})</Label>
-                      <Input
-                        id="sellingPrice"
-                        type="number"
-                        step="0.01"
-                        placeholder="0"
-                        value={sellingPrice}
-                        onChange={(e) => handleSellingPriceChange(e.target.value)}
-                        className="h-9"
-                        inputMode="decimal"
-                      />
-                    <p className="text-xs text-muted-foreground">
-                      {currency === 'LL' ? (
-                        <>Calculated: {formatLL(parseFloat(sellingPrice) || 0)} ≈ {formatUSD((parseFloat(sellingPrice) || 0) / RETURN_RATE)}</>
-                      ) : (
-                          <>Calculated: {formatUSD(parseFloat(sellingPrice) || 0)} ≈ {formatLL((parseFloat(sellingPrice) || 0) * SELL_RATE)}</>
-                      )}
-                    </p>
-                  </div>
-                  <FeatureFlagGuard feature="product_discount">
-                    <div className="space-y-2">
-                      <Label htmlFor="discountPercentage" className="text-sm">Discount %</Label>
-                      <Input
-                        id="discountPercentage"
-                        type="number"
-                        step="0.1"
-                        min="0"
-                        max="100"
-                        placeholder="0"
-                        value={discountPercentage}
-                        onChange={(e) => setDiscountPercentage(e.target.value)}
-                        className="h-9"
-                        inputMode="decimal"
-                      />
-                      <p className="text-xs text-muted-foreground">
-                        {discountPercentage && parseFloat(discountPercentage) > 0 ? (
-                          <>Product will be sold at {parseFloat(discountPercentage).toFixed(1)}% off the selling price</>
-                        ) : (
-                          <>No discount applied (0% by default)</>
-                        )}
-                      </p>
-                    </div>
-                  </FeatureFlagGuard>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <Label htmlFor="stockQuantity" className="text-sm">Stock Quantity</Label>
-                        <Input
-                          id="stockQuantity"
-                          type="number"
-                          placeholder="0"
-                          value={stockQuantity}
-                          onChange={(e) => setStockQuantity(e.target.value)}
-                          className="h-9"
-                          inputMode="numeric"
-                        />
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="minStockThreshold" className="text-sm">Min Stock Alert</Label>
-                        <Input
-                          id="minStockThreshold"
-                          type="number"
-                          placeholder="0"
-                          value={minStockThreshold}
-                          onChange={(e) => setMinStockThreshold(e.target.value)}
-                          className="h-9"
-                          inputMode="numeric"
-                        />
-                    </div>
-                  </div>
+                  )}
                 </div>
-                <DialogFooter className="gap-2">
-                  <Button type="button" variant="outline" size="sm" onClick={() => {
-                    setIsDialogOpen(false);
-                    resetForm();
-                  }}>
-                    Cancel
-                  </Button>
-                  <Button type="submit" size="sm" disabled={isSubmitting}>
-                    {isSubmitting ? (
-                      <>
-                        <Loader2 className="h-4 w-4 mr-1 animate-spin" />
-                        {editingProduct ? "Updating..." : "Adding..."}
-                      </>
-                    ) : (
-                      editingProduct ? "Update" : "Add"
-                    )}
-                  </Button>
-                </DialogFooter>
-              </form>
-            </DialogContent>
-          </Dialog>
-        </div>
-
-        {/* Mobile-Friendly Product List (Virtualized) */}
-        <div className="flex-1 overflow-y-auto" ref={parentRef}>
-          {filteredProducts.length === 0 ? (
-            <div className="text-center py-8 text-muted-foreground">
-              <Package className="h-12 w-12 mx-auto mb-3 opacity-30" />
-              <p className="text-sm">
-                {products.length === 0 
-                  ? "No products yet. Add your first product!"
-                  : "No products match your search."
-                }
-              </p>
-            </div>
-          ) : (
-            <div
-              style={{
-                height: `${virtualizer.getTotalSize()}px`,
-                width: "100%",
-                position: "relative",
-              }}
-            >
-              {virtualizer.getVirtualItems().map((virtualItem) => {
-                const product = filteredProducts[virtualItem.index];
-                if (!product) return null;
-                return (
-                  <div
-                    key={product.id}
-                    style={{
-                      position: "absolute",
-                      top: 0,
-                      left: 0,
-                      width: "100%",
-                      transform: `translateY(${virtualItem.start}px)`,
-                    }}
-                    ref={virtualizer.measureElement}
-                    data-index={virtualItem.index}
-                  >
-                    <Card 
-                      id={`product-${product.id}`}
-                      className={`p-3 mb-2 transition-all duration-300 ${
-                        highlightedProductId === product.id 
-                          ? "ring-4 ring-yellow-500 bg-yellow-200 shadow-lg scale-[1.02]" 
-                          : ""
-                      }`}
-                    >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 mb-1">
-                            <h3 className="font-semibold text-sm truncate">{product._displayName}</h3>
-                            {product._typeLabel && (
-                              <Badge variant="outline" className={`text-xs px-1 py-0 ${product._typeColor}`}>
-                                {product._typeLabel}
-                              </Badge>
-                            )}
-                            <Badge variant="outline" className="text-xs px-1 py-0">
-                              {product.currency}
-                            </Badge>
-                            {product.stock_quantity <= product.min_stock_threshold && (
-                              <Badge variant="destructive" className="text-xs px-1 py-0">
-                                Low
-                              </Badge>
-                            )}
-                          </div>
-                          <div className="flex flex-col gap-1 text-xs text-muted-foreground mb-2">
-                            {product.currency === 'LL' ? (
-                              <>
-                                <div className="flex items-center justify-center gap-3">
-                                  <span>Cost: {formatLL(product.cost_price)}</span>
-                                  <span>•</span>
-                                  <span>Sell: {formatLL(product.selling_price)}</span>
-                                </div>
-                                <div className="flex items-center justify-center gap-3 text-[12px]">
-                                  <span>Cost: {formatUSD(product.cost_price / RETURN_RATE)}</span>
-                                  <span>•</span>
-                                  <span>Sell: {formatUSD(product.selling_price / RETURN_RATE)}</span>
-                                </div>
-                              </>
-                            ) : (
-                              <>
-                                <div className="flex items-center justify-center gap-3">
-                                  <span>Cost: {formatUSD(product.cost_price)}</span>
-                                  <span>•</span>
-                                  <span>Sell: {formatUSD(product.selling_price)}</span>
-                                </div>
-                                <div className="flex items-center justify-center gap-3 text-[12px]">
-                                  <span>Cost: {formatLL(product.cost_price * SELL_RATE)}</span>
-                                  <span>•</span>
-                                  <span>Sell: {formatLL(product.selling_price * SELL_RATE)}</span>
-                                </div>
-                              </>
-                            )}
-                          </div>
-                          <div className="flex items-center gap-2 text-xs">
-                            <Badge variant={product.profit_percentage >= 0 ? "default" : "destructive"} className="text-xs">
-                              {product.profit_percentage.toFixed(1)}% profit
-                            </Badge>
-                            {product.discount_percentage > 0 && (
-                              <Badge variant="default" className="text-xs bg-green-500">
-                                -{product.discount_percentage}%
-                              </Badge>
-                            )}
-                            <span className="text-muted-foreground">
-                              Stock: {product.stock_quantity}
-                            </span>
-                          </div>
-                        </div>
-                        
-                        {/* Action Buttons */}
-                        <div className="flex items-center gap-1">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              const storeId = user?.storeId || "";
-                              if (isFrequentlyUsed(storeId, product.id)) {
-                                removeFrequentlyUsedProduct(storeId, product.id);
-                                toast.info(`${product.name} removed from quick access`);
-                              } else {
-                                addFrequentlyUsedProduct(storeId, product.id);
-                                toast.success(`${product.name} added to quick access`);
-                              }
-                              setFreqVersion(v => v + 1);
-                            }}
-                            className="h-8 w-8 p-0"
-                          >
-                            <Star className={`h-4 w-4 ${
-                              isFrequentlyUsed(user?.storeId || "", product.id)
-                                ? "fill-yellow-400 text-yellow-400"
-                                : "text-gray-400"
-                            }`} />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => handleEditProduct(product)}
-                            className="h-8 w-8 p-0"
-                            disabled={isOffline}
-                          >
-                            <Edit className="h-4 w-4 text-amber-500" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => handleDeleteProduct(product.id, product.name)}
-                            className="h-8 w-8 p-0"
-                            disabled={isOffline}
-                          >
-                            <Trash2 className="h-4 w-4 text-red-500" />
-                          </Button>
-                        </div>
-                      </div>
-                    </Card>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
+      {/* ---- Product detail ---- */}
+      <Dialog
+        open={!!detailProduct}
+        onOpenChange={(open) => !open && setDetailProduct(null)}
+      >
+        <DialogContent className="max-w-sm">
+          {detailProduct && (
+            <>
+              <DialogHeader>
+                <DialogTitle className="pr-8">{detailProduct._displayName}</DialogTitle>
+                <DialogDescription className="tnum">
+                  {detailProduct.barcode || "No barcode"}
+                </DialogDescription>
+              </DialogHeader>
 
-      {/* Scan Search Dialog */}
+              <div className="grid grid-cols-2 gap-3">
+                <div className="rounded-2xl bg-muted/40 px-3 py-2.5">
+                  <p className="text-xs text-muted-foreground">Selling price</p>
+                  <p className="mt-0.5 text-lg font-bold text-primary tnum">
+                    {detailProduct.currency === "USD"
+                      ? formatUSD(detailProduct.selling_price)
+                      : formatLL(detailProduct.selling_price)}
+                  </p>
+                  <p className="text-xs text-muted-foreground tnum">
+                    {detailProduct.currency === "USD"
+                      ? formatLL(detailProduct.selling_price * SELL_RATE)
+                      : formatUSD(detailProduct.selling_price / RETURN_RATE)}
+                  </p>
+                </div>
+                <div className="rounded-2xl bg-muted/40 px-3 py-2.5">
+                  <p className="text-xs text-muted-foreground">Cost price</p>
+                  <p className="mt-0.5 text-lg font-bold tnum">
+                    {detailProduct.currency === "USD"
+                      ? formatUSD(detailProduct.cost_price)
+                      : formatLL(detailProduct.cost_price)}
+                  </p>
+                  <p className="text-xs text-muted-foreground tnum">
+                    {detailProduct.profit_percentage.toFixed(1)}% profit
+                  </p>
+                </div>
+                <div className="rounded-2xl bg-muted/40 px-3 py-2.5">
+                  <p className="text-xs text-muted-foreground">In stock</p>
+                  <p
+                    className={cn(
+                      "mt-0.5 text-lg font-bold tnum",
+                      detailProduct.stock_quantity <= 0
+                        ? "text-destructive"
+                        : detailProduct.stock_quantity <= detailProduct.min_stock_threshold
+                          ? "text-primary"
+                          : ""
+                    )}
+                  >
+                    {detailProduct.stock_quantity}
+                  </p>
+                  <p className="text-xs text-muted-foreground tnum">
+                    Alerts at {detailProduct.min_stock_threshold}
+                  </p>
+                </div>
+                <div className="rounded-2xl bg-muted/40 px-3 py-2.5">
+                  <p className="text-xs text-muted-foreground">Discount</p>
+                  <p
+                    className={cn(
+                      "mt-0.5 text-lg font-bold tnum",
+                      detailProduct.discount_percentage > 0 ? "text-emerald-400" : ""
+                    )}
+                  >
+                    {detailProduct.discount_percentage > 0
+                      ? `−${detailProduct.discount_percentage}%`
+                      : "None"}
+                  </p>
+                  <p className="text-xs text-muted-foreground">{detailProduct.currency}</p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-3 gap-2">
+                <button
+                  type="button"
+                  onClick={() => toggleFavourite(detailProduct)}
+                  className="tap flex h-12 items-center justify-center gap-1.5 rounded-2xl bg-muted/60 text-sm font-semibold"
+                >
+                  <Star
+                    className={cn(
+                      "h-4 w-4",
+                      isFrequentlyUsed(favStoreId, detailProduct.id) &&
+                        "fill-primary text-primary"
+                    )}
+                  />
+                  Star
+                </button>
+                <button
+                  type="button"
+                  disabled={isOffline}
+                  onClick={() => {
+                    const target = detailProduct;
+                    setDetailProduct(null);
+                    handleEditProduct(target);
+                  }}
+                  className="tap flex h-12 items-center justify-center gap-1.5 rounded-2xl bg-primary text-sm font-bold text-primary-foreground disabled:opacity-40"
+                >
+                  <Edit className="h-4 w-4" />
+                  Edit
+                </button>
+                <button
+                  type="button"
+                  disabled={isOffline}
+                  onClick={() => {
+                    const target = detailProduct;
+                    setDetailProduct(null);
+                    handleDeleteProduct(target.id, target.name);
+                  }}
+                  className="tap flex h-12 items-center justify-center gap-1.5 rounded-2xl bg-destructive/15 text-sm font-bold text-destructive disabled:opacity-40"
+                >
+                  <Trash2 className="h-4 w-4" />
+                  Delete
+                </button>
+              </div>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* ---- More actions ---- */}
+      <Dialog open={showMore} onOpenChange={setShowMore}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Inventory actions</DialogTitle>
+            <DialogDescription>Bulk tools and account.</DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-1">
+            <button
+              type="button"
+              onClick={() => {
+                setShowMore(false);
+                fetchProducts(storeId, true);
+              }}
+              className="tap flex w-full items-center gap-3 rounded-xl px-4 py-3 text-left text-[15px] font-semibold hover:bg-muted/50"
+            >
+              <RefreshCw className="h-4 w-4 text-muted-foreground" />
+              Refresh from server
+            </button>
+            <button
+              type="button"
+              disabled={products.length === 0 || isOffline}
+              onClick={() => {
+                setShowMore(false);
+                handleExportProducts();
+              }}
+              className="tap flex w-full items-center gap-3 rounded-xl px-4 py-3 text-left text-[15px] font-semibold hover:bg-muted/50 disabled:pointer-events-none disabled:opacity-40"
+            >
+              <Download className="h-4 w-4 text-muted-foreground" />
+              Export to CSV
+            </button>
+            <button
+              type="button"
+              disabled={isOffline}
+              onClick={() => {
+                setShowMore(false);
+                setShowImportDialog(true);
+              }}
+              className="tap flex w-full items-center gap-3 rounded-xl px-4 py-3 text-left text-[15px] font-semibold hover:bg-muted/50 disabled:pointer-events-none disabled:opacity-40"
+            >
+              <Upload className="h-4 w-4 text-muted-foreground" />
+              Import from CSV
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setShowMore(false);
+                handleLogout();
+              }}
+              className="tap flex w-full items-center gap-3 rounded-xl px-4 py-3 text-left text-[15px] font-semibold text-destructive hover:bg-destructive/10"
+            >
+              <LogOut className="h-4 w-4" />
+              Sign out
+            </button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* ---- Add / edit product ---- */}
+      <Dialog
+        open={isDialogOpen}
+        onOpenChange={(open) => {
+          setIsDialogOpen(open);
+          if (!open) resetForm();
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>{editingProduct ? "Edit product" : "New product"}</DialogTitle>
+            <DialogDescription>
+              {editingProduct
+                ? "Update the details and save."
+                : "Cost, profit and selling price stay in sync — fill any two."}
+            </DialogDescription>
+          </DialogHeader>
+
+          <form onSubmit={handleCreateProduct} className="space-y-4">
+            <div className="space-y-1.5">
+              <Label htmlFor="name">Product name</Label>
+              <Input
+                id="name"
+                placeholder="e.g. Almaza 33cl"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                required
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="barcode">Barcode</Label>
+              <div className="flex gap-2">
+                <Input
+                  id="barcode"
+                  placeholder="Scan or type"
+                  value={barcode}
+                  onChange={(e) => setBarcode(e.target.value)}
+                  className={cn(
+                    "flex-1 tnum",
+                    barcodeStatus?.valid === false && "border-destructive focus-visible:ring-destructive/40",
+                    barcode && barcodeStatus?.valid === true && "border-emerald-500/60"
+                  )}
+                  inputMode="numeric"
+                  pattern="[0-9]*"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowBarcodeScanner(true)}
+                  aria-label="Scan barcode"
+                  className="tap flex h-11 w-11 flex-none items-center justify-center rounded-xl border border-primary/40 text-primary"
+                >
+                  <Scan className="h-4 w-4" />
+                </button>
+                {barcode && (
+                  <button
+                    type="button"
+                    onClick={() => setBarcode("")}
+                    aria-label="Clear barcode"
+                    className="tap flex h-11 w-11 flex-none items-center justify-center rounded-xl bg-muted/60 text-muted-foreground"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                )}
+              </div>
+              {barcode && barcodeStatus?.valid === true && (
+                <p className="flex items-center gap-1.5 text-xs text-emerald-400">
+                  <Check className="h-3.5 w-3.5" />
+                  Barcode is free to use
+                </p>
+              )}
+              {barcode && barcodeStatus?.valid === false && (
+                <p className="flex items-start gap-1.5 text-xs text-destructive">
+                  <X className="mt-0.5 h-3.5 w-3.5 flex-none" />
+                  Already used by &ldquo;{barcodeStatus.existingName}&rdquo; — pick another.
+                </p>
+              )}
+
+              {/* ---- Variant barcodes ---- */}
+              <button
+                type="button"
+                onClick={addVariant}
+                className="tap mt-1 flex h-9 w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-muted-foreground/30 text-xs font-semibold text-muted-foreground hover:border-primary/50 hover:text-primary"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                Add variant barcode
+              </button>
+
+              {variants.map((variant, index) => (
+                <div key={index} className="mt-2 flex items-end gap-2">
+                  <div className="min-w-0 flex-1 space-y-1.5">
+                    <Label>Variant {index + 1}</Label>
+                    <div className="flex gap-2">
+                      <Input
+                        placeholder="Barcode"
+                        value={variant.barcode}
+                        onChange={(e) => updateVariant(index, "barcode", e.target.value)}
+                        className="min-w-0 flex-1 tnum"
+                        inputMode="numeric"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          // Remembered so the scan result lands on this row.
+                          (window as any).currentScanningVariantIndex = index;
+                          setShowBarcodeScanner(true);
+                        }}
+                        aria-label={`Scan barcode for variant ${index + 1}`}
+                        className="tap flex h-11 w-11 flex-none items-center justify-center rounded-xl border border-primary/40 text-primary"
+                      >
+                        <Scan className="h-4 w-4" />
+                      </button>
+                      <Input
+                        placeholder="Flavour"
+                        value={variant.variantName}
+                        onChange={(e) => updateVariant(index, "variantName", e.target.value)}
+                        className="min-w-0 flex-1"
+                      />
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => removeVariant(index)}
+                    aria-label={`Remove variant ${index + 1}`}
+                    className="tap flex h-11 w-11 flex-none items-center justify-center rounded-xl bg-destructive/10 text-destructive"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+              ))}
+            </div>
+
+            <div className="space-y-1.5">
+              <Label>Currency</Label>
+              <div className="grid grid-cols-2 gap-1 rounded-xl bg-muted/60 p-1">
+                {(["LL", "USD"] as const).map((c) => (
+                  <button
+                    key={c}
+                    type="button"
+                    onClick={() => setCurrency(c)}
+                    aria-pressed={currency === c}
+                    className={cn(
+                      "tap h-9 rounded-lg text-sm font-bold",
+                      currency === c
+                        ? "bg-background text-foreground shadow-sm"
+                        : "text-muted-foreground"
+                    )}
+                  >
+                    {c}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="costPrice">Cost ({currency})</Label>
+                <Input
+                  id="costPrice"
+                  type="number"
+                  step="0.01"
+                  placeholder="0"
+                  value={costPrice}
+                  onChange={(e) => handleCostPriceChange(e.target.value)}
+                  inputMode="decimal"
+                  className="tnum"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="profitPercentage">Profit %</Label>
+                <Input
+                  id="profitPercentage"
+                  type="number"
+                  step="0.1"
+                  placeholder="0"
+                  value={profitPercentage}
+                  onChange={(e) => handleProfitPercentageChange(e.target.value)}
+                  inputMode="decimal"
+                  className="tnum"
+                />
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="sellingPrice">Selling price ({currency})</Label>
+              <Input
+                id="sellingPrice"
+                type="number"
+                step="0.01"
+                placeholder="0"
+                value={sellingPrice}
+                onChange={(e) => handleSellingPriceChange(e.target.value)}
+                inputMode="decimal"
+                className="tnum"
+              />
+              <p className="text-xs text-muted-foreground tnum">
+                {currency === "LL" ? (
+                  <>
+                    ≈ {formatUSD((parseFloat(sellingPrice) || 0) / RETURN_RATE)} for the
+                    customer
+                  </>
+                ) : (
+                  <>≈ {formatLL((parseFloat(sellingPrice) || 0) * SELL_RATE)} for the customer</>
+                )}
+              </p>
+            </div>
+
+            <FeatureFlagGuard feature="product_discount">
+              <div className="space-y-1.5">
+                <Label htmlFor="discountPercentage">Discount %</Label>
+                <Input
+                  id="discountPercentage"
+                  type="number"
+                  step="0.1"
+                  min="0"
+                  max="100"
+                  placeholder="0"
+                  value={discountPercentage}
+                  onChange={(e) => setDiscountPercentage(e.target.value)}
+                  inputMode="decimal"
+                  className="tnum"
+                />
+                <p className="text-xs text-muted-foreground">
+                  {discountPercentage && parseFloat(discountPercentage) > 0
+                    ? `Sold at ${parseFloat(discountPercentage).toFixed(1)}% off`
+                    : "No discount applied"}
+                </p>
+              </div>
+            </FeatureFlagGuard>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="stockQuantity">Stock</Label>
+                <Input
+                  id="stockQuantity"
+                  type="number"
+                  placeholder="0"
+                  value={stockQuantity}
+                  onChange={(e) => setStockQuantity(e.target.value)}
+                  inputMode="numeric"
+                  className="tnum"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="minStockThreshold">Alert at</Label>
+                <Input
+                  id="minStockThreshold"
+                  type="number"
+                  placeholder="0"
+                  value={minStockThreshold}
+                  onChange={(e) => setMinStockThreshold(e.target.value)}
+                  inputMode="numeric"
+                  className="tnum"
+                />
+              </div>
+            </div>
+
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                className="h-12 flex-1 rounded-2xl"
+                onClick={() => {
+                  setIsDialogOpen(false);
+                  resetForm();
+                }}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                className="h-12 flex-1 rounded-2xl font-bold"
+                disabled={isSubmitting}
+              >
+                {isSubmitting ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Saving…
+                  </>
+                ) : editingProduct ? (
+                  "Save changes"
+                ) : (
+                  "Add product"
+                )}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* ---- Scan to find ---- */}
       {showScanSearch && (
         <Dialog open={showScanSearch} onOpenChange={setShowScanSearch}>
-          <DialogContent className="max-w-lg mx-4">
+          <DialogContent className="max-w-lg">
             <DialogHeader>
-              <DialogTitle>Scan to Search</DialogTitle>
+              <DialogTitle>Scan to find</DialogTitle>
               <DialogDescription>
-                Scan a barcode to find and highlight the product
+                Point at a barcode and the product jumps to the top of the list.
               </DialogDescription>
             </DialogHeader>
             <BarcodeScanner
@@ -1334,24 +1555,21 @@ function StoreProductsPageContent() {
                 if (product) {
                   setHighlightedProductId(product.id);
                   setSearchQuery(scannedBarcode.trim());
+                  setStockFilter("all");
                   setShowScanSearch(false);
                   playSuccessSound();
                   toast.success(`Found: ${product.name}`);
-                  
-                  // Auto-scroll to the product
+
                   setTimeout(() => {
                     const element = document.getElementById(`product-${product.id}`);
                     if (element) {
-                      element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                      element.scrollIntoView({ behavior: "smooth", block: "center" });
                     }
                   }, 100);
-                  
-                  // Clear highlight after 1 second
-                  setTimeout(() => {
-                    setHighlightedProductId(null);
-                  }, 1000);
+
+                  setTimeout(() => setHighlightedProductId(null), 1600);
                 } else {
-                  toast.error("Product not found");
+                  toast.error("No product with that barcode");
                   setShowScanSearch(false);
                 }
               }}
@@ -1363,14 +1581,14 @@ function StoreProductsPageContent() {
         </Dialog>
       )}
 
-      {/* Barcode Scanner Dialog */}
+      {/* ---- Scan into the barcode field ---- */}
       {showBarcodeScanner && (
         <Dialog open={showBarcodeScanner} onOpenChange={setShowBarcodeScanner}>
-          <DialogContent className="max-w-lg mx-4">
+          <DialogContent className="max-w-lg">
             <DialogHeader>
-              <DialogTitle>Scan Barcode</DialogTitle>
+              <DialogTitle>Scan barcode</DialogTitle>
               <DialogDescription>
-                Point your camera at a barcode to scan it.
+                Point your camera at the barcode to fill the field.
               </DialogDescription>
             </DialogHeader>
             <BarcodeScanner
@@ -1383,7 +1601,7 @@ function StoreProductsPageContent() {
         </Dialog>
       )}
 
-      {/* CSV Import Dialog */}
+      {/* ---- CSV import ---- */}
       <CSVImportDialog
         open={showImportDialog}
         onOpenChange={setShowImportDialog}

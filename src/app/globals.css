@@ -253,13 +253,176 @@ html {
   animation: pulse-success 500ms ease-out;
 }
 
+@keyframes value-bump {
+  from {
+    opacity: 0.35;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Played whenever a money figure changes under the cashier's eyes (cart
+   total, amount received, change due) so the new number is noticed rather
+   than silently swapped. */
+.animate-value-bump {
+  animation: value-bump 150ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes reticle-sweep {
+  0% {
+    opacity: 0;
+    transform: translateY(-46%);
+  }
+  12% {
+    opacity: 1;
+  }
+  88% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(46%);
+  }
+}
+
+.animate-reticle-sweep {
+  animation: reticle-sweep 2.6s cubic-bezier(0.65, 0, 0.35, 1) infinite;
+}
+
+@keyframes status-ping {
+  0% {
+    opacity: 0.7;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(2.4);
+  }
+}
+
+.animate-status-ping {
+  animation: status-ping 1.8s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+
+/* ============================================================
+   SURFACES + TYPOGRAPHY
+
+   The revamped POS and checkout screens are built from three ingredients:
+   a frosted floating chip (.glass), a tactile press (.tap) and tabular
+   figures (.tnum). Keeping them here rather than repeating the utility
+   soup at ~30 call sites is what makes the two screens look like one app.
+   ============================================================ */
+
+/* Money must never reflow as digits change — a total ticking from 95,000 to
+   100,000 should not shift the decimal columns under the cashier's eye. */
+.tnum {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+/* Frosted panel for anything floating over the camera. The solid
+   background-color is the fallback: Android WebView still ships without
+   backdrop-filter, and an unreadable header over a bright shelf is worse
+   than a slightly heavier one. */
+.glass {
+  background-color: color-mix(in oklch, var(--card) 88%, transparent);
+  backdrop-filter: blur(20px) saturate(150%);
+  -webkit-backdrop-filter: blur(20px) saturate(150%);
+}
+
+@supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
+  .glass {
+    background-color: color-mix(in oklch, var(--card) 72%, transparent);
+  }
+}
+
+/* Every control the cashier taps. 70ms is under the ~100ms threshold where a
+   response starts to read as lag, but long enough to register as a press. */
+.tap {
+  transition:
+    transform 70ms ease-out,
+    background-color 140ms ease-out,
+    opacity 140ms ease-out,
+    color 140ms ease-out;
+}
+
+.tap:active {
+  transform: scale(0.96);
+}
+
+/* Draggable cart sheet. Height (not transform) is animated because the
+   totals + action buttons are pinned to the bottom of the sheet and must
+   stay on screen at every snap point. `contain` keeps the relayout scoped
+   to the sheet so the live camera behind it is never re-laid out. */
+.sheet {
+  transition: height 280ms cubic-bezier(0.32, 0.72, 0, 1);
+  will-change: height;
+  contain: layout paint;
+}
+
+/* Loading placeholders. A skeleton row that keeps the list's real shape beats
+   a centred spinner: the page does not jump when the data lands, and the
+   cashier can see what is coming. */
+@keyframes skeleton-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 0.7;
+  }
+}
+
+.skeleton {
+  background-color: color-mix(in oklch, var(--muted-foreground) 22%, transparent);
+  border-radius: 8px;
+  animation: skeleton-pulse 1.4s ease-in-out infinite;
+}
+
+/* Row that slides sideways to reveal its actions. Transform-only so the
+   reveal never triggers layout inside a virtualised list. */
+.swipe-row {
+  transition: transform 220ms cubic-bezier(0.32, 0.72, 0, 1);
+  will-change: transform;
+}
+
+/* The cart list and the keypad are their own scroll worlds; a visible bar
+   inside them just adds noise on a 6" screen. */
+.no-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
 /* Respect the OS reduced-motion setting. A POS is used for long shifts and
    some users are motion-sensitive; the app must stay fully functional. */
 @media (prefers-reduced-motion: reduce) {
   .animate-cart-item-in,
   .animate-fade-in,
-  .animate-pulse-success {
+  .animate-pulse-success,
+  .animate-value-bump,
+  .animate-reticle-sweep,
+  .animate-status-ping {
     animation: none;
+  }
+
+  .sheet,
+  .swipe-row {
+    transition: none;
+  }
+
+  .skeleton {
+    animation: none;
+  }
+
+  .tap:active {
+    transform: none;
   }
 
   *,

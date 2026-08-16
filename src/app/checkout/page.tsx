@@ -1,35 +1,76 @@
 "use client";
 
-import { useState, useEffect, useRef, Suspense } from "react";
+// =============================================
+// Checkout
+//
+// A keypad screen, not a form. The cashier is holding cash in one hand and the
+// phone in the other, so there is no OS keyboard: digits come from an on-screen
+// pad, and the currency the pad is typing into is chosen by the LL / USD
+// segmented control at the top.
+//
+// Split payments are preserved from the old two-input form — the LL and USD
+// amounts are two independent values that both stay entered; the segmented
+// control only decides which one the pad is currently editing.
+// =============================================
+
+import { useCallback, useEffect, useState, Suspense } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Separator } from "@/components/ui/separator";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   ArrowLeft,
   Check,
-  Loader2,
-  Calculator,
-  ChevronDown,
-  ChevronUp,
-  X,
   Copy,
-  Share2,
+  Delete,
+  Loader2,
   Printer,
+  Share2,
 } from "lucide-react";
 import { useCartStore } from "@/lib/stores/cartStore";
 import { toast } from "sonner";
-import { formatLL, formatUSD, SELL_RATE, RETURN_RATE, convertUsdToLlForReturn } from "@/lib/utils/format";
+import {
+  formatLL,
+  formatLLParts,
+  formatUSD,
+  SELL_RATE,
+  RETURN_RATE,
+  convertUsdToLlForReturn,
+} from "@/lib/utils/format";
 import { generateReceiptToken } from "@/lib/receipt/token";
+import { vibrate } from "@/lib/feedback";
+import { cn } from "@/lib/utils";
 import QRCode from "qrcode";
 
+type PayCurrency = "LL" | "USD";
+
+/** Longest entry the pad will accept, in characters. */
+const MAX_ENTRY_LENGTH = 12;
+
+function appendLL(prev: string, key: string): string {
+  const next = (prev + key).replace(/\D/g, "").replace(/^0+(?=\d)/, "");
+  return next.slice(0, MAX_ENTRY_LENGTH);
+}
+
+function appendUSD(prev: string, key: string): string {
+  if (key === ".") {
+    if (prev.includes(".")) return prev;
+    return prev === "" ? "0." : prev + ".";
+  }
+  const next = (prev + key).replace(/^0+(?=\d)/, "");
+  if (!/^\d*\.?\d{0,2}$/.test(next)) return prev;
+  return next.slice(0, MAX_ENTRY_LENGTH);
+}
 
 function CheckoutContent() {
   const router = useRouter();
 
+  const [currency, setCurrency] = useState<PayCurrency>("LL");
   const [amountPaidLL, setAmountPaidLL] = useState<string>("");
   const [amountPaidUSD, setAmountPaidUSD] = useState<string>("");
   const [isProcessing, setIsProcessing] = useState(false);
@@ -38,12 +79,10 @@ function CheckoutContent() {
   const [paidAmount, setPaidAmount] = useState<number>(0);
   const [changeGiven, setChangeGiven] = useState<number>(0);
   const [changeUsd, setChangeUsd] = useState<number>(0);
-  const [showSummary, setShowSummary] = useState(true);
+  const [showSummary, setShowSummary] = useState(false);
   const [receiptToken, setReceiptToken] = useState<string>("");
   const [receiptUrl, setReceiptUrl] = useState<string>("");
   const [qrDataUrl, setQrDataUrl] = useState<string>("");
-
-  const llInputRef = useRef<HTMLInputElement>(null);
 
   const {
     items,
@@ -67,8 +106,8 @@ function CheckoutContent() {
   // every totalPaid value is a clean multiple of 5,000 LL.
   const paidLL = parseFloat(amountPaidLL) || 0;
   const paidUSD = parseFloat(amountPaidUSD) || 0;
-  const totalPaid = paidLL + convertUsdToLlForReturn(paidUSD);
-
+  const usdAsLl = convertUsdToLlForReturn(paidUSD);
+  const totalPaid = paidLL + usdAsLl;
 
   // Balance calculation
   const difference = totalPaid - total;
@@ -82,10 +121,13 @@ function CheckoutContent() {
   function getChangeRate(): number {
     if (paidUSD > 0 && paidLL === 0) return RETURN_RATE;
     if (paidLL > 0 && paidUSD === 0) return SELL_RATE;
+    // Nothing entered yet — no change to value. Returning a rate rather than
+    // dividing by a zero total keeps the derived USD figure a number.
+    if (totalPaid <= 0) return SELL_RATE;
     // Both: weighted average of rates by contribution to total
     const llWeight = paidLL / totalPaid;
     const usdWeight = (paidUSD * RETURN_RATE) / totalPaid;
-    return (llWeight * SELL_RATE) + (usdWeight * RETURN_RATE);
+    return llWeight * SELL_RATE + usdWeight * RETURN_RATE;
   }
 
   function getChangeRateLabel(): string {
@@ -97,28 +139,52 @@ function CheckoutContent() {
   const changeRate = getChangeRate();
   const displayChangeUSD = displayChangeLL / changeRate;
 
-  // Auto-focus the LL amount input so the cashier can start typing immediately
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      llInputRef.current?.focus();
-    }, 300);
-    return () => clearTimeout(timer);
-  }, []);
+  // ---- Keypad ----
 
-  // Auto-collapse the order summary once payment entry begins,
-  // keeping the cashier focused on the amounts and change
-  useEffect(() => {
-    if ((paidLL > 0 || paidUSD > 0) && showSummary) {
-      setShowSummary(false);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [paidLL, paidUSD]);
+  const pressKey = useCallback(
+    (key: string) => {
+      vibrate(8);
+      if (currency === "LL") setAmountPaidLL((prev) => appendLL(prev, key));
+      else setAmountPaidUSD((prev) => appendUSD(prev, key));
+    },
+    [currency]
+  );
 
-  // ── Clear all payment fields ──
-  const handleClear = () => {
+  const pressBackspace = useCallback(() => {
+    vibrate(8);
+    if (currency === "LL") setAmountPaidLL((prev) => prev.slice(0, -1));
+    else setAmountPaidUSD((prev) => prev.slice(0, -1));
+  }, [currency]);
+
+  const handleClear = useCallback(() => {
+    vibrate(12);
     setAmountPaidLL("");
     setAmountPaidUSD("");
-  };
+  }, []);
+
+  // ---- Hardware keyboard (desktop tills) ----
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      if (transactionComplete) return;
+
+      if (/^[0-9]$/.test(e.key)) {
+        e.preventDefault();
+        pressKey(e.key);
+      } else if (e.key === "." && currency === "USD") {
+        e.preventDefault();
+        pressKey(".");
+      } else if (e.key === "Backspace") {
+        e.preventDefault();
+        pressBackspace();
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        handleClear();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [currency, pressKey, pressBackspace, handleClear, transactionComplete]);
 
   // Generate transaction number
   const generateTransactionNumber = () => {
@@ -127,7 +193,7 @@ function CheckoutContent() {
     return `TXN-${timestamp}-${random}`;
   };
 
-  // Handle payment processing — local only, no database writes
+  // Handle payment processing
   const handleProcessPayment = async () => {
     if (items.length === 0) {
       toast.error("Cart is empty");
@@ -391,389 +457,368 @@ function CheckoutContent() {
     printWindow.document.close();
   };
 
+  // ===================== COMPLETE =====================
   if (transactionComplete) {
     return (
-      <div className="min-h-dvh bg-background flex items-center justify-center p-4">
-        <Card className="w-full max-w-md">
-          <CardContent className="pt-6 text-center">
-            <div className="h-16 w-16 rounded-full bg-green-500/10 flex items-center justify-center mx-auto mb-4">
-              <Check className="h-8 w-8 text-green-500" />
-            </div>
-            <h2 className="text-2xl font-bold mb-2">Payment Complete!</h2>
-            <p className="text-muted-foreground mb-4">
-              Transaction #{transactionNumber}
-            </p>
+      <div className="flex min-h-dvh flex-col bg-background">
+        <div className="safe-top" />
+        <div className="mx-auto flex w-full max-w-md flex-1 flex-col px-5 py-8">
+          <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-full bg-emerald-500/10">
+            <Check className="h-8 w-8 text-emerald-400" />
+          </div>
 
-            <div className="space-y-2 mb-6">
-              <div className="flex justify-between">
-                <span>Total Amount</span>
-                <span className="font-bold">{formatLL(total)}</span>
-              </div>
-              <div className="flex justify-between">
-                <span>Amount Paid</span>
-                <span className="font-bold">{formatLL(paidAmount)}</span>
-              </div>
-              {paidUSD > 0 && (
-                <div className="flex justify-between text-xs text-muted-foreground">
-                  <span>of which USD</span>
-                  <span>{formatUSD(paidUSD)} @ {formatLL(RETURN_RATE)}/USD</span>
-                </div>
-              )}
-              {changeGiven > 0 && (
-                <div className="flex justify-between text-green-500">
-                  <span>Change</span>
-                  <span className="font-bold">{formatLL(changeGiven)}</span>
-                  <span className="text-sm">({formatUSD(changeUsd)})</span>
-                </div>
-              )}
-            </div>
+          <h1 className="text-center text-2xl font-bold">Payment complete</h1>
+          <p className="mt-1 text-center text-sm text-muted-foreground tnum">
+            #{transactionNumber}
+          </p>
 
-            {/* Digital Receipt QR Code */}
-            {qrDataUrl && (
-              <div className="mb-6 p-4 border rounded-lg bg-muted/30">
-                <h3 className="font-semibold text-sm mb-1">Digital Receipt</h3>
-                <p className="text-xs text-muted-foreground mb-3">
-                  Customer can scan this QR code to view their receipt on their phone
-                </p>
-                <div className="flex justify-center mb-3">
-                  <img
-                    src={qrDataUrl}
-                    alt="Digital receipt QR code"
-                    className="w-48 h-48 rounded-lg bg-white p-2"
-                  />
-                </div>
-                <div className="grid grid-cols-3 gap-2">
-                  <Button variant="outline" size="sm" onClick={handleCopyLink}>
-                    <Copy className="h-4 w-4 mr-1" />
-                    Copy
-                  </Button>
-                  <Button variant="outline" size="sm" onClick={handleShareReceipt}>
-                    <Share2 className="h-4 w-4 mr-1" />
-                    Share
-                  </Button>
-                  <Button variant="outline" size="sm" onClick={handlePrintQR}>
-                    <Printer className="h-4 w-4 mr-1" />
-                    Print
-                  </Button>
-                </div>
+          <div className="mt-6 space-y-2 rounded-3xl bg-card px-5 py-4 text-sm">
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Total</span>
+              <span className="font-bold tnum">{formatLL(total)}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Paid</span>
+              <span className="font-bold tnum">{formatLL(paidAmount)}</span>
+            </div>
+            {paidUSD > 0 && (
+              <div className="flex justify-between text-xs text-muted-foreground tnum">
+                <span>of which USD</span>
+                <span>
+                  {formatUSD(paidUSD)} @ {formatLL(RETURN_RATE)}/USD
+                </span>
               </div>
             )}
+            {changeGiven > 0 && (
+              <div className="flex items-baseline justify-between border-t border-white/[0.07] pt-2 text-emerald-400">
+                <span className="font-semibold">Change</span>
+                <span className="text-right">
+                  <span className="text-lg font-bold tnum">{formatLL(changeGiven)}</span>
+                  <span className="ml-2 text-xs tnum">{formatUSD(changeUsd)}</span>
+                </span>
+              </div>
+            )}
+          </div>
 
-            <div className="space-y-2">
-              <Button variant="outline" className="w-full" onClick={handleNewTransaction}>
-                New Transaction
-              </Button>
+          {qrDataUrl && (
+            <div className="mt-4 rounded-3xl border p-4 text-center">
+              <p className="mb-3 text-xs text-muted-foreground">
+                Customer scans this for their receipt
+              </p>
+              <div className="mb-3 flex justify-center">
+                <img
+                  src={qrDataUrl}
+                  alt="Digital receipt QR code"
+                  className="h-44 w-44 rounded-xl bg-white p-2"
+                />
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                <Button variant="outline" size="sm" className="rounded-xl" onClick={handleCopyLink}>
+                  <Copy className="h-4 w-4" />
+                  Copy
+                </Button>
+                <Button variant="outline" size="sm" className="rounded-xl" onClick={handleShareReceipt}>
+                  <Share2 className="h-4 w-4" />
+                  Share
+                </Button>
+                <Button variant="outline" size="sm" className="rounded-xl" onClick={handlePrintQR}>
+                  <Printer className="h-4 w-4" />
+                  Print
+                </Button>
+              </div>
             </div>
-          </CardContent>
-        </Card>
+          )}
+
+          <div className="flex-1" />
+
+          <button
+            type="button"
+            onClick={handleNewTransaction}
+            className="tap safe-bottom mt-6 h-14 w-full rounded-2xl bg-primary text-base font-bold text-primary-foreground"
+          >
+            New sale
+          </button>
+        </div>
       </div>
     );
   }
 
+  // ===================== PAYMENT =====================
+  const keypadKeys: string[] =
+    currency === "LL"
+      ? ["1", "2", "3", "4", "5", "6", "7", "8", "9", "000", "0"]
+      : ["1", "2", "3", "4", "5", "6", "7", "8", "9", ".", "0"];
+
+  const entry = currency === "LL" ? amountPaidLL : amountPaidUSD;
+  const hasEntry = entry.length > 0;
+  const activeDisplay =
+    currency === "LL" ? formatLLParts(paidLL).value : `$${amountPaidUSD || "0"}`;
+  const activeUnit = currency === "LL" ? "LL" : "";
+
+  const otherLabel =
+    currency === "LL"
+      ? paidUSD > 0
+        ? `${formatUSD(paidUSD)} in USD`
+        : null
+      : paidLL > 0
+        ? `${formatLL(paidLL)} in LL`
+        : null;
+
   return (
-    <div className="min-h-dvh bg-background">
-      {/* Header */}
-      <header className="sticky top-0 z-50 bg-background border-b">
-        <div className="container mx-auto px-4 py-3">
-          <div className="flex items-center gap-4">
-            <Button variant="ghost" size="icon" onClick={() => router.push("/pos")}>
-              <ArrowLeft className="h-5 w-5" />
-            </Button>
-            <div>
-              <h1 className="font-bold text-lg">Checkout</h1>
-              <p className="text-sm text-muted-foreground">
-                Cash Payment
-              </p>
-            </div>
-          </div>
+    <div className="flex h-dvh flex-col overflow-hidden bg-background">
+      {/* ---- Header ---- */}
+      <header className="safe-top flex-shrink-0 px-4 pt-3">
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => router.push("/pos")}
+            aria-label="Back to sale"
+            className="tap flex h-10 w-10 items-center justify-center rounded-full bg-muted/70"
+          >
+            <ArrowLeft className="h-5 w-5" />
+          </button>
+          <h1 className="flex-1 text-lg font-bold">Checkout</h1>
+          <button
+            type="button"
+            onClick={() => setShowSummary(true)}
+            className="tap rounded-full px-3 py-1.5 text-sm text-muted-foreground"
+          >
+            {items.length} item{items.length !== 1 ? "s" : ""}
+          </button>
         </div>
       </header>
 
-      <div className="container mx-auto px-4 py-6">
-        <div className="max-w-md mx-auto space-y-4">
-          {/* ── Payment Method ── */}
-          <Card>
-            <CardHeader className="pb-3">
-              <div className="flex items-center justify-between">
-                <CardTitle className="text-sm font-medium">Payment Method</CardTitle>
-                {/* Clear button — empties both payment fields */}
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-8 px-2 text-red-500 hover:text-red-700 hover:bg-red-500/10"
-                  onClick={handleClear}
-                  title="Clear all payment amounts"
-                >
-                  <X className="h-4 w-4 mr-1" />
-                  Clear
-                </Button>
-              </div>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {/* Amount Received Inputs */}
-              <div className="grid grid-cols-2 gap-4">
-                {/* LL Input */}
-                <div>
-                  <Label htmlFor="amountLL">
-                    Amount Received (LL)
-                  </Label>
-                  <Input
-                    ref={llInputRef}
-                    id="amountLL"
-                    type="number"
-                    step="1"
-                    inputMode="numeric"
-                    value={amountPaidLL}
-                    onChange={(e) => setAmountPaidLL(e.target.value)}
-                    className="text-lg mt-1"
-                    placeholder="0"
-                  />
-                </div>
+      {/* ---- Amount due ---- */}
+      <div className="flex-shrink-0 px-5 pt-5">
+        <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-muted-foreground">
+          Amount due
+        </p>
+        <div className="mt-1 flex items-baseline justify-between gap-3">
+          <p className="text-[40px] font-extrabold leading-none tnum">
+            {formatLLParts(total).value}
+            <span className="ml-1.5 text-lg font-bold text-muted-foreground">
+              {formatLLParts(total).unit}
+            </span>
+          </p>
+          <p className="text-sm text-muted-foreground tnum">{formatUSD(totalUsd)}</p>
+        </div>
+        {roundingAdjustment !== 0 && (
+          <p className="mt-1 text-xs text-muted-foreground tnum">
+            Rounded {roundingAdjustment > 0 ? "+" : "−"}
+            {Math.abs(Math.round(roundingAdjustment)).toLocaleString("en-US")} to the nearest
+            5,000
+          </p>
+        )}
+      </div>
 
-                {/* USD Input */}
-                <div>
-                  <Label htmlFor="amountUSD">
-                    Amount Received (USD)
-                  </Label>
-                  <Input
-                    id="amountUSD"
-                    type="number"
-                    step="1"
-                    inputMode="numeric"
-                    value={amountPaidUSD}
-                    onChange={(e) => setAmountPaidUSD(e.target.value)}
-                    className="text-lg mt-1"
-                    placeholder="0"
-                  />
-                </div>
-              </div>
-
-              {/* Payment Breakdown */}
-              {(paidLL > 0 || paidUSD > 0) && (
-                <div className="text-sm space-y-1.5 px-1 pt-2 border-t border-border/50">
-                  {paidLL > 0 && (
-                    <div className="flex justify-between">
-                      <span className="text-muted-foreground">Paid in LL</span>
-                      <span className="font-medium">{formatLL(paidLL)}</span>
-                    </div>
-                  )}
-                  {paidUSD > 0 && (
-                    <div className="flex justify-between">
-                      <span className="text-muted-foreground">Paid in USD</span>
-                      <span className="font-medium">{formatUSD(paidUSD)}</span>
-                    </div>
-                  )}
-                  {paidUSD > 0 && paidLL === 0 && (
-                    <div className="flex justify-between text-xs text-muted-foreground">
-                      <span>USD rate applied</span>
-                      <span>$1 = {formatLL(RETURN_RATE)}</span>
-                    </div>
-                  )}
-                  <div className="flex justify-between border-t border-border/50 pt-1.5 font-medium">
-                    <span>Total Paid (LL equivalent)</span>
-                    <span className="text-primary">{formatLL(totalPaid)}</span>
-                  </div>
-                </div>
+      {/* ---- Currency ---- */}
+      <div className="flex-shrink-0 px-5 pt-4">
+        <div className="grid grid-cols-2 gap-1 rounded-2xl bg-muted/60 p-1">
+          {(["LL", "USD"] as PayCurrency[]).map((c) => (
+            <button
+              key={c}
+              type="button"
+              onClick={() => {
+                vibrate(10);
+                setCurrency(c);
+              }}
+              aria-pressed={currency === c}
+              className={cn(
+                "tap h-10 rounded-xl text-sm font-bold transition-colors",
+                currency === c
+                  ? "bg-background text-foreground shadow-sm"
+                  : "text-muted-foreground"
               )}
+            >
+              {c}
+            </button>
+          ))}
+        </div>
+      </div>
 
-              {/* Calculator hint */}
-              {total > 0 && (
-                <div className="flex items-center justify-between text-sm text-muted-foreground px-1 pt-1">
-                  <span className="flex items-center gap-2">
-                    <Calculator className="h-4 w-4" />
-                    Total:
-                  </span>
-                  <span>
-                    {formatLL(total)} / {formatUSD(totalUsd)}
-                  </span>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-
-          {/* ── Order Summary — collapsible ── */}
-          <Card>
+      {/* ---- Received + change ---- */}
+      <div className="flex-shrink-0 px-5 pt-3">
+        <div className="rounded-2xl border border-primary/40 px-4 py-3">
+          <div className="flex items-baseline justify-between gap-3">
+            <span className="min-w-0 truncate text-sm text-muted-foreground">
+              Received
+              {otherLabel && <span className="tnum"> · + {otherLabel}</span>}
+            </span>
             <button
               type="button"
-              className="w-full"
-              onClick={() => setShowSummary((prev) => !prev)}
-              aria-expanded={showSummary}
+              onClick={handleClear}
+              disabled={!hasEntry && totalPaid <= 0}
+              className="tap -mr-1 flex-none rounded-lg px-1.5 py-0.5 text-sm font-bold text-destructive disabled:pointer-events-none disabled:opacity-30"
             >
-              <CardHeader className="pb-3">
-                <div className="flex items-center justify-between">
-                  <div className="text-left">
-                    <CardTitle className="text-sm font-medium">Order Summary</CardTitle>
-                    <CardDescription>
-                      {items.length} item{items.length !== 1 ? "s" : ""}
-                    </CardDescription>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <div className="text-right">
-                      <div className="font-bold text-amber-500">{formatLL(total)}</div>
-                      <div className="text-xs text-muted-foreground">{formatUSD(totalUsd)}</div>
-                    </div>
-                    {showSummary ? (
-                      <ChevronUp className="h-4 w-4 text-muted-foreground" />
-                    ) : (
-                      <ChevronDown className="h-4 w-4 text-muted-foreground" />
-                    )}
-                  </div>
-                </div>
-              </CardHeader>
+              Clear
             </button>
+          </div>
 
-            {showSummary && (
+          <p className="mt-0.5 flex items-baseline text-[30px] font-extrabold leading-tight text-primary tnum">
+            {activeDisplay}
+            {activeUnit && <span className="ml-1.5 text-base font-bold">{activeUnit}</span>}
+            <span className="ml-1 h-7 w-px animate-pulse bg-primary" aria-hidden />
+          </p>
+
+          {otherLabel && (
+            <p className="mt-0.5 text-xs text-muted-foreground tnum">
+              Total paid {formatLL(totalPaid)}
+            </p>
+          )}
+
+          <div className="mt-3 flex items-baseline justify-between border-t border-white/[0.07] pt-2.5">
+            {totalPaid <= 0 ? (
               <>
-                <Separator />
-                <CardContent className="pt-4">
-                  <div className="space-y-3 max-h-[200px] overflow-y-auto mb-4">
-                    {items.map((item) => (
-                      <div key={item.product_id} className="flex justify-between text-sm">
-                        <div className="flex items-center gap-2">
-                          <span>{item.product_name} × {item.quantity}</span>
-                          <Badge variant="outline" className="text-xs px-1 py-0">
-                            {item.currency}
-                          </Badge>
-                        </div>
-                        <span className="text-right">
-                          {item.currency === 'LL' ? (
-                            <>
-                              <div className="font-medium">{formatLL(item.total_price)}</div>
-                              <div className="text-xs text-muted-foreground">{formatUSD(item.total_price_usd)}</div>
-                            </>
-                          ) : (
-                            <>
-                              <div className="font-medium">{formatUSD(item.total_price_usd)}</div>
-                              <div className="text-xs text-muted-foreground">{formatLL(item.total_price)}</div>
-                            </>
-                          )}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-
-                  <Separator className="my-4" />
-
-                  <div className="space-y-2">
-                    {/* Show discount breakdown if any */}
-                    {getTotalDiscount() > 0 && (
-                      <>
-                        <div className="flex justify-between text-sm text-muted-foreground">
-                          <span>Subtotal</span>
-                          <span>{formatLL(getTotalOriginal())}</span>
-                        </div>
-                        <div className="flex justify-between text-sm text-red-500">
-                          <span>Discount</span>
-                          <span>-{formatLL(getTotalDiscount())}</span>
-                        </div>
-                      </>
-                    )}
-                    {/* Show rounding adjustment if any (rounded to nearest 5k) */}
-                    {roundingAdjustment !== 0 && (
-                      <div className="flex justify-between text-sm text-muted-foreground">
-                        <span>Rounding adjustment</span>
-                        <span className={roundingAdjustment > 0 ? "text-amber-600" : "text-green-600"}>
-                          {roundingAdjustment > 0 ? "+" : ""}{formatLL(roundingAdjustment)}
-                        </span>
-                      </div>
-                    )}
-                    <div className="flex justify-between text-lg font-bold">
-                      <span>Total</span>
-                      <span className="text-right">
-                        {items[0]?.currency === 'LL' ? (
-                          <>
-                            <div className="text-amber-500">{formatLL(total)}</div>
-                            <div className="text-s text-muted-foreground">{formatUSD(totalUsd)}</div>
-                          </>
-                        ) : (
-                          <>
-                            <div className="text-amber-500">{formatUSD(totalUsd)}</div>
-                            <div className="text-s text-muted-foreground">{formatLL(total)}</div>
-                          </>
-                        )}
-                      </span>
-                    </div>
-                  </div>
-                </CardContent>
+                <span className="text-sm font-semibold text-muted-foreground">Change due</span>
+                <span className="text-lg font-bold text-muted-foreground tnum">—</span>
+              </>
+            ) : isChangeDue ? (
+              <>
+                <span className="text-sm font-semibold text-emerald-400">Change due</span>
+                <span className="text-right">
+                  <span
+                    key={displayChangeLL}
+                    className="animate-value-bump text-[22px] font-extrabold text-emerald-400 tnum"
+                  >
+                    {formatLL(displayChangeLL)}
+                  </span>
+                  <span className="ml-2 text-xs text-emerald-400/80 tnum">
+                    {formatUSD(displayChangeUSD)} · {getChangeRateLabel()}
+                  </span>
+                </span>
+              </>
+            ) : displayChangeLL > 0 ? (
+              <>
+                <span className="text-sm font-semibold text-primary">Still due</span>
+                <span
+                  key={displayChangeLL}
+                  className="animate-value-bump text-[22px] font-extrabold text-primary tnum"
+                >
+                  {formatLL(displayChangeLL)}
+                </span>
+              </>
+            ) : (
+              <>
+                <span className="text-sm font-semibold text-emerald-400">Exact payment</span>
+                <Check className="h-5 w-5 text-emerald-400" />
               </>
             )}
-          </Card>
-
-          {/* ── Sticky bottom bar: live change + process button ── */}
-          <div className="sticky bottom-0 z-10 -mx-4 px-4 pt-3 pb-2 bg-background/95 backdrop-blur border-t border-border/60">
-            {/* Balance Display - always calculate live */}
-            {totalPaid > 0 && (
-              <>
-                {isChangeDue ? (
-                  <div className="mb-3 p-3 bg-green-500/10 rounded-lg">
-                    <div className="text-green-600 font-semibold mb-1">
-                      Change Due
-                    </div>
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="flex items-baseline gap-2 min-w-0">
-                        <span className="text-2xl font-bold text-green-600">
-                          {formatLL(displayChangeLL)}
-                        </span>
-                        <span className="text-sm text-green-600/80">
-                          ({formatUSD(displayChangeUSD)})
-                        </span>
-                      </div>
-                      <span className="text-xs text-green-600/70 text-right shrink-0">
-                        {getChangeRateLabel()}
-                      </span>
-                    </div>
-                  </div>
-                ) : displayChangeLL > 0 ? (
-                  <div className="mb-3 p-3 bg-amber-500/10 rounded-lg">
-                    <div className="text-amber-600 font-medium mb-1">
-                      Remaining Due
-                    </div>
-                    <div className="flex justify-between items-center">
-                      <span className="text-2xl font-bold text-amber-600">
-                        {formatLL(displayChangeLL)}
-                      </span>
-                      <span className="text-amber-600 font-medium">
-                        {formatUSD(displayChangeLL / SELL_RATE)}
-                      </span>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="mb-3 p-3 bg-green-500/10 rounded-lg flex items-center justify-between">
-                    <span className="text-green-600 font-semibold">Exact payment received</span>
-                    <Check className="h-5 w-5 text-green-600" />
-                  </div>
-                )}
-              </>
-            )}
-
-            {/* Process Payment Button */}
-            <Button
-              className="w-full h-14 text-lg"
-              onClick={handleProcessPayment}
-              disabled={isProcessing || totalPaid < total}
-            >
-              {isProcessing ? (
-                <>
-                  <Loader2 className="h-5 w-5 mr-2 animate-spin" />
-                  Processing...
-                </>
-              ) : (
-                <>
-                  <Check className="h-5 w-5 mr-2" />
-                  Process Payment • {formatLL(total)}
-                </>
-              )}
-            </Button>
           </div>
         </div>
       </div>
+
+      {/* ---- Keypad ---- */}
+      <div className="grid min-h-0 flex-1 grid-cols-3 auto-rows-fr gap-2 px-5 py-3">
+        {keypadKeys.map((key) => (
+          <button
+            key={key}
+            type="button"
+            onClick={() => pressKey(key)}
+            className="tap flex items-center justify-center rounded-2xl bg-muted/50 text-2xl font-semibold tnum active:bg-muted"
+          >
+            {key}
+          </button>
+        ))}
+        <button
+          type="button"
+          onClick={pressBackspace}
+          aria-label="Delete last digit"
+          className="tap flex items-center justify-center rounded-2xl bg-muted/50 active:bg-muted"
+        >
+          <Delete className="h-6 w-6" />
+        </button>
+      </div>
+
+      {/* ---- Confirm ---- */}
+      <div className="safe-bottom flex-shrink-0 px-5 pb-3">
+        <button
+          type="button"
+          onClick={handleProcessPayment}
+          disabled={isProcessing || totalPaid < total}
+          className="tap flex h-14 w-full items-center justify-center gap-2 rounded-2xl bg-primary text-base font-bold text-primary-foreground disabled:pointer-events-none disabled:opacity-40"
+        >
+          {isProcessing ? (
+            <>
+              <Loader2 className="h-5 w-5 animate-spin" />
+              Processing…
+            </>
+          ) : (
+            <>
+              <Check className="h-5 w-5" />
+              <span className="tnum">Process Payment · {formatLL(total)}</span>
+            </>
+          )}
+        </button>
+      </div>
+
+      {/* ---- Order summary ---- */}
+      <Dialog open={showSummary} onOpenChange={setShowSummary}>
+        <DialogContent className="max-w-sm rounded-3xl">
+          <DialogHeader>
+            <DialogTitle>Order summary</DialogTitle>
+            <DialogDescription>
+              {items.length} item{items.length !== 1 ? "s" : ""} in this sale
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="no-scrollbar max-h-[46vh] space-y-3 overflow-y-auto">
+            {items.map((item) => (
+              <div key={item.product_id} className="flex justify-between gap-3 text-sm">
+                <span className="min-w-0 flex-1">
+                  <span className="font-medium">{item.product_name}</span>
+                  <span className="text-muted-foreground tnum"> × {item.quantity}</span>
+                </span>
+                <span className="flex-shrink-0 text-right">
+                  <span className="block font-semibold tnum">{formatLL(item.total_price)}</span>
+                  <span className="block text-xs text-muted-foreground tnum">
+                    {formatUSD(item.total_price_usd)}
+                  </span>
+                </span>
+              </div>
+            ))}
+          </div>
+
+          <div className="space-y-2 border-t pt-4 text-sm">
+            {getTotalDiscount() > 0 && (
+              <>
+                <div className="flex justify-between text-muted-foreground">
+                  <span>Subtotal</span>
+                  <span className="tnum">{formatLL(getTotalOriginal())}</span>
+                </div>
+                <div className="flex justify-between text-emerald-400">
+                  <span>Discount</span>
+                  <span className="tnum">−{formatLL(getTotalDiscount())}</span>
+                </div>
+              </>
+            )}
+            {roundingAdjustment !== 0 && (
+              <div className="flex justify-between text-muted-foreground">
+                <span>Rounding adjustment</span>
+                <span className="tnum">
+                  {roundingAdjustment > 0 ? "+" : ""}
+                  {formatLL(Math.round(roundingAdjustment))}
+                </span>
+              </div>
+            )}
+            <div className="flex items-baseline justify-between pt-1 text-lg font-bold">
+              <span>Total</span>
+              <span className="text-right">
+                <span className="block text-primary tnum">{formatLL(total)}</span>
+                <span className="block text-sm font-normal text-muted-foreground tnum">
+                  {formatUSD(totalUsd)}
+                </span>
+              </span>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
 
 export default function CheckoutPage() {
   return (
-    <Suspense fallback={<div>Loading...</div>}>
+    <Suspense fallback={<div className="h-dvh bg-background" />}>
       <CheckoutContent />
     </Suspense>
   );
