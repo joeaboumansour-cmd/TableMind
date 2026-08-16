@@ -13,7 +13,7 @@
 // control only decides which one the pad is currently editing.
 // =============================================
 
-import { useCallback, useEffect, useState, Suspense } from "react";
+import { useCallback, useEffect, useState, useTransition, Suspense } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import {
@@ -83,6 +83,10 @@ function CheckoutContent() {
   const [receiptToken, setReceiptToken] = useState<string>("");
   const [receiptUrl, setReceiptUrl] = useState<string>("");
   const [qrDataUrl, setQrDataUrl] = useState<string>("");
+  // Navigating away from a finished sale is not instant — /pos remounts the
+  // catalogue and the scanner. Without a pending state the button looks dead
+  // and invites a second tap.
+  const [isLeaving, startLeaving] = useTransition();
 
   const {
     items,
@@ -161,6 +165,23 @@ function CheckoutContent() {
     setAmountPaidLL("");
     setAmountPaidUSD("");
   }, []);
+
+  // A checkout with an empty cart has nothing to pay for. Reaching one means
+  // the user got here by a route that should not exist — a back gesture onto a
+  // finished sale, a stale prefetch, a refresh after the cart was cleared — so
+  // hand them back to the POS instead of showing a 0 LL keypad.
+  //
+  // The delayed re-read guards against a first paint before the persisted cart
+  // has rehydrated; it checks the live store, not the render-time snapshot.
+  useEffect(() => {
+    if (transactionComplete || items.length > 0) return;
+    const timer = setTimeout(() => {
+      if (useCartStore.getState().items.length === 0) {
+        router.replace("/pos");
+      }
+    }, 150);
+    return () => clearTimeout(timer);
+  }, [items.length, transactionComplete, router]);
 
   // ---- Hardware keyboard (desktop tills) ----
   useEffect(() => {
@@ -395,7 +416,11 @@ function CheckoutContent() {
   // Handle new transaction
   const handleNewTransaction = () => {
     clearCart();
-    router.push("/pos");
+    // replace(), not push(). Going to /pos with push() leaves the finished
+    // checkout sitting on the history stack directly behind it, so the next
+    // back gesture drops the cashier onto a completed receipt — which reads
+    // exactly like "New sale took me back to checkout".
+    startLeaving(() => router.replace("/pos"));
   };
 
   // Copy receipt link to clipboard
@@ -537,8 +562,10 @@ function CheckoutContent() {
           <button
             type="button"
             onClick={handleNewTransaction}
-            className="tap h-14 w-full rounded-2xl bg-primary text-base font-bold text-primary-foreground"
+            disabled={isLeaving}
+            className="tap flex h-14 w-full items-center justify-center gap-2 rounded-2xl bg-primary text-base font-bold text-primary-foreground disabled:opacity-70"
           >
+            {isLeaving && <Loader2 className="h-5 w-5 animate-spin" />}
             New sale
           </button>
         </div>
@@ -574,7 +601,11 @@ function CheckoutContent() {
         <div className="flex items-center gap-3">
           <button
             type="button"
-            onClick={() => router.push("/pos")}
+            // replace() for the same reason as "New sale": pushing /pos when
+            // /pos is already behind us builds [pos, checkout, pos], and one
+            // back gesture lands on checkout again. /checkout never
+            // accumulates on the stack.
+            onClick={() => router.replace("/pos")}
             aria-label="Back to sale"
             className="tap flex h-10 w-10 items-center justify-center rounded-full bg-muted/70"
           >
