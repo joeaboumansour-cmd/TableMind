@@ -154,6 +154,23 @@
    indicator. These utilities put the padding back where it matters.
    ============================================================ */
 
+/* Height of the persistent bottom tab bar, including the iOS home-indicator
+   inset. The bar is position:fixed so nothing in a page's own layout can push
+   it off-screen; content areas reserve exactly this much room instead.
+   Anything else that floats near the bottom (the PWA install prompt) offsets
+   by it too, so it can never sit on top of navigation. */
+:root {
+  /* 3.5rem tab height + 1px top border + the home-indicator inset. */
+  --tab-bar-h: calc(3.5rem + 1px + env(safe-area-inset-bottom, 0px));
+}
+
+/* The bar is md:hidden — desktop keeps its header navigation, so no reserve. */
+@media (min-width: 768px) {
+  :root {
+    --tab-bar-h: 0px;
+  }
+}
+
 .safe-top {
   padding-top: env(safe-area-inset-top, 0px);
 }

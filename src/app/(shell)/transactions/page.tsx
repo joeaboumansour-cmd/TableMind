@@ -58,6 +58,7 @@ import {
 import type { CachedTransaction } from "@/lib/db";
 import dynamic from "next/dynamic";
 import { connectivity } from "@/lib/connectivity";
+import { analyticsQuery, getFilterCutoff, type DateFilter } from "@/lib/dateFilter";
 
 // Helper: check if user auth exists in localStorage (works offline)
 function hasAuthInStorage(): boolean {
@@ -118,8 +119,6 @@ interface TransactionWithChange extends Transaction {
    */
   syncState?: "queued" | "failed";
 }
-
-type DateFilter = "all" | "hour" | "today" | "week" | "month" | "90days";
 
 const DATE_FILTERS: { key: DateFilter; short: string; long: string }[] = [
   { key: "today", short: "Today", long: "Today" },
@@ -400,7 +399,10 @@ export default function TransactionHistoryPage() {
     const authData = localStorage.getItem("goldensquirrel_auth");
     if (!authData) return;
     try {
-      const res = await fetch(`/api/transactions/analytics?dateFilter=${dateFilter}`, {
+      // analyticsQuery carries the window start resolved in THIS device's
+      // timezone, so "today" means the shop's midnight rather than the
+      // server's.
+      const res = await fetch(`/api/transactions/analytics?${analyticsQuery(dateFilter)}`, {
         headers: { "x-auth-data": authData },
       });
       if (!res.ok) throw new Error(String(res.status));
@@ -487,27 +489,11 @@ export default function TransactionHistoryPage() {
   const filteredTransactions = useMemo(() => {
     let filtered = [...transactions];
 
-    const now = new Date();
-    if (dateFilter !== "all") {
-      const cutoff = new Date();
-      switch (dateFilter) {
-        case "hour":
-          cutoff.setHours(now.getHours() - 1);
-          break;
-        case "today":
-          cutoff.setHours(0, 0, 0, 0);
-          break;
-        case "week":
-          cutoff.setDate(now.getDate() - 7);
-          break;
-        case "month":
-          cutoff.setMonth(now.getMonth() - 1);
-          break;
-        case "90days":
-          cutoff.setDate(now.getDate() - 90);
-          break;
-      }
-      filtered = filtered.filter(t => new Date(t.created_at) >= cutoff);
+    // Same helper the profit request uses, so the figure in the takings card
+    // and the sales listed under it can never cover different windows.
+    const cutoff = getFilterCutoff(dateFilter);
+    if (cutoff) {
+      filtered = filtered.filter((t) => new Date(t.created_at) >= cutoff);
     }
 
     // Search by transaction #, user, or amount

@@ -47,8 +47,11 @@ export default function PWAInstallPrompt() {
   }
 
   return (
-    <div className="fixed bottom-4 left-4 right-4 z-50 max-w-md mx-auto">
-      <div className="bg-background border rounded-lg shadow-lg p-4 flex items-center gap-3">
+    // Offset by the tab bar's height so this banner sits ABOVE navigation
+    // instead of on top of it — at `bottom-4` with z-50 it covered the tab bar
+    // outright, which read as the bar having disappeared.
+    <div className="fixed left-4 right-4 z-30 mx-auto max-w-md bottom-[calc(var(--tab-bar-h)+1rem)]">
+      <div className="bg-card border rounded-2xl shadow-2xl p-4 flex items-center gap-3">
         <div className="bg-primary/10 p-2 rounded-full">
           <Download className="h-5 w-5 text-primary" />
         </div>

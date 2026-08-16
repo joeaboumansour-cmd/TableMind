@@ -83,7 +83,26 @@ export async function GET(request: Request) {
     // Get date filter from query params
     const url = new URL(request.url);
     const dateFilter = url.searchParams.get("dateFilter") || "all";
-    const cutoff = getCutoffDate(dateFilter);
+
+    // `from` is the window start already resolved in the STORE's timezone by
+    // the client. Prefer it over deriving the boundary here.
+    //
+    // Only "today" is calendar-anchored; every other filter is a rolling
+    // `now − duration` and so is timezone-independent. Computing "today" with
+    // getCutoffDate() means midnight in the SERVER's zone — UTC on Vercel —
+    // which for a Beirut store starts the day three hours late and made the
+    // profit figure disagree with the sales listed next to it. getCutoffDate
+    // remains as the fallback for older clients and direct calls.
+    const fromParam = url.searchParams.get("from");
+    let cutoff: Date | null = getCutoffDate(dateFilter);
+    if (fromParam) {
+      const parsedFrom = new Date(fromParam);
+      if (!Number.isNaN(parsedFrom.getTime())) {
+        cutoff = parsedFrom;
+      } else {
+        return NextResponse.json({ error: "Invalid `from` timestamp" }, { status: 400 });
+      }
+    }
 
     // Fetch transactions with items
     let query = supabase

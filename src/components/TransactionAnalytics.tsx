@@ -15,6 +15,7 @@ import {
 } from "@/lib/utils/format";
 import { cn } from "@/lib/utils";
 import { toast } from "@/lib/toast";
+import { analyticsQuery } from "@/lib/dateFilter";
 
 interface AnalyticsData {
   summary: {
@@ -120,8 +121,9 @@ export function TransactionAnalytics({
         throw new Error("No auth data");
       }
 
+      // Window start resolved in the device's timezone — see @/lib/dateFilter.
       const response = await fetch(
-        `/api/transactions/analytics?dateFilter=${dateFilter}`,
+        `/api/transactions/analytics?${analyticsQuery(dateFilter)}`,
         {
           headers: {
             "x-auth-data": authData,

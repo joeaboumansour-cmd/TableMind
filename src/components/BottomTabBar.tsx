@@ -73,21 +73,34 @@ const TABS: Tab[] = [
   },
 ];
 
+/**
+ * Which tabs this user can actually see. Exported so the app shell can reserve
+ * exactly the right amount of room for the bar — and none at all when there is
+ * no bar to render.
+ */
+export function useVisibleTabs(): Tab[] {
+  const { user, canAccess } = useAuth();
+  const { isEnabled } = useFeatureFlags();
+
+  if (!user) return [];
+  return TABS.filter(
+    (t) => canAccess(t.section) && (!t.feature || isEnabled(t.feature))
+  );
+}
+
+/** A single destination is not navigation. */
+export function useHasBottomTabs(): boolean {
+  return useVisibleTabs().length >= 2;
+}
+
 export default function BottomTabBar() {
   const pathname = usePathname();
   const router = useRouter();
-  const { user, canAccess } = useAuth();
-  const { isEnabled } = useFeatureFlags();
+  const visible = useVisibleTabs();
   // Gives the tapped tab an immediate pending state. Navigations were
   // imperative router.push() calls with no feedback at all, so the screen just
   // froze on the old page until the next route painted.
   const [isPending, startTransition] = useTransition();
-
-  if (!user) return null;
-
-  const visible = TABS.filter(
-    (t) => canAccess(t.section) && (!t.feature || isEnabled(t.feature))
-  );
 
   // A single tab is not navigation.
   if (visible.length < 2) return null;
@@ -96,7 +109,14 @@ export default function BottomTabBar() {
     <nav
       aria-label="Main"
       className={cn(
-        "md:hidden flex-shrink-0 border-t border-white/[0.07] bg-card",
+        // FIXED to the viewport, not a flex sibling. As a flex child it was
+        // structurally safe but visually not: any fixed-position overlay with
+        // a z-index simply covered it (the PWA install prompt sat at z-50).
+        //
+        // z-40 is deliberately BELOW the z-50 used by dialogs — a modal should
+        // cover navigation — but above ambient floating UI, which now sits at
+        // z-30 and is offset by --tab-bar-h anyway.
+        "md:hidden fixed inset-x-0 bottom-0 z-40 border-t border-white/[0.07] bg-card",
         // Clears the iOS home indicator; the page paints under it because
         // layout.tsx sets viewportFit: 'cover'.
         "safe-bottom"
