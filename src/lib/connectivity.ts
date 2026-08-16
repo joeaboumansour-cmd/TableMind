@@ -46,12 +46,24 @@ class Connectivity {
 
     // Re-check when the tab regains focus or becomes visible
     window.addEventListener("focus", () => this.probe());
+
+    // Suspend the heartbeat while the app is backgrounded. A POS runs all day
+    // on a battery-powered handheld; polling /api/health every 15s while the
+    // screen is off is pure drain and tells us nothing, because we re-probe
+    // immediately on becoming visible anyway.
     document.addEventListener("visibilitychange", () => {
-      if (document.visibilityState === "visible") this.probe();
+      if (document.visibilityState === "visible") {
+        this.startHeartbeat();
+        this.probe();
+      } else {
+        this.stopHeartbeat();
+      }
     });
 
-    // Start periodic heartbeat
-    this.startHeartbeat();
+    // Start periodic heartbeat (only if we're actually in the foreground)
+    if (document.visibilityState === "visible") {
+      this.startHeartbeat();
+    }
 
     // Run an initial probe to establish true status
     this.probe();

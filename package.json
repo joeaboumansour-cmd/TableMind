@@ -4,7 +4,9 @@
   "private": true,
   "scripts": {
     "dev": "next dev -H 0.0.0.0 --webpack",
-    "build": "next build --webpack",
+    "build": "next build --webpack && npm run verify:sw",
+    "verify:sw": "node scripts/verify-sw.mjs",
+    "analyze": "cross-env ANALYZE=true next build --webpack",
     "start": "next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
@@ -44,6 +46,7 @@
     "zustand": "^5.0.12"
   },
   "devDependencies": {
+    "@next/bundle-analyzer": "^16.3.1",
     "@playwright/test": "^1.59.1",
     "@tailwindcss/postcss": "^4",
     "@testing-library/jest-dom": "^6.9.1",
@@ -53,6 +56,7 @@
     "@types/qrcode": "^1.5.6",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "cross-env": "^10.1.0",
     "eslint": "^9",
     "eslint-config-next": "16.1.6",
     "postcss": "^8.5.6",

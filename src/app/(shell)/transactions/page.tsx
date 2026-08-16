@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -36,7 +36,7 @@ import {
   getCachedTransactionsCount,
 } from "@/lib/db";
 import type { CachedTransaction, CachedTransactionItem } from "@/lib/db";
-import { TransactionAnalytics } from "@/components/TransactionAnalytics";
+import dynamic from "next/dynamic";
 import { connectivity } from "@/lib/connectivity";
 
 // Helper: check if user auth exists in localStorage (works offline)
@@ -94,6 +94,25 @@ interface TransactionWithChange extends Transaction {
 
 type DateFilter = "all" | "hour" | "today" | "week" | "month" | "90days";
 
+// Transactions fetched per request. Matches the API's default.
+const PAGE_SIZE = 50;
+
+// TransactionAnalytics pulls in recharts (~390KB) via three chart components.
+// The analytics panel is behind a toggle and starts collapsed, so it should
+// not be part of this route's first paint.
+const TransactionAnalytics = dynamic(
+  () => import("@/components/TransactionAnalytics").then((m) => m.TransactionAnalytics),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="flex items-center justify-center py-16 text-muted-foreground">
+        <Loader2 className="h-5 w-5 animate-spin mr-2" />
+        Loading analytics…
+      </div>
+    ),
+  }
+);
+
 export default function TransactionHistoryPage() {
   const router = useRouter();
   const { user, logout: authLogout } = useAuth();
@@ -112,7 +131,6 @@ export default function TransactionHistoryPage() {
   }, [user, router]);
 
   const [transactions, setTransactions] = useState<TransactionWithChange[]>([]);
-  const [filteredTransactions, setFilteredTransactions] = useState<TransactionWithChange[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
@@ -121,6 +139,19 @@ export default function TransactionHistoryPage() {
   const [isOffline, setIsOffline] = useState(false);
   const [isShowingCached, setIsShowingCached] = useState(false);
   const [viewMode, setViewMode] = useState<"transactions" | "analytics">("transactions");
+  // Keyset cursor for the next page, or null when the history is fully loaded.
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+
+  // fetchTransactions is a useCallback that must not depend on `transactions`
+  // (that would rebuild it on every load and re-fire the effects that call
+  // it). It previously read `transactions.length` directly from the closure,
+  // which always saw the initial [] — so its "do I already have data?"
+  // fallbacks never worked. A ref gives it the current value safely.
+  const transactionsRef = useRef<TransactionWithChange[]>([]);
+  useEffect(() => {
+    transactionsRef.current = transactions;
+  }, [transactions]);
 
   const fetchTransactions = useCallback(async () => {
     setIsLoading(true);
@@ -173,7 +204,10 @@ export default function TransactionHistoryPage() {
 
         if (authData) {
           try {
-            const response = await fetch("/api/transactions", {
+            // First page only. Older history is loaded on demand via
+            // loadMoreTransactions() — the endpoint used to return the store's
+            // entire history (and was silently truncated at 1000 rows).
+            const response = await fetch(`/api/transactions?limit=${PAGE_SIZE}`, {
               headers: {
                 "x-auth-data": authData,
               },
@@ -199,6 +233,7 @@ export default function TransactionHistoryPage() {
             }));
             setTransactions(transactionsWithChange);
             setIsShowingCached(false);
+            setNextCursor(data.nextCursor ?? null);
 
             // Cache transactions locally for offline use
             if (data.transactions && data.transactions.length > 0) {
@@ -230,7 +265,7 @@ export default function TransactionHistoryPage() {
           } catch (apiError) {
             console.error("[Transactions] API fetch failed:", apiError);
             // If we already have cached data from earlier, keep showing it
-            if (transactions.length === 0) {
+            if (transactionsRef.current.length === 0) {
               setIsShowingCached(false);
               setIsOffline(true);
             }
@@ -242,13 +277,54 @@ export default function TransactionHistoryPage() {
     } catch (err: any) {
       console.error("Error fetching transactions:", err);
       // If we already loaded from cache, don't show error
-      if (transactions.length === 0) {
+      if (transactionsRef.current.length === 0) {
         setError("Could not load transactions. Please check your connection.");
       }
     } finally {
       setIsLoading(false);
     }
   }, [user, router]);
+
+  /**
+   * Append the next page of older transactions.
+   * Only the first page is written to the offline cache — the cache exists to
+   * make recent history available with no internet, not to mirror the store's
+   * entire lifetime into IndexedDB.
+   */
+  const loadMoreTransactions = useCallback(async () => {
+    if (!nextCursor || isLoadingMore || !connectivity.isOnline) return;
+
+    const authData = localStorage.getItem("goldensquirrel_auth");
+    if (!authData) return;
+
+    setIsLoadingMore(true);
+    try {
+      const response = await fetch(
+        `/api/transactions?limit=${PAGE_SIZE}&cursor=${encodeURIComponent(nextCursor)}`,
+        { headers: { "x-auth-data": authData } }
+      );
+      if (!response.ok) throw new Error(`Failed to load more: ${response.status}`);
+
+      const data = await response.json();
+      const older = (data.transactions || []).map((t: Transaction) => ({
+        ...t,
+        calculated_change:
+          t.amount_paid && t.total_amount ? t.amount_paid - t.total_amount : 0,
+      }));
+
+      setTransactions((prev) => {
+        // Guard against a duplicate append if this fires twice.
+        const seen = new Set(prev.map((t) => t.id));
+        return [...prev, ...older.filter((t: TransactionWithChange) => !seen.has(t.id))];
+      });
+      setNextCursor(data.nextCursor ?? null);
+    } catch (e) {
+      console.error("[Transactions] Failed to load more:", e);
+      toast.error("Could not load older transactions");
+    } finally {
+      setIsLoadingMore(false);
+    }
+  }, [nextCursor, isLoadingMore]);
 
   const fetchTransactionsFromCache = useCallback(async (storeId: string) => {
     try {
@@ -296,10 +372,13 @@ export default function TransactionHistoryPage() {
     return unsubscribe;
   }, [fetchTransactions]);
 
-  // Apply date filter and search
-  useEffect(() => {
+  // Apply date filter and search.
+  // This was a useEffect that called setFilteredTransactions, which forced a
+  // second render pass over the whole list on every keystroke. Derived state
+  // belongs in a memo, not in state.
+  const filteredTransactions = useMemo(() => {
     let filtered = [...transactions];
-    
+
     // Apply date filter
     const now = new Date();
     if (dateFilter !== "all") {
@@ -342,7 +421,7 @@ export default function TransactionHistoryPage() {
       });
     }
     
-    setFilteredTransactions(filtered);
+    return filtered;
   }, [searchQuery, dateFilter, transactions]);
 
   const toggleAccordion = (id: string) => {
@@ -353,7 +432,7 @@ export default function TransactionHistoryPage() {
   // If user state hasn't resolved but localStorage has data, render the page anyway.
   if (isLoading && !hasAuthInStorage()) {
     return (
-      <div className="min-h-screen bg-background flex items-center justify-center">
+      <div className="min-h-dvh bg-background flex items-center justify-center">
         <div className="text-center">
           <Loader2 className="h-8 w-8 animate-spin mx-auto mb-4" />
           <p className="text-muted-foreground">Loading transactions...</p>
@@ -365,7 +444,7 @@ export default function TransactionHistoryPage() {
   const showAnalytics = isEnabled("transaction_analytics");
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-dvh bg-background">
       <header className="sticky top-0 z-50 bg-background border-b">
         <div className="container mx-auto px-4 py-3">
           <div className="flex items-center justify-between mb-3">
@@ -600,6 +679,27 @@ export default function TransactionHistoryPage() {
                 </Card>
               </Collapsible>
             ))}
+
+            {/* Older history is fetched on demand — the endpoint returns one
+                page at a time instead of the store's entire history. */}
+            {nextCursor && !isOffline && (
+              <div className="flex justify-center pt-2 pb-4">
+                <Button
+                  variant="outline"
+                  onClick={loadMoreTransactions}
+                  disabled={isLoadingMore}
+                >
+                  {isLoadingMore ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                      Loading…
+                    </>
+                  ) : (
+                    "Load older transactions"
+                  )}
+                </Button>
+              </div>
+            )}
            </div>
          )}
         </>

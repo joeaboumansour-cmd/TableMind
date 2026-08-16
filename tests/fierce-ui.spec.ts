@@ -121,55 +121,78 @@ test.describe('Fierce UI — POS Page Button Navigation & URL Verification', () 
   });
 });
 
-test.describe('Fierce UI — Mobile Menu Navigation', () => {
-  test('Mobile hamburger menu opens and shows menu items', async ({ page }) => {
+// The mobile hamburger dropdown was replaced by a persistent bottom tab bar
+// (src/components/BottomTabBar.tsx), rendered from the (shell) route group so
+// it survives navigation. Cash / History / Inventory are now one tap instead
+// of two, and logout moved inline into the header.
+test.describe('Fierce UI — Mobile Bottom Tab Navigation', () => {
+  const tabBar = (page: Page) => page.locator('nav[aria-label="Main"]');
+
+  test('Bottom tab bar is visible on mobile and lists the primary destinations', async ({ page }) => {
     await setMobileViewport(page);
     await navigateWithAuth(page, '/pos');
-    const hamburger = page.locator('button[aria-label="Open menu"]').first();
-    await expect(hamburger).toBeVisible({ timeout: 15000 });
-    await hamburger.click();
-    await page.waitForTimeout(300);
-    await expect(page.locator('span:has-text("Inventory")').first()).toBeVisible({ timeout: 5000 });
+
+    const nav = tabBar(page);
+    await expect(nav).toBeVisible({ timeout: 15000 });
+    await expect(nav.getByText('Sell')).toBeVisible({ timeout: 5000 });
+    await expect(nav.getByText('Inventory')).toBeVisible({ timeout: 5000 });
+    await expect(nav.getByText('History')).toBeVisible({ timeout: 5000 });
   });
 
-  test('Mobile menu Inventory link navigates to /pos/products', async ({ page }) => {
+  test('Bottom tab bar marks the current route as active', async ({ page }) => {
     await setMobileViewport(page);
     await navigateWithAuth(page, '/pos');
-    const hamburger = page.locator('button[aria-label="Open menu"]').first();
-    await expect(hamburger).toBeVisible({ timeout: 15000 });
-    await hamburger.click();
-    await page.waitForTimeout(300);
-    const inventoryBtn = page.locator('button:has-text("Inventory")').last();
-    await expect(inventoryBtn).toBeVisible({ timeout: 5000 });
-    await inventoryBtn.click();
+
+    const nav = tabBar(page);
+    await expect(nav).toBeVisible({ timeout: 15000 });
+    // aria-current="page" is what screen readers and the styling both key off.
+    await expect(nav.locator('a[aria-current="page"]')).toHaveText(/Sell/, { timeout: 5000 });
+  });
+
+  test('Inventory tab navigates to /pos/products', async ({ page }) => {
+    await setMobileViewport(page);
+    await navigateWithAuth(page, '/pos');
+
+    const nav = tabBar(page);
+    await expect(nav).toBeVisible({ timeout: 15000 });
+    await nav.getByText('Inventory').click();
     await page.waitForURL('**/pos/products', { timeout: 15000 });
     expectUrlToContain(page, '/pos/products');
   });
 
-  test('Mobile menu History link navigates to /transactions', async ({ page }) => {
+  test('History tab navigates to /transactions', async ({ page }) => {
     await setMobileViewport(page);
     await navigateWithAuth(page, '/pos');
-    const hamburger = page.locator('button[aria-label="Open menu"]').first();
-    await expect(hamburger).toBeVisible({ timeout: 15000 });
-    await hamburger.click();
-    await page.waitForTimeout(300);
-    const historyBtn = page.locator('button:has-text("History")').last();
-    await expect(historyBtn).toBeVisible({ timeout: 5000 });
-    await historyBtn.click();
+
+    const nav = tabBar(page);
+    await expect(nav).toBeVisible({ timeout: 15000 });
+    await nav.getByText('History').click();
     await page.waitForURL('**/transactions', { timeout: 15000 });
     expectUrlToContain(page, '/transactions');
   });
 
-  test('Mobile menu Logout redirects to /login', async ({ page }) => {
+  test('Tab bar persists across navigation (shared shell layout)', async ({ page }) => {
     await setMobileViewport(page);
     await navigateWithAuth(page, '/pos');
-    const hamburger = page.locator('button[aria-label="Open menu"]').first();
-    await expect(hamburger).toBeVisible({ timeout: 15000 });
-    await hamburger.click();
-    await page.waitForTimeout(300);
-    const logoutItem = page.locator('span:has-text("Logout")').first();
-    await expect(logoutItem).toBeVisible({ timeout: 5000 });
-    await logoutItem.click();
+
+    const nav = tabBar(page);
+    await expect(nav).toBeVisible({ timeout: 15000 });
+    await nav.getByText('History').click();
+    await page.waitForURL('**/transactions', { timeout: 15000 });
+
+    // Still mounted on the destination — this is the point of the (shell)
+    // route group; the bar must not disappear and reappear between routes.
+    await expect(tabBar(page)).toBeVisible({ timeout: 10000 });
+  });
+
+  test('Mobile header logout redirects to /login', async ({ page }) => {
+    await setMobileViewport(page);
+    await navigateWithAuth(page, '/pos');
+
+    // Logout moved out of the dropdown and into the header as an icon button.
+    const logoutBtn = page.locator('button[aria-label="Log out"]').first();
+    await expect(logoutBtn).toBeVisible({ timeout: 15000 });
+    await logoutBtn.click();
     await page.waitForURL('**/login', { timeout: 15000 });
     expectUrlToContain(page, '/login');
   });

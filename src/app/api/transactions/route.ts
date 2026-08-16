@@ -1,6 +1,13 @@
 import { createServiceRoleClient } from "@/lib/supabase/server";
 import { NextResponse } from "next/server";
 
+// History is browsed newest-first and the client loads more on demand, so a
+// page needs to cover a screen or two, not the whole store's lifetime.
+const DEFAULT_PAGE_SIZE = 50;
+// Hard ceiling regardless of what the caller asks for. Each row carries its
+// nested transaction_items, so large pages get expensive quickly.
+const MAX_PAGE_SIZE = 200;
+
 export async function GET(request: Request) {
   try {
     // Check if Supabase is configured
@@ -52,6 +59,38 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: "Failed to fetch store settings", details: storeError }, { status: 500 });
     }
 
+    // ---- Pagination ----
+    // This query previously had no limit at all. PostgREST caps an unbounded
+    // select at max-rows (1000) with no error, so any store past 1000
+    // transactions was silently shown a truncated history — and every request
+    // dragged the full nested transaction_items payload for all of it.
+    const url = new URL(request.url);
+
+    const rawLimit = url.searchParams.get("limit");
+    let limit = rawLimit === null ? DEFAULT_PAGE_SIZE : Number(rawLimit);
+    if (!Number.isInteger(limit) || limit <= 0) {
+      return NextResponse.json(
+        { error: "limit must be a positive integer" },
+        { status: 400 }
+      );
+    }
+    limit = Math.min(limit, MAX_PAGE_SIZE);
+
+    // Keyset cursor: "<created_at>|<id>". Keyset rather than offset so that a
+    // sale completed while the cashier is scrolling cannot shift the window
+    // and cause a row to be skipped or shown twice.
+    const cursor = url.searchParams.get("cursor");
+    let cursorCreatedAt: string | null = null;
+    let cursorId: string | null = null;
+    if (cursor) {
+      const sep = cursor.lastIndexOf("|");
+      cursorCreatedAt = sep === -1 ? null : cursor.slice(0, sep);
+      cursorId = sep === -1 ? null : cursor.slice(sep + 1);
+      if (!cursorCreatedAt || !cursorId || Number.isNaN(Date.parse(cursorCreatedAt))) {
+        return NextResponse.json({ error: "Invalid cursor" }, { status: 400 });
+      }
+    }
+
     // Build query - filter based on retention days
     let query = supabase
       .from("transactions")
@@ -76,7 +115,10 @@ export async function GET(request: Request) {
         )
       `)
       .eq("store_id", store_id)
-      .order("created_at", { ascending: false });
+      // id is the tiebreaker; without a unique second sort key, rows sharing
+      // a created_at can be skipped or duplicated across page boundaries.
+      .order("created_at", { ascending: false })
+      .order("id", { ascending: false });
 
     // Apply time filter only if retention_days is set and not 0
     if (store.transaction_retention_days && store.transaction_retention_days > 0) {
@@ -84,14 +126,32 @@ export async function GET(request: Request) {
       query = query.gte("created_at", cutoffDate);
     }
 
-    const { data: transactions, error } = await query;
+    if (cursorCreatedAt && cursorId) {
+      // Strictly "after" the cursor in (created_at DESC, id DESC) order.
+      query = query.or(
+        `created_at.lt.${cursorCreatedAt},and(created_at.eq.${cursorCreatedAt},id.lt.${cursorId})`
+      );
+    }
+
+    // Fetch one extra row to determine whether another page exists, without
+    // paying for a separate COUNT.
+    const { data: rows, error } = await query.limit(limit + 1);
 
     if (error) {
       console.error("Supabase query error:", error);
       return NextResponse.json({ error: error.message, details: error }, { status: 500 });
     }
 
-    return NextResponse.json({ transactions: transactions || [] });
+    const page = rows || [];
+    const hasMore = page.length > limit;
+    const transactions = hasMore ? page.slice(0, limit) : page;
+
+    const last = transactions[transactions.length - 1] as
+      | { created_at: string; id: string }
+      | undefined;
+    const nextCursor = hasMore && last ? `${last.created_at}|${last.id}` : null;
+
+    return NextResponse.json({ transactions, nextCursor, hasMore });
   } catch (error: any) {
     console.error("Error fetching transactions:", error);
     return NextResponse.json({ 

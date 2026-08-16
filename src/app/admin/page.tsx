@@ -539,7 +539,7 @@ export default function AdminPage() {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-background">
+      <div className="min-h-dvh flex items-center justify-center bg-background">
         <div className="text-center">
           <Loader2 className="h-8 w-8 animate-spin mx-auto text-amber-500" />
           <p className="mt-4 text-muted-foreground">Loading...</p>
@@ -549,7 +549,7 @@ export default function AdminPage() {
   }
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-dvh bg-background">
       {/* Header */}
       <header className="sticky top-0 z-50 bg-background border-b">
         <div className="container mx-auto px-4 py-3">

@@ -86,26 +86,11 @@ interface BarcodeScannerProps {
 
 let cachedTargetCameraId: string | null = null;
 
-export const playSuccessSound = () => {
-  try {
-    const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
-    const oscillator = audioCtx.createOscillator();
-    const gainNode = audioCtx.createGain();
-    oscillator.connect(gainNode);
-    gainNode.connect(audioCtx.destination);
-    oscillator.type = "square";
-    oscillator.frequency.setValueAtTime(1500, audioCtx.currentTime);
-    gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime);
-    gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.07);
-    oscillator.start();
-    oscillator.stop(audioCtx.currentTime + 0.07);
-    if (typeof navigator !== "undefined" && navigator.vibrate) {
-      navigator.vibrate(60);
-    }
-  } catch (e) {
-    console.warn("Audio feedback failed:", e);
-  }
-};
+// The implementation now lives in @/lib/feedback so callers (notably the POS
+// page) can play the scan beep WITHOUT importing this module — which would
+// pull in @zxing/library and defeat lazy-loading the scanner.
+// Re-exported here so existing imports keep working.
+export { playSuccessSound } from "@/lib/feedback";
 
 // ============================================================
 // BARCODE CHECK-DIGIT VALIDATION
@@ -147,7 +132,7 @@ function isValidBarcode(raw: string): boolean {
 // MAIN COMPONENT
 // ============================================================
 
-export default function BarcodeScanner({ onScan, onClose, isActive = true, desktopMode = false, showManualInput = true, children, barcodeInputRef: externalBarcodeInputRef }: BarcodeScannerProps) {
+function BarcodeScanner({ onScan, onClose, isActive = true, desktopMode = false, showManualInput = true, children, barcodeInputRef: externalBarcodeInputRef }: BarcodeScannerProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const videoContainerRef = useRef<HTMLDivElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -647,3 +632,9 @@ export default function BarcodeScanner({ onScan, onClose, isActive = true, deskt
     </Card>
   );
 }
+// Memoized: this component owns a live camera stream, a decode loop and (on
+// iOS) Quagga. Its parent is the 1,400-line POS page, which re-renders on
+// every cart change — without this, scanning an item tore down and rebuilt the
+// scanner's render tree mid-scan. Effective only while the props stay
+// referentially stable; see handleProductAdd in src/app/pos/page.tsx.
+export default React.memo(BarcodeScanner);

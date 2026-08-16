@@ -890,13 +890,18 @@ test.describe('Nightmare E2E — Scenario 5: The Everything Bagel — Full App T
     // ════════════════════════════════════════════════════════
     // ── Step 8: Navigate directly to transactions page ──
     // Use navigateWithAuth to ensure auth is present before page loads
-    await page.route('**/api/transactions', async (route) => {
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({ transactions: [] }),
-      });
-    });
+    // Pathname predicate: the history GET now carries ?limit=&cursor= params
+    // that a '**/api/transactions' glob would not match.
+    await page.route(
+      (url) => url.pathname === '/api/transactions',
+      async (route) => {
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ transactions: [], nextCursor: null, hasMore: false }),
+        });
+      }
+    );
 
     await page.goto('/transactions', { waitUntil: 'domcontentloaded', timeout: 15000 });
     await injectAuth(page);

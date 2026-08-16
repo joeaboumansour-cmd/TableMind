@@ -77,6 +77,10 @@ The app must keep selling with no internet. This shapes almost every design deci
 `src/lib/connectivity.ts` is a **heartbeat-based** singleton — it probes `/api/health`, because `navigator.onLine` lies (it reports "online" for a connected wifi with no internet).
 
 > **Critical:** `/api/health` has a `NetworkOnly` rule in `next.config.ts`. If the service worker is ever allowed to cache it, the app serves a cached `200` forever, believes it is permanently online, never shows offline banners, and never triggers sync. Do not touch that rule.
+>
+> Equally critical and easier to break by accident: **`extendDefaultRuntimeCaching: true` must stay set.** Supplying a custom `runtimeCaching` array *replaces* the 19 defaults unless it's on — including the `pages` rule that caches HTML navigations, which is the only thing letting the POS open cold with no internet (HTML is deliberately not precached).
+>
+> Both are asserted by `scripts/verify-sw.mjs`, which runs automatically as part of `npm run build`. **If that check fails, do not ship the worker** — `public/sw.js` is generated and gitignored, so nothing else will catch it. This exact bug has shipped twice.
 
 ### Storage layers
 
@@ -89,11 +93,17 @@ The app must keep selling with no internet. This shapes almost every design deci
 | `offline_queue` | **Completed sales** waiting to be pushed. The money-critical queue. |
 | `pending_writes` | Generic non-sale writes (favourites, cash shifts, adjustments) |
 
+Schema is at `version(3)`. Dexie versions are **append-only** — add a new `db.version(n).stores({...})` block, never edit an existing one. Compound indexes in use: `[store_id+barcode]` (barcode lookups must be store-scoped — barcodes are not unique across tenants), `[store_id+created_at]`, `[store_id+name]`.
+
+Every write path is retry-capped at 5 attempts. Queued **transactions** are the exception to dropping: on exhaustion they are **dead-lettered** (`failed_permanently`), never deleted — each one is a completed sale whose money was taken. `getQueuedTransactions()` excludes them; `getDeadLetterTransactions()` returns them. **Nothing surfaces them in the UI yet** — that's an open task.
+
 ### Sync
 
 `src/lib/sync/engine.ts` — a singleton `SyncEngine`. Triggers on: connectivity restored, tab becomes visible, a 30-second interval while online, and app init. Guarded by `syncInProgress`.
 
 Idempotency comes from a **`UNIQUE (store_id, transaction_number)`** constraint plus a `23505` duplicate-handling branch in `POST /api/transactions`. If you change how transaction numbers are generated, you break offline-safety.
+
+> **Never reconcile the product cache against an unpaginated query.** Supabase/PostgREST silently caps an unbounded `select` at 1000 rows. Feeding a truncated list to `reconcileProductsCache()` reads as "everything past row 1000 was deleted" and wipes it locally, which the next sync then re-pulls — a permanent delete/refetch loop. Use `fetchAllProductIds()` and the `evaluateReconcile()` guard in `src/lib/sync/engine.ts`: **deletion requires positive proof the ID set is complete.** Skipping is always safe; deleting on partial evidence is not.
 
 Stock decrements are **server-side only** now. Do not re-add client-side stock queuing — that was removed deliberately to prevent double-decrements.
 
@@ -155,12 +165,18 @@ Adding a flag: add to `FEATURES`, add to the `general` preset in `FEATURE_PRESET
 
 ```bash
 npm run dev          # localhost:3000, bound to 0.0.0.0 for phone testing on LAN
-npm run build        # production build
+npm run build        # production build + service-worker verification
+npm run verify:sw    # assert the generated public/sw.js has the required rules
+npm run analyze      # production build with the bundle treemap (ANALYZE=true)
 npm run typecheck    # tsc --noEmit
 npm run lint         # eslint .
 npm run test         # vitest — unit tests, src/tests/ only
 npm run test:e2e     # playwright — 253 tests, tests/ only
 ```
+
+**Baseline:** `typecheck` is clean and unit tests pass. **36 of 253 Playwright tests fail and always have** — see `docs/AUDIT-2026-08.md` P2-12 for the per-file breakdown. Compare against that baseline, not against green.
+
+If `tsc` reports errors inside `.next/types/**` referring to files that no longer exist, that's a stale build artifact after a route move — `rm -rf .next` and rebuild.
 
 Vitest and Playwright are strictly separated: `vitest.config.ts` includes only `src/tests/**` and **excludes `tests/**`**. Don't put a Playwright spec in `src/tests/`.
 
@@ -170,7 +186,9 @@ Note: `vitest` runs in the **`node`** environment. `@testing-library/react` cann
 
 ## 9. Conventions and gotchas
 
-- **Every route is a client component.** There are no server components, server actions, `loading.tsx`, or `error.tsx` files. Data is fetched in `useEffect`.
+- **Every route is a client component.** There are no server components or server actions; data is fetched in `useEffect`. There are now `error.tsx` and `global-error.tsx` at the app root, but still no `loading.tsx` anywhere.
+- **`src/app/(shell)/` is a route group** holding `/pos`, `/pos/products`, `/pos/cash` and `/transactions`. The parenthesised folder name is **not** part of the URL — those paths are unchanged. Its `layout.tsx` renders the persistent `BottomTabBar`. `/checkout` is deliberately outside the shell so no tab bar tempts a cashier away mid-payment.
+- **Code splitting:** `@zxing/library` (via `BarcodeScanner`) and `recharts` (via `TransactionAnalytics`) are heavy and must stay behind `next/dynamic`. Import the scan beep from `@/lib/feedback`, **never** from `@/components/BarcodeScanner` — the latter drags ZXing back into the POS bundle. Run `npm run analyze` before adding a dependency to a hot route.
 - **Dark mode is forced** in three redundant places. The `:root` light palette in `globals.css` is dead. Don't use light-mode utilities (`bg-red-50`, `bg-yellow-200`) — they render as near-white blocks.
 - **Prefer theme tokens** (`bg-primary`, `text-destructive`) over hardcoded `bg-amber-500`. The codebase does the latter ~40 times; that's debt, not a convention.
 - Money display always goes through `formatLL()` / `formatUSD()`.

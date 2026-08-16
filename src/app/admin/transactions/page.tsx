@@ -146,7 +146,7 @@ export default function AdminTransactionsPage() {
   }
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-dvh bg-background">
       <header className="sticky top-0 z-50 bg-background border-b">
         <div className="container mx-auto px-4 py-3">
           <h1 className="font-bold text-lg">Transaction Settings</h1>

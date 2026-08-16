@@ -379,7 +379,7 @@ export function CashRegisterPage() {
 
   if (authLoading || isLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-background">
+      <div className="min-h-dvh flex items-center justify-center bg-background">
         <Loader2 className="h-8 w-8 animate-spin text-amber-500" />
       </div>
     );
@@ -388,7 +388,7 @@ export function CashRegisterPage() {
   const variance = computeVariance(closingTotal, expectedTotal);
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-dvh bg-background">
       <header className="sticky top-0 z-50 bg-background border-b">
         <div className="container mx-auto px-4 py-3">
           <div className="flex items-center gap-4">

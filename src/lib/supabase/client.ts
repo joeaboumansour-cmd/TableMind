@@ -122,6 +122,51 @@ export async function fetchAllProducts(
   return allProducts;
 }
 
+/**
+ * Fetch the complete set of product IDs for a store.
+ *
+ * CRITICAL: this MUST paginate. PostgREST caps an unbounded select at
+ * max-rows (default 1000). A truncated ID list fed to
+ * reconcileProductsCache() reads as "everything past row 1000 was deleted"
+ * and wipes those products from the local cache — which the next sync then
+ * re-pulls, producing a permanent delete/refetch thrash loop.
+ *
+ * Returns null if the ID set could not be proven complete, so callers can
+ * skip reconciliation rather than delete on incomplete information.
+ */
+export async function fetchAllProductIds(
+  supabase: ReturnType<typeof createBrowserClient>,
+  storeId: string
+): Promise<string[] | null> {
+  const PAGE_SIZE = 1000;
+  const ids: string[] = [];
+  let from = 0;
+
+  while (true) {
+    const to = from + PAGE_SIZE - 1;
+    const { data, error } = await supabase
+      .from("products")
+      .select("id")
+      // Order by the primary key — unique, so pages can't skip or duplicate.
+      .order("id")
+      .eq("store_id", storeId)
+      .range(from, to);
+
+    if (error) {
+      console.warn("[Supabase] Product ID pagination failed:", error);
+      return null;
+    }
+    if (!data || data.length === 0) break;
+
+    for (const row of data) ids.push((row as { id: string }).id);
+    if (data.length < PAGE_SIZE) break; // Last page
+
+    from += PAGE_SIZE;
+  }
+
+  return ids;
+}
+
 // Cache freshness threshold: 5 minutes
 const CACHE_FRESHNESS_MS = 5 * 60 * 1000;
 

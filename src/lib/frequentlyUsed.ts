@@ -18,6 +18,10 @@ import { connectivity } from "@/lib/connectivity";
 
 const STORAGE_KEY_PREFIX = "tm_frequently_used_";
 const MAX_FREQUENTLY_USED = 12;
+
+// Matches MAX_PENDING_WRITE_RETRIES in the sync engine. Kept local to avoid a
+// circular import (the engine imports this module).
+const MAX_FAVORITE_WRITE_RETRIES = 5;
 const SYNCED_KEY_PREFIX = "tm_favorites_synced_";
 
 /**
@@ -242,6 +246,21 @@ export async function processPendingFavoriteWrites(): Promise<{
   const supabase = createClient();
 
   for (const write of favoriteWrites) {
+    // Favorite writes incremented retry_count but never checked it, so a
+    // permanently-failing favourite retried every 30s indefinitely. A
+    // favourite is cosmetic, so dropping it past the cap is safe.
+    if ((write.retry_count ?? 0) >= MAX_FAVORITE_WRITE_RETRIES) {
+      console.error(
+        `[Favorites] Dropping ${write.type} ${write.id} after ${write.retry_count} retries: ${write.last_error}`
+      );
+      await removePendingWrite(write.id);
+      result.failed++;
+      result.errors.push(
+        `Favorite ${write.type} ${write.id}: dropped after ${write.retry_count} retries (${write.last_error})`
+      );
+      continue;
+    }
+
     try {
       const payload = write.payload as { store_id: string; product_id: string };
 
@@ -279,7 +298,7 @@ export async function processPendingFavoriteWrites(): Promise<{
           .where("id")
           .equals(write.id)
           .modify((w) => {
-            w.retry_count += 1;
+            w.retry_count = (w.retry_count ?? 0) + 1;
             w.last_error = message;
           });
       } catch (e) {

@@ -42,7 +42,10 @@ import { useToastManager } from "@/hooks/useToastManager";
 import { formatCurrency, formatLL, formatUSD, convertLlToUsd, convertLlToUsdForSale, convertLlToUsdForReturn, SELL_RATE, RETURN_RATE } from "@/lib/utils/format";
 import { generateReceiptToken } from "@/lib/receipt/token";
 import QRCode from "qrcode";
-import BarcodeScanner, { playSuccessSound } from "@/components/BarcodeScanner";
+import dynamic from "next/dynamic";
+// Imported from the standalone feedback module, NOT from BarcodeScanner —
+// importing it from there would pull ZXing back into this bundle.
+import { playSuccessSound, playErrorSound, playCompleteSound, primeFeedback } from "@/lib/feedback";
 import ProductSearchBar from "@/components/ProductSearchBar";
 import { SyncIndicator } from "@/components/SyncIndicator";
 import { syncEngine } from "@/lib/sync/engine";
@@ -61,6 +64,23 @@ import { connectivity } from "@/lib/connectivity";
 
 const supabase = createClient();
 
+// BarcodeScanner statically imports @zxing/library (~420KB) plus the camera
+// pipeline. It is only ever rendered when the scanner is open, so loading it
+// on demand keeps that weight off the POS first paint — the busiest screen in
+// the app. ssr:false because it touches navigator/getUserMedia on mount.
+const BarcodeScanner = dynamic(() => import("@/components/BarcodeScanner"), {
+  ssr: false,
+  loading: () => (
+    <div className="h-[200px] flex items-center justify-center text-muted-foreground text-sm">
+      Starting camera…
+    </div>
+  ),
+});
+
+// Minimum gap between focus-triggered product refreshes. Each refresh is a
+// full sync cycle, so alt-tabbing should not re-pull the catalog every time.
+const FOCUS_SYNC_MIN_INTERVAL_MS = 60_000;
+
 export default function POSPage() {
   const router = useRouter();
   const { user, logout: authLogout, canAccess, isLoading: authLoading } = useAuth();
@@ -76,10 +96,11 @@ export default function POSPage() {
   const [products, setProducts] = useState<Product[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [merchant, setMerchant] = useState<any>(null);
+  // Throttles the focus-triggered refresh (see the load effect below)
+  const lastFocusSyncRef = useRef(0);
   const [isCharge, setIsCharge] = useState(true); // true = charge (green), false = credit (red)
   const [highlightedItemId, setHighlightedItemId] = useState<string | null>(null);
   const highlightTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   // O(1) barcode lookup — rebuilt whenever products change
   const [barcodeIndex, setBarcodeIndex] = useState<Map<string, Product>>(new Map());
   const barcodeIndexRef = useRef<Map<string, Product>>(new Map());
@@ -107,20 +128,29 @@ export default function POSPage() {
 
   const { toast } = useToastManager({ throttleMs: 1200 });
 
-  const {
-    items,
-    addItem,
-    incrementQuantity,
-    decrementQuantity,
-    clearCart,
-    setStoreId,
-    getSubtotal,
-    getSubtotalUsd,
-    getTotal,
-    getTotalUsd,
-    getItemCount,
-    isEmpty,
-  } = useCartStore();
+  // Narrow selectors rather than `useCartStore()` with no selector. Actions and
+  // getters are defined once in the store's create() closure, so their
+  // identities are stable — selecting them individually keeps this component's
+  // props/deps stable, which is what lets the memoized scanner subtree below
+  // avoid re-rendering on every add-to-cart.
+  const items = useCartStore((s) => s.items);
+  const addItem = useCartStore((s) => s.addItem);
+  const incrementQuantity = useCartStore((s) => s.incrementQuantity);
+  const decrementQuantity = useCartStore((s) => s.decrementQuantity);
+  const clearCart = useCartStore((s) => s.clearCart);
+  const setStoreId = useCartStore((s) => s.setStoreId);
+  const getSubtotal = useCartStore((s) => s.getSubtotal);
+  const getSubtotalUsd = useCartStore((s) => s.getSubtotalUsd);
+  const getTotal = useCartStore((s) => s.getTotal);
+  const getTotalUsd = useCartStore((s) => s.getTotalUsd);
+  const getItemCount = useCartStore((s) => s.getItemCount);
+  const isEmpty = useCartStore((s) => s.isEmpty);
+  // These three were previously read via useCartStore.getState() DURING RENDER,
+  // which does not subscribe — they only appeared to update because `items`
+  // triggered the render anyway. Selecting them makes the dependency real.
+  const getTotalDiscount = useCartStore((s) => s.getTotalDiscount);
+  const getTotalOriginal = useCartStore((s) => s.getTotalOriginal);
+  const getRoundingAdjustment = useCartStore((s) => s.getRoundingAdjustment);
 
   // Check user permissions on mount
   useEffect(() => {
@@ -130,6 +160,20 @@ export default function POSPage() {
       setCanViewInventory(canAccess("inventory") && isEnabled("inventory"));
     }
   }, [user, canAccess, isEnabled]);
+
+  // Unlock audio on the first user interaction. Browsers start an AudioContext
+  // "suspended" until a real gesture, so without this the first scan of a
+  // session beeps silently.
+  useEffect(() => {
+    const prime = () => primeFeedback();
+    const opts = { once: true, passive: true } as const;
+    window.addEventListener("pointerdown", prime, opts);
+    window.addEventListener("keydown", prime, opts);
+    return () => {
+      window.removeEventListener("pointerdown", prime);
+      window.removeEventListener("keydown", prime);
+    };
+  }, []);
 
   // Detect desktop mode for hardware scanner + saved product buttons
   useEffect(() => {
@@ -212,6 +256,13 @@ export default function POSPage() {
           if (cached && cached.length > 0) {
             if (isMounted) {
               setProducts(mapCachedToProducts(cached));
+              // Drop the loading gate the moment we have something real to
+              // show. isLoading previously stayed true until the `finally`
+              // below, which is AFTER the network sync — so the whole point of
+              // reading IndexedDB first (instant paint) was thrown away and
+              // the cashier stared at a full-screen spinner anyway.
+              // The background sync still runs and updates the list in place.
+              setIsLoading(false);
             }
           }
 
@@ -281,11 +332,15 @@ export default function POSPage() {
 
     loadData();
 
-    // Refresh products when window gains focus (only if online)
+    // Refresh products when window gains focus (only if online).
+    // Throttled: a full loadData() means a complete sync cycle (product pull +
+    // queue flush). Alt-tabbing repeatedly should not re-pull the catalog each
+    // time, so we only refresh if the cache is actually stale.
     const handleFocus = () => {
-      if (merchant?.id && connectivity.isOnline) {
-        loadData();
-      }
+      if (!user?.storeId || !connectivity.isOnline) return;
+      if (Date.now() - lastFocusSyncRef.current < FOCUS_SYNC_MIN_INTERVAL_MS) return;
+      lastFocusSyncRef.current = Date.now();
+      loadData();
     };
 
     window.addEventListener('focus', handleFocus);
@@ -293,7 +348,11 @@ export default function POSPage() {
       isMounted = false;
       window.removeEventListener('focus', handleFocus);
     };
-  }, [router, setStoreId, merchant?.id, user, authLogout]);
+    // NOTE: `merchant?.id` must NOT be in these deps. setMerchant() is called
+    // inside this effect, so including it made the effect re-fire and run a
+    // full loadData() (and therefore a full sync) twice on every mount.
+    // The store id is read from `user.storeId` directly instead.
+  }, [router, setStoreId, user, authLogout]);
 
   // ---- Build O(1) barcode index whenever products change ----
   useEffect(() => {
@@ -336,8 +395,15 @@ export default function POSPage() {
       };
     }
 
-    // Check if item already exists in cart
-    const existingItem = items.find(item => item.product_id === product.id);
+    // Read the cart imperatively rather than closing over `items`.
+    // This is an event handler, not render, so getState() is the correct
+    // Zustand usage — and it keeps `items` out of this callback's deps, so the
+    // callback identity stays stable across cart changes. That matters because
+    // this function is the `onScan` prop of the memoized scanner: rebuilding it
+    // on every add re-rendered the live camera subtree mid-scan.
+    const existingItem = useCartStore
+      .getState()
+      .items.find((item) => item.product_id === product.id);
 
     if (existingItem) {
       // Desktop mode: increment quantity on repeat scan (hardware scanner = intentional)
@@ -372,7 +438,9 @@ export default function POSPage() {
         }, 50);
       }
     }
-  }, [items, addItem, incrementQuantity, isEnabled, isDesktopMode]);
+    // `items` is deliberately NOT a dependency — it is read via getState()
+    // above so this callback stays referentially stable.
+  }, [addItem, incrementQuantity, isEnabled, isDesktopMode]);
 
   // Handle barcode scan from camera — O(1) local first, then live Supabase fallback to guarantee zero misses
   const handleBarcodeScan = async (barcode: string) => {
@@ -392,6 +460,7 @@ export default function POSPage() {
     // 2. Fallback: query Supabase directly if online — this fixes scan misses for products
     //    that exist server-side but aren't in the local cache/state yet
     if (!connectivity.isOnline) {
+      playErrorSound();
       toast.error("Product not found in local data");
       return;
     }
@@ -416,6 +485,7 @@ export default function POSPage() {
 
       if (error || !data) {
         toast.dismiss("scan-fallback");
+        playErrorSound();
         toast.error("Product not found");
         return;
       }
@@ -475,24 +545,30 @@ export default function POSPage() {
     } catch (err) {
       console.error("[POS Scan] fallback error:", err);
       toast.dismiss("scan-fallback");
+      playErrorSound();
       toast.error("Product not found");
     }
   };
 
-  const toggleScanner = () => {
-    const newState = !isScannerActive;
-    setIsScannerActive(newState);
-    if (typeof window !== 'undefined' && 'localStorage' in window) {
-      localStorage.setItem("scanner_active", String(newState));
-    }
-    // Mobile (iOS WKWebView/PWA + Android Chrome): the browser may keep the camera
-    // hardware active even after the preview disappears,
-    // causing battery drain + heat. A page refresh is the only reliable way to
-    // force mobile browsers to release the camera. Only refresh when TURNING OFF.
-    if (!newState && (isIOS() || isAndroid())) {
-      window.location.reload();
-    }
-  };
+  // useCallback so the keydown effect below doesn't tear down and re-register
+  // its listener on every render (this was a plain function in a dep array).
+  const toggleScanner = useCallback(() => {
+    setIsScannerActive((prev) => {
+      const newState = !prev;
+      if (typeof window !== 'undefined' && 'localStorage' in window) {
+        localStorage.setItem("scanner_active", String(newState));
+      }
+      return newState;
+    });
+    // NOTE: this used to call window.location.reload() when switching the
+    // scanner off on iOS/Android, to force the browser to release the camera.
+    // A full page reload mid-shift is the least app-like thing the POS did —
+    // white flash, lost component state, re-run of the whole boot sequence.
+    // The scanner is now UNMOUNTED when off instead, which runs its
+    // stopEverything() cleanup (stops every MediaStream track, resets ZXing,
+    // tears down Quagga) and removes the <video> element. That is what
+    // actually frees the camera. See the render site below.
+  }, []);
 
   // Handle logout - clear both auth keys
   const handleLogout = () => {
@@ -722,6 +798,7 @@ export default function POSPage() {
       clearCart();
       setIsQuickEndDialogOpen(false);
       setCompletedQrDataUrl("");
+      playCompleteSound();
       setIsCompleteDialogOpen(true);
       toast.success("Transaction completed!");
 
@@ -743,18 +820,6 @@ export default function POSPage() {
       setIsQuickEndProcessing(false);
     }
   };
-
-  // Close mobile menu when clicking outside
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (isMobileMenuOpen && !(event.target as Element).closest('.mobile-menu-container')) {
-        setIsMobileMenuOpen(false);
-      }
-    };
-
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [isMobileMenuOpen]);
 
   // Refs for F-key shortcuts
   const searchInputRef = useRef<HTMLInputElement | null>(null);
@@ -831,7 +896,7 @@ export default function POSPage() {
 
   if (isLoading || authLoading) {
     return (
-      <div className="h-screen flex items-center justify-center bg-background">
+      <div className="h-dvh flex items-center justify-center bg-background">
         <div className="text-center">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-amber-500 mx-auto"></div>
           <p className="mt-4 text-muted-foreground">Loading...</p>
@@ -841,9 +906,11 @@ export default function POSPage() {
   }
 
   return (
-    <div className="h-screen flex flex-col bg-background overflow-hidden">
+    <div className="h-dvh flex flex-col bg-background overflow-hidden">
       {/* Header */}
-      <header className="flex-shrink-0 bg-background border-b">
+      {/* safe-top clears the iOS status bar / notch, which the page paints
+          under because appleWebApp.statusBarStyle is 'black-translucent'. */}
+      <header className="flex-shrink-0 bg-background border-b safe-top">
         <div className="px-4 py-3">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
@@ -882,76 +949,23 @@ export default function POSPage() {
               </Button>
             </div>
 
-            {/* Mobile Hamburger Menu */}
-            <div className="md:hidden relative mobile-menu-container">
-              <Button 
-                variant="ghost" 
-                size="icon" 
-                onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-                aria-label="Open menu"
+            {/* Mobile header actions.
+                The hamburger dropdown that used to live here is gone: Cash,
+                History and Inventory are now permanent tabs in the bottom bar
+                (see src/components/BottomTabBar.tsx), one tap instead of two.
+                Only sync status and logout remain, and both fit inline — no
+                dropdown, no outside-click handler, no open/closed state. */}
+            <div className="md:hidden flex items-center gap-1">
+              <SyncIndicator compact />
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={handleLogout}
+                aria-label="Log out"
+                className="h-11 w-11"
               >
-                {isMobileMenuOpen ? (
-                  <X className="h-5 w-5" />
-                ) : (
-                  <Menu className="h-5 w-5" />
-                )}
+                <LogOut className="h-5 w-5" />
               </Button>
-
-              {/* Mobile Dropdown Menu */}
-              {isMobileMenuOpen && (
-                <div className="absolute right-0 top-full mt-2 w-48 bg-background border rounded-lg shadow-lg z-50 overflow-hidden">
-                   <div className="px-4 py-2 border-b">
-                     <SyncIndicator compact />
-                   </div>
-                   {canViewCash && (
-                     <button
-                       className="w-full px-4 py-3 text-left flex items-center gap-3 hover:bg-muted/50 transition-colors"
-                       onClick={() => {
-                         router.push("/pos/cash");
-                         setIsMobileMenuOpen(false);
-                       }}
-                     >
-                       <Banknote className="h-4 w-4" />
-                       <span>Cash Register</span>
-                     </button>
-                   )}
-                   {canViewTransactions && isEnabled("transactions") && (
-                     <button
-                       className="w-full px-4 py-3 text-left flex items-center gap-3 hover:bg-muted/50 transition-colors"
-                       onClick={() => {
-                         router.push("/transactions");
-                         setIsMobileMenuOpen(false);
-                       }}
-                     >
-                       <History className="h-4 w-4" />
-                       <span>History</span>
-                     </button>
-                   )}
-                   {canViewInventory && (
-                     <button
-                       className="w-full px-4 py-3 text-left flex items-center gap-3 hover:bg-muted/50 transition-colors"
-                       onClick={() => {
-                         router.push("/pos/products");
-                         setIsMobileMenuOpen(false);
-                       }}
-                     >
-                       <Package className="h-4 w-4" />
-                       <span>Inventory</span>
-                     </button>
-                   )}
-                   <div className="border-t" />
-                  <button
-                    className="w-full px-4 py-3 text-left flex items-center gap-3 hover:bg-muted/50 transition-colors text-red-500"
-                    onClick={() => {
-                      handleLogout();
-                      setIsMobileMenuOpen(false);
-                    }}
-                  >
-                    <LogOut className="h-4 w-4" />
-                    <span>Logout</span>
-                  </button>
-                </div>
-              )}
             </div>
           </div>
         </div>
@@ -1009,7 +1023,7 @@ export default function POSPage() {
                         <div
                           key={item.product_id}
                           id={`cart-item-${item.product_id}`}
-                          className={`p-1 rounded-lg transition-all duration-300 ${
+                          className={`p-1 rounded-lg transition-all duration-300 animate-cart-item-in ${
                             highlightedItemId === item.product_id
                               ? "bg-yellow-300 border-4 border-yellow-600 shadow-lg scale-[1.02]"
                               : "bg-muted/50 border-2 border-transparent"
@@ -1051,10 +1065,10 @@ export default function POSPage() {
                               <Button
                                 variant="outline"
                                 size="icon"
-                                className="h-8 w-8 rounded"
+                                className="h-11 w-11 rounded"
                                 onClick={() => decrementQuantity(item.product_id)}
                               >
-                                <Minus className="h-3 w-3" />
+                                <Minus className="h-4 w-4" />
                               </Button>
                               <span className="w-8 text-center text-base font-bold">
                                 {item.quantity}
@@ -1062,10 +1076,10 @@ export default function POSPage() {
                               <Button
                                 variant="outline"
                                 size="icon"
-                                className="h-8 w-8 rounded"
+                                className="h-11 w-11 rounded"
                                 onClick={() => incrementQuantity(item.product_id)}
                               >
-                                <Plus className="h-3 w-3" />
+                                <Plus className="h-4 w-4" />
                               </Button>
                             </div>
                             <div className="text-right">
@@ -1104,19 +1118,19 @@ export default function POSPage() {
                             Clear All
                           </Button>
                           <div className="text-right">
-                            {useCartStore.getState().getTotalDiscount() > 0 && (
+                            {getTotalDiscount() > 0 && (
                               <>
                                 <div className="text-sm text-muted-foreground">
-                                  Subtotal: {formatLL(useCartStore.getState().getTotalOriginal())}
+                                  Subtotal: {formatLL(getTotalOriginal())}
                                 </div>
                                 <div className="text-sm text-red-500">
-                                  Discount: -{formatLL(useCartStore.getState().getTotalDiscount())}
+                                  Discount: -{formatLL(getTotalDiscount())}
                                 </div>
                               </>
                             )}
-                            {useCartStore.getState().getRoundingAdjustment() !== 0 && (
+                            {getRoundingAdjustment() !== 0 && (
                               <div className="text-sm text-muted-foreground">
-                                Rounding: {formatLL(useCartStore.getState().getRoundingAdjustment())}
+                                Rounding: {formatLL(getRoundingAdjustment())}
                               </div>
                             )}
                             <div className="text-2xl font-bold text-amber-500">
@@ -1195,12 +1209,25 @@ export default function POSPage() {
                 {isScannerActive ? "ON" : "OFF"}
               </Badge>
             </div>
-            <BarcodeScanner
-              onScan={handleBarcodeScan}
-              isActive={isScannerActive}
-              desktopMode={false}
-              showManualInput={false}
-            />
+            {/* Unmounted (not merely deactivated) when off. Unmount runs the
+                scanner's stopEverything() cleanup — stop all MediaStream
+                tracks, reset ZXing, tear down Quagga — and removes the <video>
+                element from the DOM entirely. That is what actually releases
+                the camera, and it replaces the full window.location.reload()
+                this toggle used to do on iOS/Android. */}
+            {isScannerActive ? (
+              <BarcodeScanner
+                onScan={handleBarcodeScan}
+                isActive={true}
+                desktopMode={false}
+                showManualInput={false}
+              />
+            ) : (
+              <div className="h-[200px] flex flex-col items-center justify-center rounded-lg border border-dashed text-muted-foreground">
+                <Scan className="h-8 w-8 mb-2 opacity-30" />
+                <p className="text-sm">Scanner is off</p>
+              </div>
+            )}
           </div>
 
           {/* Cart Section - Largest Element */}
@@ -1219,7 +1246,7 @@ export default function POSPage() {
                     <div
                       key={item.product_id}
                       id={`cart-item-${item.product_id}`}
-                      className={`p-1 rounded-lg transition-all duration-300 ${
+                      className={`p-1 rounded-lg transition-all duration-300 animate-cart-item-in ${
                         highlightedItemId === item.product_id
                           ? "bg-yellow-300 border-4 border-yellow-600 shadow-lg scale-[1.02]"
                           : "bg-muted/50 border-2 border-transparent"
@@ -1261,10 +1288,10 @@ export default function POSPage() {
                           <Button
                             variant="outline"
                             size="icon"
-                            className="h-8 w-8 rounded"
+                            className="h-11 w-11 rounded"
                             onClick={() => decrementQuantity(item.product_id)}
                           >
-                            <Minus className="h-3 w-3" />
+                            <Minus className="h-4 w-4" />
                           </Button>
                           <span className="w-8 text-center text-base font-bold">
                             {item.quantity}
@@ -1272,10 +1299,10 @@ export default function POSPage() {
                           <Button
                             variant="outline"
                             size="icon"
-                            className="h-8 w-8 rounded"
+                            className="h-11 w-11 rounded"
                             onClick={() => incrementQuantity(item.product_id)}
                           >
-                            <Plus className="h-3 w-3" />
+                            <Plus className="h-4 w-4" />
                           </Button>
                         </div>
                         <div className="text-right">
@@ -1314,19 +1341,19 @@ export default function POSPage() {
                         Clear All
                       </Button>
                       <div className="text-right">
-                        {useCartStore.getState().getTotalDiscount() > 0 && (
+                        {getTotalDiscount() > 0 && (
                           <>
                             <div className="text-sm text-muted-foreground">
-                              Subtotal: {formatLL(useCartStore.getState().getTotalOriginal())}
+                              Subtotal: {formatLL(getTotalOriginal())}
                             </div>
                             <div className="text-sm text-red-500">
-                              Discount: -{formatLL(useCartStore.getState().getTotalDiscount())}
+                              Discount: -{formatLL(getTotalDiscount())}
                             </div>
                           </>
                         )}
-                        {useCartStore.getState().getRoundingAdjustment() !== 0 && (
+                        {getRoundingAdjustment() !== 0 && (
                           <div className="text-sm text-muted-foreground">
-                            Rounding: {formatLL(useCartStore.getState().getRoundingAdjustment())}
+                            Rounding: {formatLL(getRoundingAdjustment())}
                           </div>
                         )}
                         <div className="text-2xl font-bold text-amber-500">
@@ -1345,7 +1372,9 @@ export default function POSPage() {
 
           {/* Action Buttons: Quick Done + Checkout */}
           {!isEmpty() && (
-            <div className="flex-shrink-0">
+            /* safe-bottom keeps the primary actions clear of the iOS home
+               indicator — the page paints under it (viewportFit: 'cover'). */
+            <div className="flex-shrink-0 safe-bottom">
               <div className="grid grid-cols-2 gap-3">
                 <Button
                   className="h-14 text-lg font-bold bg-green-600 hover:bg-green-700"

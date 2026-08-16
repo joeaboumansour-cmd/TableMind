@@ -1,5 +1,14 @@
 import withPWAInit from "@ducanh2912/next-pwa";
+import withBundleAnalyzer from "@next/bundle-analyzer";
 import type { NextConfig } from "next";
+
+// `npm run analyze` opens a treemap of the client bundles.
+// Worth checking before adding a dependency to a hot route — this app had
+// ~800KB of ZXing + recharts sitting in the POS and transactions first paint
+// with no way to notice.
+const withAnalyzer = withBundleAnalyzer({
+  enabled: process.env.ANALYZE === "true",
+});
 
 const withPWA = withPWAInit({
   dest: "public",
@@ -36,6 +45,12 @@ const withPWA = withPWAInit({
   // only when their cacheName is not already taken, so the /api/health
   // NetworkOnly rule keeps priority over the default `apis` rule.
   extendDefaultRuntimeCaching: true,
+  // Keep the precache to things needed at runtime. The PWA manifest
+  // screenshots (~265KB combined) are only ever read by the OS install
+  // dialog, which fetches them from the network — precaching them just
+  // makes every install download a quarter-megabyte it will never use.
+  // The leading "!" entries are exclusion globs (next-pwa convention).
+  publicExcludes: ["!noprecache/**/*", "!screenshots/**/*"],
   workboxOptions: {
     runtimeCaching: [
       // CRITICAL: Exclude /api/health from the service worker 'apis' cache.
@@ -86,4 +101,4 @@ const nextConfig: NextConfig = {
   // turbopack: {}, 
 };
 
-export default withPWA(nextConfig);
+export default withAnalyzer(withPWA(nextConfig));

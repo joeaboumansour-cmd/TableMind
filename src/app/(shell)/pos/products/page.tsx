@@ -40,7 +40,10 @@ import {
 import { useAuth } from "@/lib/auth/AuthContext";
 import { PermissionGuard } from "@/lib/auth/guards";
 import { formatLL, formatUSD, convertLlToUsdForSale, SELL_RATE, RETURN_RATE, convertLlToUsdForReturn } from "@/lib/utils/format";
-import BarcodeScanner, { playSuccessSound } from "@/components/BarcodeScanner";
+import dynamic from "next/dynamic";
+// See the POS page: the scanner drags in @zxing/library, so it is loaded on
+// demand and the beep comes from the standalone feedback module instead.
+import { playSuccessSound } from "@/lib/feedback";
 import { isDesktop } from "@/lib/device";
 import CSVImportDialog from "@/components/CSVImportDialog";
 import { getFrequentlyUsedProductIds, addFrequentlyUsedProduct, removeFrequentlyUsedProduct, isFrequentlyUsed, syncFavoritesFromSupabase } from "@/lib/frequentlyUsed";
@@ -65,6 +68,15 @@ interface Product {
   parent_id?: string | null;
   variant_name?: string | null;
 }
+
+const BarcodeScanner = dynamic(() => import("@/components/BarcodeScanner"), {
+  ssr: false,
+  loading: () => (
+    <div className="h-[200px] flex items-center justify-center text-muted-foreground text-sm">
+      Starting camera…
+    </div>
+  ),
+});
 
 export default function StoreProductsPage() {
   return (
@@ -667,53 +679,72 @@ function StoreProductsPageContent() {
     toast.success("Barcode is available");
   };
 
-// Build a set of product IDs that are parents (referenced by other products' parent_id)
-const parentIds = new Set<string>();
-products.forEach(p => {
-  if (p.parent_id) parentIds.add(p.parent_id);
-});
+  // Build a set of product IDs that are parents (referenced by other products'
+  // parent_id). Memoized on `products` — it does not depend on the search.
+  const parentIds = useMemo(() => {
+    const ids = new Set<string>();
+    products.forEach((p) => {
+      if (p.parent_id) ids.add(p.parent_id);
+    });
+    return ids;
+  }, [products]);
 
-const filteredProducts = products.filter(
-  (product) =>
-    product.name.toLowerCase().includes(debouncedSearch.toLowerCase()) ||
-    product.barcode?.toLowerCase().includes(debouncedSearch.toLowerCase())
-).map((product: any) => {
-  const isParent = parentIds.has(product.id);
-  const isVariant = !!product.parent_id;
+  // Filter + decorate the list for rendering.
+  //
+  // This whole block used to run in the component body on EVERY render — a
+  // full filter, a full map allocating a new object per row, and (below) four
+  // more full traversals for the stat tiles. At 2,500 products that was ~15k
+  // iterations plus 2,500 allocations on every keystroke, dialog toggle and
+  // star click. The fresh objects also changed item identity each render,
+  // which defeated the virtualizer's reuse.
+  const filteredProducts = useMemo(() => {
+    // Hoisted: this was being recomputed once per product inside the predicate.
+    const q = debouncedSearch.toLowerCase();
 
-  // Determine product type badge
-  let _typeLabel: string | null = null;
-  let _typeColor: string = '';
-  if (isVariant) {
-    _typeLabel = 'Variant';
-    _typeColor = 'bg-purple-100 text-purple-700 border-purple-300';
-  } else if (isParent) {
-    _typeLabel = 'Parent';
-    _typeColor = 'bg-amber-100 text-amber-700 border-amber-300';
-  }
+    return products
+      .filter(
+        (product) =>
+          product.name.toLowerCase().includes(q) ||
+          product.barcode?.toLowerCase().includes(q)
+      )
+      .map((product: any) => {
+        const isParent = parentIds.has(product.id);
+        const isVariant = !!product.parent_id;
 
-  // Enhance variant products with their full name
-  if (isVariant && product.variant_name) {
-    return {
-      ...product,
-      _displayName: `${product.name} - ${product.variant_name}`,
-      _isVariant: true,
-      _isParent: false,
-      _parentId: product.parent_id,
-      _typeLabel,
-      _typeColor,
-    };
-  }
-  return {
-    ...product,
-    _displayName: product.name,
-    _isVariant: false,
-    _isParent: isParent,
-    _parentId: null,
-    _typeLabel,
-    _typeColor,
-  };
-});
+        // Determine product type badge
+        let _typeLabel: string | null = null;
+        let _typeColor: string = '';
+        if (isVariant) {
+          _typeLabel = 'Variant';
+          _typeColor = 'bg-purple-100 text-purple-700 border-purple-300';
+        } else if (isParent) {
+          _typeLabel = 'Parent';
+          _typeColor = 'bg-amber-100 text-amber-700 border-amber-300';
+        }
+
+        // Enhance variant products with their full name
+        if (isVariant && product.variant_name) {
+          return {
+            ...product,
+            _displayName: `${product.name} - ${product.variant_name}`,
+            _isVariant: true,
+            _isParent: false,
+            _parentId: product.parent_id,
+            _typeLabel,
+            _typeColor,
+          };
+        }
+        return {
+          ...product,
+          _displayName: product.name,
+          _isVariant: false,
+          _isParent: isParent,
+          _parentId: null,
+          _typeLabel,
+          _typeColor,
+        };
+      });
+  }, [products, debouncedSearch, parentIds]);
 
 
   // Virtual scrolling setup for product list
@@ -725,18 +756,31 @@ const filteredProducts = products.filter(
     overscan: 5, // render 5 extra items offscreen for smooth scrolling
   });
 
-  // Stats calculations
-  const totalProducts = products.length;
-  const lowStockCount = products.filter(p => p.stock_quantity <= p.min_stock_threshold).length;
-  const totalCostValue = products.reduce((sum, p) => sum + (p.cost_price * p.stock_quantity), 0);
-  const totalSellValue = products.reduce((sum, p) => sum + (p.selling_price * p.stock_quantity), 0);
+  // Stats calculations — one pass over `products`, memoized, instead of four
+  // separate full traversals on every render.
+  const { totalProducts, lowStockCount, totalCostValue, totalSellValue } = useMemo(() => {
+    let low = 0;
+    let cost = 0;
+    let sell = 0;
+    for (const p of products) {
+      if (p.stock_quantity <= p.min_stock_threshold) low++;
+      cost += p.cost_price * p.stock_quantity;
+      sell += p.selling_price * p.stock_quantity;
+    }
+    return {
+      totalProducts: products.length,
+      lowStockCount: low,
+      totalCostValue: cost,
+      totalSellValue: sell,
+    };
+  }, [products]);
 
   // Show loading while auth is initializing OR products are being fetched.
   // This prevents the user from seeing "0 items" while the forceRefresh
   // network fetch is in-flight. The spinner stays until products arrive.
   if (authLoading || isLoading) {
     return (
-      <div className="h-screen flex items-center justify-center bg-background">
+      <div className="h-dvh flex items-center justify-center bg-background">
         <div className="text-center">
           <Loader2 className="h-8 w-8 animate-spin mx-auto text-amber-500" />
           <p className="mt-4 text-muted-foreground">Loading products...</p>
@@ -746,7 +790,7 @@ const filteredProducts = products.filter(
   }
 
   return (
-    <div className="h-screen flex flex-col bg-background overflow-hidden">
+    <div className="h-dvh flex flex-col bg-background overflow-hidden">
       {/* Compact Header */}
       <header className="flex-shrink-0 bg-background border-b">
         <div className="px-3 py-2">

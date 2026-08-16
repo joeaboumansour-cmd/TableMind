@@ -66,6 +66,17 @@ export interface QueuedTransaction {
   user_name?: string;
   items: QueuedTransactionItem[];
   created_at: string;
+  /** Sync attempts so far. Absent on rows queued before this field existed. */
+  retry_count?: number;
+  /** Message from the most recent failed sync attempt. */
+  last_error?: string | null;
+  /**
+   * Set once the retry cap is exhausted. A dead-lettered sale is NEVER deleted
+   * — it is real money that failed to reach the server — it is only excluded
+   * from the automatic retry loop so it stops burning requests, and surfaced
+   * to the user for manual resolution.
+   */
+  failed_permanently?: boolean;
 }
 
 export interface QueuedTransactionItem {
@@ -118,6 +129,25 @@ db.version(2).stores({
     "id, store_id, name, barcode, updated_at",
   transactions_cache:
     "id, store_id, transaction_number, created_at",
+  offline_queue:
+    "id, store_id, created_at",
+  pending_writes:
+    "id, type, created_at, retry_count",
+});
+
+// Database version 3: compound indexes.
+// Every index above is single-key, which forced two bad patterns:
+//   - barcode lookups could not be store-scoped at the index level, so a
+//     device that has served two stores could return the wrong store's
+//     product on a scan (tenancy rule, CLAUDE.md §1)
+//   - transaction history had to be sorted in JS via .sortBy() because there
+//     was no [store_id+created_at] index for Dexie to sort on
+// Dexie migrations are additive: existing rows are preserved and reindexed.
+db.version(3).stores({
+  products_cache:
+    "id, store_id, name, barcode, updated_at, [store_id+barcode], [store_id+name]",
+  transactions_cache:
+    "id, store_id, transaction_number, created_at, [store_id+created_at]",
   offline_queue:
     "id, store_id, created_at",
   pending_writes:
@@ -208,12 +238,23 @@ export async function getCachedProducts(storeId: string): Promise<CachedProduct[
     .toArray();
 }
 
+/**
+ * Look up a cached product by barcode WITHIN a store.
+ *
+ * The store_id argument is required. Barcodes are not unique across stores,
+ * and this previously queried barcode alone — so on a device that had served
+ * more than one store, a scan could return another store's product (and
+ * therefore another store's price). Uses the [store_id+barcode] compound
+ * index added in schema v3.
+ */
 export async function getCachedProductByBarcode(
-  barcode: string
+  barcode: string,
+  storeId: string
 ): Promise<CachedProduct | undefined> {
+  if (!storeId) return undefined;
   return db.products_cache
-    .where("barcode")
-    .equals(barcode)
+    .where("[store_id+barcode]")
+    .equals([storeId, barcode])
     .first();
 }
 
@@ -234,14 +275,19 @@ export async function decrementCachedStock(
 ): Promise<void> {
   if (items.length === 0) return;
 
-  for (const item of items) {
-    await db.products_cache
-      .where("id")
-      .equals(item.product_id)
-      .modify((p) => {
-        p.stock_quantity = (p.stock_quantity || 0) - item.quantity;
-      });
-  }
+  // One IndexedDB transaction for the whole cart, not one per line item.
+  // This also makes the decrement atomic — a mid-loop failure can no longer
+  // leave some products decremented and others not.
+  await db.transaction("rw", db.products_cache, async () => {
+    for (const item of items) {
+      await db.products_cache
+        .where("id")
+        .equals(item.product_id)
+        .modify((p) => {
+          p.stock_quantity = (p.stock_quantity || 0) - item.quantity;
+        });
+    }
+  });
   console.log(`[LocalDB] Decremented cached stock for ${items.length} products`);
 }
 
@@ -262,18 +308,35 @@ export async function getCachedProductsCount(storeId?: string): Promise<number> 
 
 // ---- Transactions Cache Operations ----
 
+/**
+ * Replace the cached transaction history for ONE store.
+ *
+ * Two things this had wrong before: it called .clear(), which wiped every
+ * store's cached history rather than just this one, and the clear/insert pair
+ * was not wrapped in a transaction — so a failure between them left the cache
+ * empty. Both are fixed here; the store id is taken from the rows themselves.
+ */
 export async function cacheTransactions(transactions: CachedTransaction[]): Promise<void> {
-  await db.transactions_cache.clear();
-  await db.transactions_cache.bulkAdd(transactions);
+  const storeIds = [...new Set(transactions.map((t) => t.store_id))];
+
+  await db.transaction("rw", db.transactions_cache, async () => {
+    if (storeIds.length > 0) {
+      // Scoped delete — leave other stores' cached history intact.
+      await db.transactions_cache.where("store_id").anyOf(storeIds).delete();
+    }
+    await db.transactions_cache.bulkPut(transactions);
+  });
   console.log(`[LocalDB] Cached ${transactions.length} transactions`);
 }
 
 export async function getCachedTransactions(storeId: string): Promise<CachedTransaction[]> {
+  // Sorts on the [store_id+created_at] index (schema v3) rather than pulling
+  // every row into memory for a JS sort, which is what .sortBy() did.
   return db.transactions_cache
-    .where("store_id")
-    .equals(storeId)
+    .where("[store_id+created_at]")
+    .between([storeId, Dexie.minKey], [storeId, Dexie.maxKey])
     .reverse()
-    .sortBy("created_at");
+    .toArray();
 }
 
 export async function getCachedTransactionsCount(): Promise<number> {
@@ -289,10 +352,48 @@ export async function queueTransaction(
   console.log(`[LocalDB] Queued transaction ${transaction.transaction_number} for sync`);
 }
 
+/**
+ * Transactions eligible for a sync attempt, oldest first.
+ * Excludes dead-lettered rows so a permanently-rejected sale stops consuming
+ * a network request every 30 seconds. Use getDeadLetterTransactions() to
+ * surface those to the user.
+ */
 export async function getQueuedTransactions(): Promise<QueuedTransaction[]> {
-  return db.offline_queue
-    .orderBy("created_at")
-    .toArray();
+  const all = await db.offline_queue.orderBy("created_at").toArray();
+  return all.filter((t) => !t.failed_permanently);
+}
+
+/**
+ * Sales that exhausted their retry budget and need manual attention.
+ * These are never auto-deleted — each one is a completed sale whose money
+ * was taken but which never reached the server.
+ */
+export async function getDeadLetterTransactions(): Promise<QueuedTransaction[]> {
+  const all = await db.offline_queue.orderBy("created_at").toArray();
+  return all.filter((t) => t.failed_permanently === true);
+}
+
+/**
+ * Record a failed sync attempt. Returns the new retry count.
+ * Once `maxRetries` is reached the row is dead-lettered rather than deleted.
+ */
+export async function recordQueuedTransactionFailure(
+  id: string,
+  error: string,
+  maxRetries: number
+): Promise<number> {
+  let count = 0;
+  await db.transaction("rw", db.offline_queue, async () => {
+    const txn = await db.offline_queue.get(id);
+    if (!txn) return;
+    count = (txn.retry_count || 0) + 1;
+    await db.offline_queue.update(id, {
+      retry_count: count,
+      last_error: error,
+      failed_permanently: count >= maxRetries,
+    });
+  });
+  return count;
 }
 
 export async function removeQueuedTransaction(
@@ -301,8 +402,14 @@ export async function removeQueuedTransaction(
   await db.offline_queue.delete(id);
 }
 
+/** Count of transactions still awaiting a sync attempt (excludes dead-lettered). */
 export async function getQueuedCount(): Promise<number> {
-  return db.offline_queue.count();
+  return (await getQueuedTransactions()).length;
+}
+
+/** Count of sales that failed permanently and need manual attention. */
+export async function getDeadLetterCount(): Promise<number> {
+  return (await getDeadLetterTransactions()).length;
 }
 
 // ---- Pending Writes Operations ----
@@ -315,6 +422,18 @@ export async function getPendingWrites(): Promise<PendingWrite[]> {
   return db.pending_writes
     .orderBy("created_at")
     .toArray();
+}
+
+/**
+ * Pending writes of a single type, oldest first.
+ * `type` is indexed, so this beats reading the whole table and filtering in
+ * JS — which is what every caller was doing.
+ */
+export async function getPendingWritesByType(
+  type: PendingWrite["type"]
+): Promise<PendingWrite[]> {
+  const rows = await db.pending_writes.where("type").equals(type).toArray();
+  return rows.sort((a, b) => a.created_at.localeCompare(b.created_at));
 }
 
 export async function removePendingWrite(id: string): Promise<void> {

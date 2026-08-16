@@ -126,7 +126,62 @@
     -moz-user-select: none;
     -ms-user-select: none;
     user-select: none;
+
+    /* Native apps don't flash a translucent grey box on every tap. The
+       existing 'msapplication-tap-highlight' meta tag is IE/Edge-legacy and
+       does nothing on iOS or Android — this is the property that works. */
+    -webkit-tap-highlight-color: transparent;
+
+    /* Disarm pull-to-refresh and rubber-band scroll chaining. Without this a
+       downward swipe in the cart list on Android Chrome can reload the page
+       mid-sale. */
+    overscroll-behavior: none;
   }
+
+  /* Receipts and transaction details are the one place text needs to be
+     selectable — a cashier reading a number back to a customer. */
+  .selectable-text {
+    -webkit-user-select: text;
+    user-select: text;
+    -webkit-touch-callout: default;
+  }
+}
+
+/* ============================================================
+   SAFE AREA
+   layout.tsx sets viewportFit: 'cover' and appleWebApp.statusBarStyle:
+   'black-translucent', so the page paints under the iOS status bar and home
+   indicator. These utilities put the padding back where it matters.
+   ============================================================ */
+
+.safe-top {
+  padding-top: env(safe-area-inset-top, 0px);
+}
+
+.safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+.safe-x {
+  padding-left: env(safe-area-inset-left, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
+}
+
+/* ============================================================
+   VIEWPORT HEIGHT
+   100vh on iOS Safari is the height with browser chrome HIDDEN, so any
+   bottom-anchored bar (the Done / Checkout buttons) gets clipped behind it.
+   100dvh tracks the actual visible viewport.
+   ============================================================ */
+
+.h-dvh {
+  height: 100vh; /* fallback for browsers without dvh */
+  height: 100dvh;
+}
+
+.min-h-dvh {
+  min-height: 100vh;
+  min-height: 100dvh;
 }
 
 /* Prevent all zoom gestures */
@@ -148,15 +203,71 @@ html {
   }
 }
 
-/* Hide Turbopack DevTools overlay */
-.turbo-check {
-  display: none !important;
+/* ============================================================
+   MOTION
+   The app had no @keyframes at all — items appeared and disappeared with no
+   transition, which is a large part of why it reads as a web page rather than
+   an app. Keep these short: a POS is used at speed and animation that makes
+   the cashier wait is worse than none.
+   ============================================================ */
+
+@keyframes cart-item-in {
+  from {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
 }
 
-.turbo-devtools {
-  display: none !important;
+/* New cart items are prepended, so they slide in from the top. */
+.animate-cart-item-in {
+  animation: cart-item-in 160ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
-#turbo-check {
-  display: none !important;
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.animate-fade-in {
+  animation: fade-in 140ms ease-out both;
+}
+
+@keyframes pulse-success {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in oklch, var(--primary) 60%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 12px transparent;
+  }
+}
+
+.animate-pulse-success {
+  animation: pulse-success 500ms ease-out;
+}
+
+/* Respect the OS reduced-motion setting. A POS is used for long shifts and
+   some users are motion-sensitive; the app must stay fully functional. */
+@media (prefers-reduced-motion: reduce) {
+  .animate-cart-item-in,
+  .animate-fade-in,
+  .animate-pulse-success {
+    animation: none;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

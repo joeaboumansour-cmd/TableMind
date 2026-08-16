@@ -169,7 +169,7 @@ export default function PublicReceiptPage() {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-background">
+      <div className="min-h-dvh flex items-center justify-center bg-background">
         <div className="text-center">
           <Loader2 className="h-8 w-8 animate-spin mx-auto text-amber-500" />
           <p className="mt-4 text-muted-foreground">Loading receipt...</p>
@@ -180,7 +180,7 @@ export default function PublicReceiptPage() {
 
   if (isPending) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-background p-4">
+      <div className="min-h-dvh flex items-center justify-center bg-background p-4">
         <Card className="w-full max-w-md">
           <CardContent className="pt-6 text-center">
             <div className="h-16 w-16 rounded-full bg-amber-500/10 flex items-center justify-center mx-auto mb-4">
@@ -203,7 +203,7 @@ export default function PublicReceiptPage() {
 
   if (error || !receipt) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-background p-4">
+      <div className="min-h-dvh flex items-center justify-center bg-background p-4">
         <Card className="w-full max-w-md">
           <CardContent className="pt-6 text-center">
             <div className="h-16 w-16 rounded-full bg-red-500/10 flex items-center justify-center mx-auto mb-4">
@@ -224,7 +224,7 @@ export default function PublicReceiptPage() {
   }
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-dvh bg-background">
       {/* Header */}
       <header className="sticky top-0 z-50 bg-background border-b print:hidden">
         <div className="container mx-auto px-4 py-3">

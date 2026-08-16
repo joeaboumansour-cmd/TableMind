@@ -7,12 +7,17 @@ import {
   setMobileViewport,
 } from './integration/test-utils';
 
+// Match on pathname rather than a glob: the history GET now carries pagination
+// query params (?limit=&cursor=), which '**/api/transactions' would not match.
+// A pathname predicate also avoids matching /api/transactions/cleanup etc.
+const isTransactionsList = (url: URL) => url.pathname === '/api/transactions';
+
 async function mockTransactionsApi(page: Page, transactions: any[]) {
-  await page.route('**/api/transactions', async (route) => {
+  await page.route(isTransactionsList, async (route) => {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({ transactions }),
+      body: JSON.stringify({ transactions, nextCursor: null, hasMore: false }),
     });
   });
 }
@@ -248,8 +253,8 @@ test.describe('Transaction History — Accordion Behavior', () => {
 
 test.describe('Transaction History — 48-Hour Retention Filter', () => {
   test('Transactions older than 48 hours are not shown', async ({ page }) => {
-    await page.route('**/api/transactions', async () => {
-      return Response.json({ transactions: [] });
+    await page.route(isTransactionsList, async () => {
+      return Response.json({ transactions: [], nextCursor: null, hasMore: false });
     });
     await mockSupabaseApi(page);
     await gotoTransactions(page);
@@ -510,7 +515,7 @@ test.describe('Transaction History — Loading and Error States', () => {
   test('Error state displays on API failure', async ({ page }) => {
     await page.unrouteAll({ behavior: 'wait' });
     await mockSupabaseApi(page);
-    await page.route('**/api/transactions', async (route) => {
+    await page.route(isTransactionsList, async (route) => {
       await route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'Server error' }) });
     });
 

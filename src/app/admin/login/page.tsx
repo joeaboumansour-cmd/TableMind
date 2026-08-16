@@ -63,7 +63,7 @@ export default function AdminLoginPage() {
   };
 
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-br from-background to-muted p-4">
+    <div className="min-h-dvh flex flex-col items-center justify-center bg-gradient-to-br from-background to-muted p-4">
       {/* Logo */}
       <div className="mb-8 flex items-center gap-3">
         <div className="h-12 w-12 rounded-xl bg-amber-500 flex items-center justify-center shadow-lg">

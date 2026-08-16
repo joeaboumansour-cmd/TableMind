@@ -11,6 +11,12 @@ export const viewport: Viewport = {
   initialScale: 1,
   maximumScale: 1,
   userScalable: false, // Essential for POS to prevent UI shifting during fast scanning
+  // Required for env(safe-area-inset-*) to report real values. Without it the
+  // insets are all 0, and because appleWebApp.statusBarStyle below is
+  // "black-translucent" (which extends the page under the iOS status bar and
+  // home indicator), content rendered under the notch with nothing to
+  // compensate for it.
+  viewportFit: 'cover',
 }
 
 const geistSans = Geist({
@@ -41,8 +47,12 @@ export const metadata: Metadata = {
       type: "image/png",
     },
     {
+      // iOS expects 180x180 for the home-screen icon. This was pointing at
+      // the 192 launcher icon, which iOS downscales.
       rel: "apple-touch-icon",
-      url: "/icons/launchericon-192x192.png",
+      url: "/icons/apple-touch-icon-180x180.png",
+      sizes: "180x180",
+      type: "image/png",
     },
   ],
   appleWebApp: {

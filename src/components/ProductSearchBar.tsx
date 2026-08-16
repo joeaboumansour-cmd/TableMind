@@ -7,6 +7,9 @@ import { Product } from "@/lib/types/product";
 import { formatLL, formatUSD, convertLlToUsdForReturn, SELL_RATE } from "@/lib/utils/format";
 import { cn } from "@/lib/utils";
 
+/** Most results the dropdown will render at once. */
+const MAX_SEARCH_RESULTS = 50;
+
 interface ProductSearchBarProps {
   products: Product[];
   onSelect: (product: Product) => void;
@@ -62,16 +65,32 @@ export default function ProductSearchBar({
     };
   }, [query]);
 
-  // Filter products by name or barcode (case-insensitive)
-  const filteredProducts = useMemo(() => {
+  // Filter products by name or barcode (case-insensitive).
+  //
+  // Capped at MAX_SEARCH_RESULTS. This previously rendered every match: on a
+  // 2,500 product catalog, typing a single common letter built ~2,000 <li>
+  // nodes inside a 320px scroller on every keystroke. Nobody scrolls past the
+  // first handful — they type another character instead.
+  const { visibleProducts, totalMatches } = useMemo(() => {
     const q = debouncedQuery.trim().toLowerCase();
-    if (!q) return [];
-    return products.filter(
-      (p) =>
+    if (!q) return { visibleProducts: [] as Product[], totalMatches: 0 };
+
+    const matches: Product[] = [];
+    let total = 0;
+    for (const p of products) {
+      if (
         p.name.toLowerCase().includes(q) ||
         (p.barcode && p.barcode.toLowerCase().includes(q))
-    );
+      ) {
+        total++;
+        if (matches.length < MAX_SEARCH_RESULTS) matches.push(p);
+      }
+    }
+    return { visibleProducts: matches, totalMatches: total };
   }, [products, debouncedQuery]);
+
+  // Kept as the name used throughout the render below.
+  const filteredProducts = visibleProducts;
 
   // Click outside to close
   useEffect(() => {
@@ -271,6 +290,12 @@ export default function ProductSearchBar({
                   </div>
                 </li>
               ))}
+              {totalMatches > filteredProducts.length && (
+                <li className="px-3 py-2 text-center text-xs text-muted-foreground border-t mt-1">
+                  Showing {filteredProducts.length} of {totalMatches} matches — keep
+                  typing to narrow
+                </li>
+              )}
             </ul>
           )}
         </div>

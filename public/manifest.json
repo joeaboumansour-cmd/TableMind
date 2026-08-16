@@ -1,13 +1,49 @@
 {
+  "id": "/pos",
   "name": "Golden Squirrel POS",
   "short_name": "SquirrelPOS",
-  "description": "Mobile Point of Sale",
+  "description": "Offline-first dual-currency point of sale",
   "start_url": "/pos",
   "scope": "/",
   "display": "standalone",
+  "display_override": ["window-controls-overlay", "standalone", "minimal-ui"],
+  "orientation": "portrait-primary",
+  "lang": "en",
+  "dir": "ltr",
+  "categories": ["business", "finance", "productivity"],
   "background_color": "#000000",
   "theme_color": "#f59e0b",
   "prefer_related_applications": false,
+  "shortcuts": [
+    {
+      "name": "New Sale",
+      "short_name": "Sell",
+      "description": "Open the point of sale",
+      "url": "/pos",
+      "icons": [{ "src": "/icons/launchericon-192x192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Transaction History",
+      "short_name": "History",
+      "description": "Browse past sales",
+      "url": "/transactions",
+      "icons": [{ "src": "/icons/launchericon-192x192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Inventory",
+      "short_name": "Inventory",
+      "description": "Manage products and stock",
+      "url": "/pos/products",
+      "icons": [{ "src": "/icons/launchericon-192x192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Cash Register",
+      "short_name": "Cash",
+      "description": "Open or close the drawer",
+      "url": "/pos/cash",
+      "icons": [{ "src": "/icons/launchericon-192x192.png", "sizes": "192x192" }]
+    }
+  ],
   "icons": [
     {
       "src": "/icons/launchericon-192x192.png",
@@ -19,7 +55,13 @@
       "src": "/icons/launchericon-512x512.png",
       "sizes": "512x512",
       "type": "image/png",
-      "purpose": "maskable any"
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/maskable-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
     }
   ],
   "screenshots": [

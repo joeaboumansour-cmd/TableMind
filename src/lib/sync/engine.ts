@@ -4,7 +4,12 @@
 // and flushes queued transactions to Supabase
 // =============================================
 
-import { createClient, fetchAllProducts, getLastSyncKey } from "@/lib/supabase/client";
+import {
+  createClient,
+  fetchAllProducts,
+  fetchAllProductIds,
+  getLastSyncKey,
+} from "@/lib/supabase/client";
 import {
   cacheProducts,
   getQueuedTransactions,
@@ -12,7 +17,9 @@ import {
   getCachedProductsCount,
   getQueuedCount,
   getPendingWrites,
+  getPendingWritesByType,
   removePendingWrite,
+  recordQueuedTransactionFailure,
   reconcileProductsCache,
 } from "@/lib/db/localDB";
 import type { CachedProduct, QueuedTransaction, PendingWrite } from "@/lib/db/localDB";
@@ -24,6 +31,61 @@ type SyncListener = (status: SyncStatus, pendingCount?: number) => void;
 
 // Maximum retry attempts for pending writes before they are dropped
 const MAX_PENDING_WRITE_RETRIES = 5;
+
+export type ReconcileDecision =
+  | { reconcile: true }
+  | { reconcile: false; reason: string };
+
+/**
+ * Decide whether it is SAFE to delete cached products that are absent from a
+ * fetched "live" ID set.
+ *
+ * Extracted as a pure function because getting this wrong is expensive:
+ * reconciliation deletes from the local cache, and the cache is what keeps
+ * the POS selling with no internet. The previous implementation deleted on
+ * the basis of an unpaginated query that PostgREST truncates at 1000 rows,
+ * which wiped every product past that point on stores larger than the cap.
+ *
+ * The rule: deletion requires positive proof that the ID set is complete.
+ * Anything less — an unknown live count, a failed fetch, or a count mismatch
+ * suggesting truncation or a concurrent write — means skip and retry later.
+ * Skipping is always safe (a stale extra product lingers one more cycle);
+ * deleting on bad evidence is not.
+ */
+export function evaluateReconcile(params: {
+  /** Products currently in the local cache for this store. */
+  cachedCount: number;
+  /** Server-side exact count, or null if it could not be determined. */
+  liveCount: number | null;
+  /** Number of IDs actually fetched, or null if the fetch failed. */
+  fetchedIdCount: number | null;
+}): ReconcileDecision {
+  const { cachedCount, liveCount, fetchedIdCount } = params;
+
+  if (liveCount === null) {
+    return { reconcile: false, reason: "live product count unavailable" };
+  }
+
+  // A deletion always leaves the cache holding MORE than the server does.
+  // If we're at or below the live count there is nothing stale to remove, so
+  // we can skip the full ID sweep entirely — this is the common case.
+  if (cachedCount <= liveCount) {
+    return { reconcile: false, reason: "cache is not ahead of server" };
+  }
+
+  if (fetchedIdCount === null) {
+    return { reconcile: false, reason: "product ID fetch failed" };
+  }
+
+  if (fetchedIdCount !== liveCount) {
+    return {
+      reconcile: false,
+      reason: `fetched ${fetchedIdCount} IDs but store reports ${liveCount} (truncated or changed mid-fetch)`,
+    };
+  }
+
+  return { reconcile: true };
+}
 
 class SyncEngine {
   private listeners: Set<SyncListener> = new Set();
@@ -68,8 +130,13 @@ class SyncEngine {
       }
     });
 
-    // Retry sync when page becomes visible again (e.g., user switches back to tab)
-    window.addEventListener("visibilitychange", () => {
+    // Retry sync when page becomes visible again (e.g., user switches back to tab).
+    // NOTE: visibilitychange fires on `document`, NOT `window`. It was previously
+    // registered on window, where it only worked incidentally via bubbling in
+    // Chrome and did not fire at all on iOS Safari / WKWebView — i.e. the
+    // "sync when the cashier returns to the app" path was dead on the primary
+    // POS platform.
+    document.addEventListener("visibilitychange", () => {
       if (document.visibilityState === "visible" && connectivity.isOnline) {
         console.log("[Sync] Page became visible, checking for pending sync...");
         this.syncNow();
@@ -170,7 +237,11 @@ class SyncEngine {
         : null;
       
       let products: any[];
-      
+      // Authoritative server-side product count for this store. Used both by
+      // the completeness check below and by the reconcile guard further down,
+      // so we only pay for the COUNT query once per sync.
+      let liveCount: number | null = null;
+
       if (lastSync) {
         // Incremental: only fetch products updated since last sync
         const sinceDate = new Date(parseInt(lastSync)).toISOString();
@@ -198,11 +269,12 @@ class SyncEngine {
             .from("products")
             .select("id", { count: "exact", head: true })
             .eq("store_id", this.storeId);
-          
+
           if (!countError && totalCount !== null) {
+            liveCount = totalCount;
             // Get cached count
             const cachedCount = await getCachedProductsCount(this.storeId);
-            
+
             if (cachedCount < totalCount) {
               console.log(`[Sync] Cache has ${cachedCount} products but store has ${totalCount} total — doing full pull`);
               // Full pull to get ALL products
@@ -242,22 +314,60 @@ class SyncEngine {
         console.log(`[Sync] Pulled ${cached.length} products to local cache`);
       }
 
-      // CRITICAL FIX: Reconcile the cache against the live product set.
-      // On incremental sync, we only fetched changed products, so we need
-      // to fetch ALL product IDs to detect deletions.
-      // On full sync, fetchAllProducts already reconciled, but doing it again is harmless.
+      // Reconcile the cache against the live product set to detect deletions.
+      // On incremental sync we only fetched changed products, so a product
+      // deleted in Supabase would otherwise linger in the cache forever.
+      //
+      // CRITICAL: reconciliation DELETES from the local cache, so it must only
+      // ever run against a provably complete ID set. This block previously did
+      // an unbounded `.select("id")`, which PostgREST silently truncates at
+      // max-rows (1000). For any store with more products than that, reconcile
+      // deleted every product past row 1000, the completeness check above then
+      // re-pulled the whole catalog, and the next sync deleted them again —
+      // a permanent delete/refetch loop every 30s. Two guards prevent that now:
+      //   1. The ID fetch paginates (fetchAllProductIds).
+      //   2. We refuse to delete unless the fetched ID count matches the
+      //      server's exact COUNT. Incomplete evidence => no deletion.
       try {
-        // Fetch all product IDs for this store (lightweight — only selects id)
-        const { data: allIds, error: idError } = await supabase
-          .from("products")
-          .select("id")
-          .eq("store_id", this.storeId);
+        // Establish the authoritative live count if the incremental branch
+        // above didn't already (i.e. this was a full pull).
+        if (liveCount === null) {
+          const { count, error: countError } = await supabase
+            .from("products")
+            .select("id", { count: "exact", head: true })
+            .eq("store_id", this.storeId);
+          if (!countError && count !== null) liveCount = count;
+        }
 
-        if (!idError && allIds) {
-          const liveIds = allIds.map((p: any) => p.id);
-          const removed = await reconcileProductsCache(this.storeId, liveIds);
-          if (removed > 0) {
-            console.log(`[Sync] Reconcile removed ${removed} deleted products from cache`);
+        const cachedCount = await getCachedProductsCount(this.storeId);
+
+        // Cheap pre-check: only pay for the full ID sweep when the cache is
+        // actually ahead of the server, i.e. something may have been deleted.
+        const preCheck = evaluateReconcile({
+          cachedCount,
+          liveCount,
+          fetchedIdCount: null,
+        });
+
+        if (!preCheck.reconcile && preCheck.reason === "cache is not ahead of server") {
+          // Nothing stale to remove — skip without fetching any IDs.
+        } else if (liveCount === null) {
+          console.warn(`[Sync] Skipping reconcile — ${preCheck.reconcile ? "" : preCheck.reason}`);
+        } else {
+          const liveIds = await fetchAllProductIds(supabase, this.storeId);
+          const decision = evaluateReconcile({
+            cachedCount,
+            liveCount,
+            fetchedIdCount: liveIds === null ? null : liveIds.length,
+          });
+
+          if (decision.reconcile && liveIds) {
+            const removed = await reconcileProductsCache(this.storeId, liveIds);
+            if (removed > 0) {
+              console.log(`[Sync] Reconcile removed ${removed} deleted products from cache`);
+            }
+          } else if (!decision.reconcile) {
+            console.warn(`[Sync] Skipping reconcile — ${decision.reason}`);
           }
         }
       } catch (e) {
@@ -291,9 +401,10 @@ class SyncEngine {
   async pushQueuedTransactions(): Promise<{
     pushed: number;
     failed: number;
+    deadLettered: number;
     errors: string[];
   }> {
-    const result = { pushed: 0, failed: 0, errors: [] as string[] };
+    const result = { pushed: 0, failed: 0, deadLettered: 0, errors: [] as string[] };
 
     // Get all queued transactions ordered by creation time
     const queued = await getQueuedTransactions();
@@ -306,6 +417,16 @@ class SyncEngine {
 
     // Get auth data for API headers
     const authData = localStorage.getItem("goldensquirrel_auth") || "{}";
+
+    // Read legacy stock-decrement writes ONCE, not once per queued transaction.
+    // This used to be a full pending_writes table scan inside the loop, so
+    // flushing 200 offline sales meant 200 full table reads.
+    let legacyStockWrites: PendingWrite[] = [];
+    try {
+      legacyStockWrites = await getPendingWritesByType("stock_decrement");
+    } catch (e) {
+      console.warn("[Sync] Failed to read legacy stock decrements:", e);
+    }
 
     for (const txn of queued) {
       try {
@@ -369,16 +490,19 @@ class SyncEngine {
         // of the app and would cause double-decrementing now that the API
         // handles stock server-side.
         try {
-          const pendingWrites = await getPendingWrites();
           const txnProductIds = new Set(txn.items.map((i) => i.product_id));
-          const legacyStockWrites = pendingWrites.filter(
-            (w) =>
-              w.type === "stock_decrement" &&
-              txnProductIds.has((w.payload as any)?.product_id)
+          const matching = legacyStockWrites.filter((w) =>
+            txnProductIds.has((w.payload as any)?.product_id)
           );
-          for (const legacyWrite of legacyStockWrites) {
+          for (const legacyWrite of matching) {
             await removePendingWrite(legacyWrite.id);
             console.log(`[Sync] Cleaned up legacy stock decrement ${legacyWrite.id} for transaction ${txn.transaction_number}`);
+          }
+          // Drop them from the in-memory list so a later transaction in this
+          // same flush doesn't try to remove an already-removed write.
+          if (matching.length > 0) {
+            const removedIds = new Set(matching.map((w) => w.id));
+            legacyStockWrites = legacyStockWrites.filter((w) => !removedIds.has(w.id));
           }
         } catch (e) {
           console.warn("[Sync] Failed to clean up legacy stock decrements:", e);
@@ -397,6 +521,27 @@ class SyncEngine {
         result.errors.push(
           `Transaction ${txn.transaction_number}: ${error.message}`
         );
+
+        // Record the attempt. Queued transactions previously had NO retry cap,
+        // so a permanently-rejected sale (e.g. a deleted product_id, or the
+        // DECIMAL(10,2) overflow in audit P1-3) retried forever, every 30s.
+        // The row is dead-lettered rather than deleted — it is a completed
+        // sale whose money was taken, so it must never be silently dropped.
+        try {
+          const attempts = await recordQueuedTransactionFailure(
+            txn.id,
+            error?.message ?? String(error),
+            MAX_PENDING_WRITE_RETRIES
+          );
+          if (attempts >= MAX_PENDING_WRITE_RETRIES) {
+            console.error(
+              `[Sync] Transaction ${txn.transaction_number} exhausted ${MAX_PENDING_WRITE_RETRIES} retries — moved to dead-letter for manual resolution`
+            );
+            result.deadLettered++;
+          }
+        } catch (e) {
+          console.warn("[Sync] Failed to record transaction retry:", e);
+        }
       }
     }
 
@@ -467,6 +612,21 @@ class SyncEngine {
 
     // Process cash operations first (order matters)
     for (const write of cashWrites) {
+      // Cash writes incremented retry_count but never checked it, so a
+      // permanently-failing shift open/close retried every 30s forever.
+      // Apply the same cap the stock-decrement loop below already uses.
+      if ((write.retry_count ?? 0) >= MAX_PENDING_WRITE_RETRIES) {
+        console.error(
+          `[Sync] Dropping ${write.type} ${write.id} after ${write.retry_count} retries: ${write.last_error}`
+        );
+        await removePendingWrite(write.id);
+        result.failed++;
+        result.errors.push(
+          `${write.type} ${write.id}: dropped after ${write.retry_count} retries (${write.last_error})`
+        );
+        continue;
+      }
+
       try {
         await this.processCashShiftWrite(write);
         await removePendingWrite(write.id);
@@ -478,7 +638,7 @@ class SyncEngine {
         try {
           const { localDB } = await import("@/lib/db/localDB");
           await localDB.pending_writes.where("id").equals(write.id).modify((w: any) => {
-            w.retry_count += 1;
+            w.retry_count = (w.retry_count ?? 0) + 1;
             w.last_error = error.message;
           });
         } catch {}

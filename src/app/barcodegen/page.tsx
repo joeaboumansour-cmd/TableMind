@@ -474,7 +474,7 @@ ${labels
     );
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-dvh bg-background">
       {/* ── Header ──────────────────────────────────────────── */}
       <header className="bg-background border-b no-print">
         <div className="px-4 py-3 flex items-center gap-3 max-w-5xl mx-auto">
