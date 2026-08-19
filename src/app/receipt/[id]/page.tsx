@@ -103,13 +103,32 @@ export default function PublicReceiptPage() {
     fetchReceipt();
   }, [fetchReceipt]);
 
-  // Auto-retry while the transaction is pending sync (store was offline)
+  // Auto-retry while the transaction has not reached the server yet.
+  //
+  // Two very different waits share this state. The common one is short: the
+  // QR is shown the instant the sale is durable locally, so a customer who
+  // scans immediately can arrive a second or two before the background push
+  // lands. The other is open-ended: the store was offline and the sync engine
+  // owns it. Poll fast at first for the short case, then settle down for the
+  // long one — and stay under the endpoint's 30-requests-per-minute cap.
   useEffect(() => {
     if (!isPending) return;
-    const interval = setInterval(() => {
-      fetchReceipt();
-    }, 5000);
-    return () => clearInterval(interval);
+    const delays = [1500, 1500, 2000, 3000];
+    const SETTLED_DELAY_MS = 5000;
+    let attempt = 0;
+    let timer: ReturnType<typeof setTimeout>;
+
+    const schedule = () => {
+      const delay = delays[attempt] ?? SETTLED_DELAY_MS;
+      attempt++;
+      timer = setTimeout(() => {
+        fetchReceipt();
+        schedule();
+      }, delay);
+    };
+    schedule();
+
+    return () => clearTimeout(timer);
   }, [isPending, fetchReceipt]);
 
   const handlePrint = () => {
@@ -188,8 +207,9 @@ export default function PublicReceiptPage() {
             </div>
             <h2 className="text-xl font-bold mb-2">Receipt Pending</h2>
             <p className="text-muted-foreground mb-4">
-              This receipt was created while the store was offline. It will appear
-              here automatically once the store reconnects.
+              This receipt is still being saved. It will appear here
+              automatically in a few seconds &mdash; or once the store
+              reconnects, if it was created offline.
             </p>
             <Button variant="outline" onClick={fetchReceipt}>
               <RefreshCw className="h-4 w-4 mr-2" />

@@ -45,10 +45,14 @@ import {
   RETURN_RATE,
   convertUsdToLlForReturn,
 } from "@/lib/utils/format";
-import { generateReceiptToken } from "@/lib/receipt/token";
 import { vibrate } from "@/lib/feedback";
+import { usePrimedReceipt } from "@/lib/pos/usePrimedReceipt";
+import {
+  warmLocalDB,
+  queueCompletedSale,
+  pushSaleInBackground,
+} from "@/lib/pos/saleCompletion";
 import { cn } from "@/lib/utils";
-import QRCode from "qrcode";
 
 /** Which amount the keypad is typing into. Both are always displayed. */
 type PayField = "LL" | "USD";
@@ -91,6 +95,16 @@ function CheckoutContent() {
   // catalogue and the scanner. Without a pending state the button looks dead
   // and invites a second tap.
   const [isLeaving, startLeaving] = useTransition();
+
+  // Token + QR image for the next sale are built on mount, so pressing
+  // "Complete" costs zero QR work. See usePrimedReceipt.
+  const { takeReceipt } = usePrimedReceipt();
+
+  // Open the Dexie chunk/connection now rather than inside the sale handler,
+  // where it would sit in front of the receipt.
+  useEffect(() => {
+    warmLocalDB();
+  }, []);
 
   const {
     items,
@@ -244,19 +258,12 @@ function CheckoutContent() {
 
     try {
       const txnNumber = generateTransactionNumber();
-      setTransactionNumber(txnNumber);
 
-      // Generate unguessable receipt token (works fully offline)
-      const token = generateReceiptToken();
-      setReceiptToken(token);
-      setReceiptUrl(`${window.location.origin}/receipt/${token}`);
+      // Claimed synchronously — token and QR image were generated on mount.
+      const receipt = takeReceipt();
 
       const calculatedChangeGiven = totalPaid - total;
       const calcChangeUsd = calculatedChangeGiven / changeRate;
-
-      setPaidAmount(totalPaid);
-      setChangeGiven(calculatedChangeGiven);
-      setChangeUsd(calcChangeUsd);
 
       // Get current user info
       const currentUser = JSON.parse(localStorage.getItem("goldensquirrel_user") || "{}");
@@ -270,12 +277,31 @@ function CheckoutContent() {
         if (!currentUser.isOwner && currentUser.id) {
           userInfo.user_id = currentUser.id;
         }
+      } else {
+        // Fallback: try to get user info from auth data
+        const storedUser = currentUser || {};
+        if (storedUser.displayName) {
+          userInfo.user_name = storedUser.displayName;
+        } else if (storedUser.username) {
+          userInfo.user_name = storedUser.username;
+        }
       }
 
-      // Save transaction to database
+      const lineItems = items.map((item) => ({
+        product_id: item.product_id,
+        product_name: item.product_name,
+        quantity: item.quantity,
+        unit_price: item.unit_price,
+        total_price: item.total_price,
+        currency: item.currency,
+        unit_price_usd: item.unit_price_usd,
+        total_price_usd: item.total_price_usd,
+      }));
+
+      // Payload for POST /api/transactions (server field names).
       const transactionData: any = {
         transaction_number: txnNumber,
-        receipt_token: token,
+        receipt_token: receipt.token,
         subtotal: getSubtotal(),
         total_amount: total,
         amount_paid: totalPaid,
@@ -285,30 +311,18 @@ function CheckoutContent() {
         usd_total_amount: totalUsd,
         usd_amount_paid: paidUSD,
         usd_change_given: calcChangeUsd,
-        items: items.map((item) => ({
-          product_id: item.product_id,
-          product_name: item.product_name,
-          quantity: item.quantity,
-          unit_price: item.unit_price,
-          total_price: item.total_price,
-          currency: item.currency,
-          unit_price_usd: item.unit_price_usd,
-          total_price_usd: item.total_price_usd,
-        })),
+        items: lineItems,
         ...userInfo,
       };
 
-      // Build the offline queue payload up-front so we can fall back to it
-      // if the online save fails (e.g. navigator.onLine lies on desktop).
-      const { queueTransaction } = await import("@/lib/db/localDB");
+      // Payload for the local offline queue (Dexie field names).
       const authDataOffline = JSON.parse(localStorage.getItem("goldensquirrel_auth") || "{}");
-      // Ensure store_id is never empty - try multiple fallbacks
-      const offlineStoreId = authDataOffline.store_id || "";
+      const queuedId = crypto.randomUUID();
       const offlineTxnData: any = {
-        id: crypto.randomUUID(),
-        store_id: offlineStoreId,
+        id: queuedId,
+        store_id: authDataOffline.store_id || "",
         transaction_number: txnNumber,
-        receipt_token: token,
+        receipt_token: receipt.token,
         subtotal: getSubtotal(),
         total_amount: total,
         amount_paid: totalPaid,
@@ -318,102 +332,51 @@ function CheckoutContent() {
         total_usd: totalUsd,
         amount_paid_usd: paidUSD,
         change_given_usd: calcChangeUsd,
-        items: items.map((item) => ({
-          product_id: item.product_id,
-          product_name: item.product_name,
-          quantity: item.quantity,
-          unit_price: item.unit_price,
-          total_price: item.total_price,
-          currency: item.currency,
-          unit_price_usd: item.unit_price_usd,
-          total_price_usd: item.total_price_usd,
-        })),
+        items: lineItems,
         created_at: new Date().toISOString(),
+        ...userInfo,
       };
-      // Add user_name for ALL users (owners included) - always set independently of user_id
-      if (currentUser && currentUser.username) {
-        offlineTxnData.user_name = currentUser.displayName || currentUser.username;
-        // Only set user_id for employees (not owners, whose ID is a store_id)
-        if (!currentUser.isOwner && currentUser.id) {
-          offlineTxnData.user_id = currentUser.id;
-        }
-      } else {
-        // Fallback: try to get user info from auth data
-        try {
-          const storedUser = JSON.parse(localStorage.getItem("goldensquirrel_user") || "{}");
-          if (storedUser.displayName) {
-            offlineTxnData.user_name = storedUser.displayName;
-          } else if (storedUser.username) {
-            offlineTxnData.user_name = storedUser.username;
-          }
-        } catch (e) {
-          // Ignore parse errors
-        }
-      }
 
-      // NOTE: Stock decrements are now handled server-side in the /api/transactions
-      // POST route. No client-side stock decrement queuing is needed.
-      // This prevents double-decrementing for offline transactions.
+      // Make the sale durable BEFORE showing a receipt for it. IndexedDB
+      // write, single-digit ms. Everything slow happens after this point.
+      const wasOffline = !navigator.onLine;
+      await queueCompletedSale(offlineTxnData);
 
-      let savedOnline = false;
-      if (navigator.onLine) {
-        // Online: Save directly to Supabase
-        try {
-          const authData = JSON.parse(localStorage.getItem("goldensquirrel_auth") || "{}");
+      // NOTE: Stock decrements are handled server-side in the /api/transactions
+      // POST route; the local cache decrement rides along in the background
+      // push below. No client-side stock queuing — that double-decrements.
 
-          const response = await fetch("/api/transactions", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "x-auth-data": JSON.stringify({ store_id: authData.store_id }),
-            },
-            body: JSON.stringify(transactionData),
-          });
-
-          if (!response.ok) {
-            throw new Error("Failed to save transaction");
-          }
-          savedOnline = true;
-        } catch (error) {
-          // Fall back to offline queue so the transaction is NEVER lost.
-          console.error("Failed to save transaction online, queuing offline:", error);
-        }
-      }
-
-      if (!savedOnline) {
-        await queueTransaction(offlineTxnData);
+      // --- Receipt is on screen from here. ---
+      setTransactionNumber(txnNumber);
+      setReceiptToken(receipt.token);
+      setReceiptUrl(receipt.receiptUrl);
+      setQrDataUrl(receipt.qrDataUrl);
+      setPaidAmount(totalPaid);
+      setChangeGiven(calculatedChangeGiven);
+      setChangeUsd(calcChangeUsd);
+      setTransactionComplete(true);
+      toast.success("Payment processed successfully!");
+      if (wasOffline) {
         toast.info("Transaction saved offline - will sync when online");
       }
 
-      // Reflect stock decrement in local cache IMMEDIATELY.
-      // The server already decremented stock (or will when synced), but the
-      // local cache has a 5-minute freshness window that would otherwise
-      // show stale stock levels until the next sync.
-      try {
-        const { decrementCachedStock } = await import("@/lib/db/localDB");
-        await decrementCachedStock(
-          items.map((item) => ({ product_id: item.product_id, quantity: item.quantity }))
-        );
-      } catch (e) {
-        console.warn("[Checkout] Failed to update cached stock:", e);
-      }
-
-      // Transaction complete — just show receipt
-      setTransactionComplete(true);
-      toast.success("Payment processed successfully!");
-
-      // Generate QR code for the digital receipt (client-side, works offline)
-      try {
-        const url = `${window.location.origin}/receipt/${token}`;
-        const dataUrl = await QRCode.toDataURL(url, {
-          width: 256,
-          margin: 2,
-          errorCorrectionLevel: "M",
+      // Only reachable if the sale ended within ~30ms of the page mounting.
+      if (!receipt.qrDataUrl) {
+        void receipt.whenQrReady.then((dataUrl) => {
+          if (dataUrl) setQrDataUrl(dataUrl);
         });
-        setQrDataUrl(dataUrl);
-      } catch (qrError) {
-        console.error("Failed to generate QR code:", qrError);
       }
+
+      // Server write + local stock cache, off the critical path. On failure
+      // the queued row above stays put and the sync engine retries it.
+      pushSaleInBackground({
+        queuedId,
+        payload: transactionData,
+        stockDecrements: items.map((item) => ({
+          product_id: item.product_id,
+          quantity: item.quantity,
+        })),
+      });
     } catch (error) {
       console.error("Error processing payment:", error);
       toast.error("Failed to process payment");
