@@ -34,6 +34,7 @@ import {
    Upload,
    Star,
    Check,
+   CheckSquare,
    MoreHorizontal,
    WifiOff,
   } from "lucide-react";
@@ -47,14 +48,21 @@ import { formatLL, formatUSD, convertLlToUsdForSale, SELL_RATE, RETURN_RATE, con
 import dynamic from "next/dynamic";
 // See the POS page: the scanner drags in @zxing/library, so it is loaded on
 // demand and the beep comes from the standalone feedback module instead.
-import { playSuccessSound } from "@/lib/feedback";
+import { playSuccessSound, playErrorSound } from "@/lib/feedback";
 import { isDesktop } from "@/lib/device";
 import CSVImportDialog from "@/components/CSVImportDialog";
 import { getFrequentlyUsedProductIds, addFrequentlyUsedProduct, removeFrequentlyUsedProduct, isFrequentlyUsed, syncFavoritesFromSupabase } from "@/lib/frequentlyUsed";
 import { downloadCSV, productsToCSV } from "@/lib/csv/utils";
-import { FeatureFlagGuard } from "@/lib/auth/featureGuard";
+import { FeatureFlagGuard, useFeatureFlag } from "@/lib/auth/featureGuard";
 import { fetchProductsCacheFirst } from "@/lib/supabase/client";
 import { connectivity } from "@/lib/connectivity";
+import BulkPriceDialog from "@/components/pos/BulkPriceDialog";
+import {
+  chunkIds,
+  countRequests,
+  type BulkPlan,
+  type BulkTarget,
+} from "@/lib/products/bulkPricing";
 
 interface Product {
   id: string;
@@ -131,6 +139,22 @@ function StoreProductsPageContent() {
   // Import / export / refresh / sign out, kept out of the header.
   const [showMore, setShowMore] = useState(false);
 
+  // ---- Bulk select ----
+  // Selection is keyed by product id, never by list index: the list is
+  // virtualised and re-sorts on every search keystroke, so an index-keyed
+  // selection would silently point at different products.
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [showBulkScan, setShowBulkScan] = useState(false);
+  const [showBulkApply, setShowBulkApply] = useState(false);
+  const [bulkScanLog, setBulkScanLog] = useState<string[]>([]);
+  const [isApplyingBulk, setIsApplyingBulk] = useState(false);
+  const [bulkProgress, setBulkProgress] = useState<{ done: number; total: number } | null>(
+    null
+  );
+  // Store-level gate for the discount half of the bulk tool.
+  const discountEnabled = useFeatureFlag("product_discount");
+
   // Track online/offline status for UI (heartbeat-based)
   useEffect(() => {
     const unsubscribe = connectivity.subscribe((status) => {
@@ -157,10 +181,6 @@ function StoreProductsPageContent() {
   const [stockQuantity, setStockQuantity] = useState("");
   const [minStockThreshold, setMinStockThreshold] = useState("0");
 
-  // Product discount
-  const [discountEnabled, setDiscountEnabled] = useState(false);
-  const [discountPercent, setDiscountPercent] = useState("0");
-  
   // Product Variants
   const [variants, setVariants] = useState<Array<{ barcode: string; variantName: string }>>([]);
   
@@ -810,6 +830,41 @@ function StoreProductsPageContent() {
     return rows;
   }, [filteredProducts, stockFilter]);
 
+  // Everything currently on screen that can actually be repriced. Derived from
+  // `listRows`, so "Select all" honours the search box and the stock chips and
+  // never reaches past what the owner can see.
+  const visibleSelectableIds = useMemo(() => {
+    const ids: string[] = [];
+    for (const row of listRows) {
+      if (row.kind === "product" && !row.product._isVariant) ids.push(row.product.id);
+    }
+    return ids;
+  }, [listRows]);
+
+  // The selection as the planner sees it. Derived from `products` rather than
+  // captured when each row was ticked, so a refetch mid-selection can never
+  // apply a percentage against a stale cost price. Products deleted in the
+  // meantime drop out on their own.
+  const selectedTargets = useMemo<BulkTarget[]>(() => {
+    if (selectedIds.size === 0) return [];
+    return products
+      .filter((p) => selectedIds.has(p.id) && !p.parent_id)
+      .map((p) => ({
+        id: p.id,
+        name: p.name,
+        currency: p.currency || "LL",
+        cost_price: p.cost_price,
+        selling_price: p.selling_price,
+        discount_percentage: p.discount_percentage || 0,
+      }));
+  }, [products, selectedIds]);
+
+  const selectionCount = selectedTargets.length;
+
+  const allVisibleSelected =
+    visibleSelectableIds.length > 0 &&
+    visibleSelectableIds.every((id) => selectedIds.has(id));
+
   // Virtual scrolling setup for product list
   const parentRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
@@ -833,6 +888,206 @@ function StoreProductsPageContent() {
     setFreqVersion((v) => v + 1);
   };
 
+  const enterSelectMode = () => {
+    setSelectMode(true);
+    // Nothing from the single-product world should still be open behind the
+    // selection UI.
+    setOpenRowId(null);
+    setDetailProduct(null);
+  };
+
+  const exitSelectMode = () => {
+    setSelectMode(false);
+    setSelectedIds(new Set());
+    setBulkScanLog([]);
+  };
+
+  const toggleSelect = (productId: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(productId)) next.delete(productId);
+      else next.add(productId);
+      return next;
+    });
+  };
+
+  const toggleSelectAllVisible = () => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (allVisibleSelected) {
+        // Clear only what is on screen — a selection built by scanning must
+        // survive the owner tapping Clear while a filter is narrowing the list.
+        visibleSelectableIds.forEach((id) => next.delete(id));
+      } else {
+        visibleSelectableIds.forEach((id) => next.add(id));
+      }
+      return next;
+    });
+  };
+
+  /**
+   * Chain scanning: every scan ADDS to the selection, it never toggles.
+   *
+   * The scanner reports continuously with only a 500 ms dedup window
+   * (BarcodeScanner DEDUP_WINDOW_MS), so a barcode left sitting in frame fires
+   * repeatedly. A toggle would flicker that product in and out of the
+   * selection; an idempotent add just stays added.
+   */
+  const handleBulkScanSelect = (scannedBarcode: string) => {
+    const code = scannedBarcode.trim();
+    if (!code) return;
+
+    const hit = barcodeIndex.get(code);
+    if (!hit) {
+      playErrorSound();
+      toast.error("No product with that barcode", { key: "bulk-scan" });
+      return;
+    }
+
+    // A variant's barcode is an alias for its parent, and the parent is where
+    // the price lives — so scanning a variant selects the product that a
+    // reprice can actually act on.
+    const target = hit.parent_id
+      ? products.find((p) => p.id === hit.parent_id)
+      : hit;
+
+    if (!target) {
+      playErrorSound();
+      toast.error("That barcode belongs to a variant with no parent", {
+        key: "bulk-scan",
+      });
+      return;
+    }
+
+    if (selectedIds.has(target.id)) {
+      toast.info(`${target.name} is already selected`, { key: "bulk-scan" });
+      return;
+    }
+
+    playSuccessSound();
+    setSelectedIds((prev) => new Set(prev).add(target.id));
+    setBulkScanLog((prev) => [target.name, ...prev].slice(0, 5));
+    toast.success(`Added ${target.name}`, { key: "bulk-scan" });
+  };
+
+  /**
+   * Apply a bulk plan.
+   *
+   * Two things here are load-bearing and must not be simplified away:
+   *
+   *  - Profit is applied by writing `selling_price`, never `profit_percentage`.
+   *    `trigger_calculate_profit` (migration 005) recomputes the percentage from
+   *    cost and selling on every UPDATE, so writing the percentage is a no-op.
+   *  - The `.select()` reads back what the database actually stored, including
+   *    the trigger's recomputed percentage, so local state and the offline cache
+   *    are written from server truth rather than from an optimistic guess.
+   */
+  const handleBulkApply = async (plan: BulkPlan) => {
+    if (!storeId) {
+      toast.error("Store not found");
+      return;
+    }
+    if (!plan.valid || plan.changes.length === 0) return;
+
+    // The dialog hides the Discount chip when the store lacks the feature; this
+    // refuses the write as well. Same belt-and-braces as the POS cart-add check.
+    if (plan.mode === "discount" && !discountEnabled) {
+      toast.error("Discounts are not enabled for this store", { key: "bulk-apply" });
+      return;
+    }
+
+    setIsApplyingBulk(true);
+    setBulkProgress({ done: 0, total: countRequests(plan) });
+
+    type AppliedRow = {
+      id: string;
+      selling_price: number;
+      profit_percentage: number;
+      discount_percentage: number;
+    };
+    const applied: AppliedRow[] = [];
+    let failure: string | null = null;
+
+    try {
+      for (const batch of plan.batches) {
+        for (const chunk of chunkIds(batch.ids)) {
+          const { data, error } = await supabase
+            .from("products")
+            .update(batch.patch)
+            .in("id", chunk)
+            // The single-product edit path filters on id alone and leans
+            // entirely on RLS. Scoping the bulk write by store as well is a
+            // strengthening — do not drop it to make something work.
+            .eq("store_id", storeId)
+            .select("id, selling_price, profit_percentage, discount_percentage");
+
+          if (error) throw error;
+          if (data) applied.push(...(data as AppliedRow[]));
+          setBulkProgress((prev) => (prev ? { ...prev, done: prev.done + 1 } : prev));
+        }
+      }
+    } catch (error: unknown) {
+      console.error("[Products] Bulk apply failed:", error);
+      failure = error instanceof Error ? error.message : "Unknown error";
+    }
+
+    // Reconcile whatever did land, success or partial failure alike.
+    if (applied.length > 0) {
+      const byId = new Map(applied.map((row) => [row.id, row]));
+
+      setProducts((prev) =>
+        prev.map((p) => {
+          const row = byId.get(p.id);
+          if (!row) return p;
+          return {
+            ...p,
+            selling_price: Number(row.selling_price),
+            profit_percentage: Number(row.profit_percentage),
+            discount_percentage: Number(row.discount_percentage),
+          };
+        })
+      );
+
+      try {
+        const { localDB } = await import("@/lib/db/localDB");
+        await localDB.products_cache
+          .where("id")
+          .anyOf(applied.map((row) => row.id))
+          .modify((cached) => {
+            const row = byId.get(cached.id);
+            if (!row) return;
+            cached.selling_price = Number(row.selling_price);
+            cached.profit_percentage = Number(row.profit_percentage);
+            cached.discount_percentage = Number(row.discount_percentage);
+          });
+      } catch (cacheError) {
+        console.warn("[Products] Failed to update local cache after bulk apply:", cacheError);
+      }
+    }
+
+    setIsApplyingBulk(false);
+    setBulkProgress(null);
+
+    if (failure) {
+      toast.error(
+        `Updated ${applied.length} of ${plan.changes.length} — ${failure}`,
+        { key: "bulk-apply" }
+      );
+    } else {
+      toast.success(
+        `Updated ${applied.length} product${applied.length !== 1 ? "s" : ""}`,
+        { key: "bulk-apply" }
+      );
+      setShowBulkApply(false);
+      exitSelectMode();
+    }
+
+    // Invalidate cache freshness and force a network read, so the list shows
+    // what the server holds rather than what we hoped it would hold.
+    try { localStorage.removeItem('products_last_sync'); } catch {}
+    fetchProducts(storeId, true);
+  };
+
   const FILTERS: { key: StockFilter; label: string; count: number }[] = [
     { key: "all", label: "All", count: 0 },
     { key: "low", label: "Low", count: lowStockCount },
@@ -849,6 +1104,42 @@ function StoreProductsPageContent() {
     <div className="flex h-full flex-col overflow-hidden bg-background">
       {/* ---- Header ---- */}
       <header className="safe-top flex-shrink-0 px-4 pt-3">
+        {selectMode ? (
+          /*
+            The header becomes the selection bar rather than growing a third
+            row of controls — the count and the way out need to be the two
+            most obvious things on screen while a selection is being built.
+          */
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex min-w-0 items-center gap-2">
+              <button
+                type="button"
+                onClick={exitSelectMode}
+                aria-label="Exit selection"
+                className="tap -ml-2 flex h-9 w-9 flex-none items-center justify-center rounded-full text-muted-foreground"
+              >
+                <X className="h-5 w-5" />
+              </button>
+              <div className="min-w-0">
+                <h1 className="text-[22px] font-bold leading-none tnum">
+                  {selectionCount} selected
+                </h1>
+                <p className="mt-1.5 truncate text-xs text-muted-foreground">
+                  Tap rows, search, or scan to add
+                </p>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={toggleSelectAllVisible}
+              disabled={visibleSelectableIds.length === 0}
+              className="tap flex h-11 flex-none items-center rounded-2xl bg-muted/60 px-4 text-sm font-semibold disabled:opacity-40"
+            >
+              {allVisibleSelected ? "Clear" : "Select all"}
+            </button>
+          </div>
+        ) : (
         <div className="flex items-start justify-between gap-3">
           <div className="flex min-w-0 items-start gap-1">
             <button
@@ -891,6 +1182,7 @@ function StoreProductsPageContent() {
             </button>
           </div>
         </div>
+        )}
       </header>
 
       {/* ---- Search + scan ---- */}
@@ -914,11 +1206,30 @@ function StoreProductsPageContent() {
             </button>
           )}
         </div>
+        {/*
+          One scan button, two jobs. Out of select mode it finds a product; in
+          select mode it adds to the selection. A second scan button would only
+          make the owner choose between two things that both say "scan".
+        */}
         <button
           type="button"
-          onClick={() => setShowScanSearch(true)}
-          aria-label="Scan to find a product"
-          className="tap flex h-11 w-11 flex-none items-center justify-center rounded-xl border border-primary/40 text-primary"
+          onClick={() => {
+            if (selectMode) {
+              setBulkScanLog([]);
+              setShowBulkScan(true);
+            } else {
+              setShowScanSearch(true);
+            }
+          }}
+          aria-label={
+            selectMode ? "Scan to add products to the selection" : "Scan to find a product"
+          }
+          className={cn(
+            "tap flex h-11 w-11 flex-none items-center justify-center rounded-xl",
+            selectMode
+              ? "bg-primary text-primary-foreground"
+              : "border border-primary/40 text-primary"
+          )}
         >
           <Scan className="h-5 w-5" />
         </button>
@@ -1060,6 +1371,9 @@ function StoreProductsPageContent() {
                       onEdit={() => handleEditProduct(row.product)}
                       onDelete={() => handleDeleteProduct(row.product.id, row.product.name)}
                       onToggleFavourite={() => toggleFavourite(row.product)}
+                      selectMode={selectMode}
+                      isSelected={selectedIds.has(row.product.id)}
+                      onToggleSelect={() => toggleSelect(row.product.id)}
                     />
                   )}
                 </div>
@@ -1068,6 +1382,24 @@ function StoreProductsPageContent() {
           </div>
         )}
       </div>
+
+      {/* ---- Bulk action bar ---- */}
+      {selectMode && selectionCount > 0 && (
+        <div className="flex-shrink-0 border-t border-white/[0.06] bg-background px-4 py-3">
+          {isOffline ? (
+            <p className="text-center text-xs text-muted-foreground">
+              Bulk changes need a connection. Your selection is kept.
+            </p>
+          ) : (
+            <Button
+              className="h-12 w-full rounded-2xl text-[15px] font-bold"
+              onClick={() => setShowBulkApply(true)}
+            >
+              Apply to {selectionCount} product{selectionCount !== 1 ? "s" : ""}
+            </Button>
+          )}
+        </div>
+      )}
 
       {/* ---- Product detail ---- */}
       <Dialog
@@ -1199,6 +1531,17 @@ function StoreProductsPageContent() {
           </DialogHeader>
 
           <div className="space-y-1">
+            <button
+              type="button"
+              onClick={() => {
+                setShowMore(false);
+                enterSelectMode();
+              }}
+              className="tap flex w-full items-center gap-3 rounded-xl px-4 py-3 text-left text-[15px] font-semibold hover:bg-muted/50"
+            >
+              <CheckSquare className="h-4 w-4 text-muted-foreground" />
+              Select products
+            </button>
             <button
               type="button"
               onClick={() => {
@@ -1599,6 +1942,75 @@ function StoreProductsPageContent() {
             />
           </DialogContent>
         </Dialog>
+      )}
+
+      {/* ---- Scan to select ---- */}
+      {/*
+        Unlike the two scanners above, this one does NOT close on a hit.
+        BarcodeScanner reports continuously by design, so the owner can walk a
+        shelf and keep scanning; only Done closes it.
+      */}
+      {showBulkScan && (
+        <Dialog open={showBulkScan} onOpenChange={setShowBulkScan}>
+          <DialogContent className="max-w-lg">
+            <DialogHeader>
+              <DialogTitle>Scan to select</DialogTitle>
+              <DialogDescription>
+                Keep scanning — every product found is added to the selection.
+              </DialogDescription>
+            </DialogHeader>
+
+            <BarcodeScanner
+              onScan={handleBulkScanSelect}
+              onClose={() => setShowBulkScan(false)}
+              isActive={showBulkScan}
+              desktopMode={isDesktopMode}
+            />
+
+            <div className="rounded-2xl bg-muted/40 px-4 py-3">
+              <p className="text-sm font-semibold tnum">{selectionCount} selected</p>
+              {bulkScanLog.length > 0 ? (
+                <ul className="mt-2 space-y-1">
+                  {bulkScanLog.map((name, i) => (
+                    <li
+                      key={`${name}-${i}`}
+                      className="truncate text-xs text-muted-foreground"
+                    >
+                      {name}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Point at a barcode. The scanner stays open between scans.
+                </p>
+              )}
+            </div>
+
+            <Button
+              className="w-full rounded-2xl"
+              onClick={() => setShowBulkScan(false)}
+            >
+              Done
+            </Button>
+          </DialogContent>
+        </Dialog>
+      )}
+
+      {/* ---- Bulk profit / discount ---- */}
+      {/* Mounted only while open so the mode and the percentage reset every
+          time — reopening with the last number still in the box is how the
+          wrong percentage gets applied twice. */}
+      {showBulkApply && (
+        <BulkPriceDialog
+          open={showBulkApply}
+          onOpenChange={setShowBulkApply}
+          targets={selectedTargets}
+          isOffline={isOffline}
+          isApplying={isApplyingBulk}
+          progress={bulkProgress}
+          onApply={handleBulkApply}
+        />
       )}
 
       {/* ---- CSV import ---- */}

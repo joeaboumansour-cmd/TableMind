@@ -14,7 +14,7 @@
 // =============================================
 
 import React, { useCallback, useEffect, useRef } from "react";
-import { Edit, Star, Trash2 } from "lucide-react";
+import { Check, Edit, Star, Trash2 } from "lucide-react";
 import { formatLL, formatUSD, convertLlToUsdForReturn, convertUsdToLl } from "@/lib/utils/format";
 import { vibrate } from "@/lib/feedback";
 import { cn } from "@/lib/utils";
@@ -58,6 +58,13 @@ interface ProductRowProps {
   onEdit: () => void;
   onDelete: () => void;
   onToggleFavourite: () => void;
+  /**
+   * Bulk-select mode. The swipe gesture is off, the whole row toggles instead
+   * of opening, and the monogram becomes the tick.
+   */
+  selectMode?: boolean;
+  isSelected?: boolean;
+  onToggleSelect?: () => void;
 }
 
 /** Two-letter monogram, so a list of 2,500 rows still has something to scan by. */
@@ -97,7 +104,14 @@ function ProductRow({
   onEdit,
   onDelete,
   onToggleFavourite,
+  selectMode = false,
+  isSelected = false,
+  onToggleSelect,
 }: ProductRowProps) {
+  // Variants carry cost 0 / price 0 — they are barcode aliases of their parent,
+  // not independently priced items, so there is nothing for a bulk reprice to
+  // do to them. They stay visible but inert.
+  const selectable = !product._isVariant;
   const contentRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{
     x: number;
@@ -123,6 +137,9 @@ function ProductRow({
   }, [isOpen, translate]);
 
   const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    // No swiping while selecting: Edit and Delete must not sit one careless
+    // gesture away from a finger that is ticking its way down the list.
+    if (selectMode) return;
     if (e.pointerType === "mouse" && e.button !== 0) return;
     if (contentRef.current) contentRef.current.style.transition = "none";
     dragRef.current = {
@@ -183,6 +200,12 @@ function ProductRow({
 
   const handleClick = () => {
     if (suppressClickRef.current) return;
+    if (selectMode) {
+      if (!selectable) return;
+      vibrate(10);
+      onToggleSelect?.();
+      return;
+    }
     if (isOpen) {
       onOpenChange(false);
       return;
@@ -210,7 +233,9 @@ function ProductRow({
       id={`product-${product.id}`}
       className={cn(
         "relative overflow-hidden border-b border-white/[0.05] transition-colors duration-300",
-        isHighlighted && "bg-primary/15"
+        isHighlighted && "bg-primary/15",
+        selectMode && isSelected && "bg-primary/[0.08]",
+        selectMode && !selectable && "opacity-40"
       )}
     >
       {/* ---- Actions, revealed by the swipe ---- */}
@@ -268,10 +293,28 @@ function ProductRow({
         <button
           type="button"
           onClick={handleClick}
-          className="flex w-full items-center gap-3 px-4 py-3 text-left active:bg-muted/30"
+          disabled={selectMode && !selectable}
+          aria-pressed={selectMode ? isSelected : undefined}
+          className="flex w-full items-center gap-3 px-4 py-3 text-left active:bg-muted/30 disabled:pointer-events-none"
         >
-          <span className="flex h-10 w-10 flex-none items-center justify-center rounded-xl bg-muted/70 text-xs font-bold text-muted-foreground">
-            {initials(product._displayName)}
+          {/*
+            The monogram doubles as the tick. A separate checkbox column would
+            cost 40px of a 375px-wide row and push the price off the end.
+          */}
+          <span
+            className={cn(
+              "flex h-10 w-10 flex-none items-center justify-center rounded-xl transition-colors",
+              selectMode && isSelected
+                ? "bg-primary text-primary-foreground"
+                : "bg-muted/70 text-xs font-bold text-muted-foreground",
+              selectMode && !isSelected && selectable && "ring-1 ring-inset ring-white/15"
+            )}
+          >
+            {selectMode && isSelected ? (
+              <Check className="h-5 w-5" strokeWidth={3} />
+            ) : (
+              initials(product._displayName)
+            )}
           </span>
 
           <span className="min-w-0 flex-1">
