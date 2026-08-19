@@ -642,7 +642,7 @@ function BarcodeScanner({ onScan, onClose, isActive = true, desktopMode = false,
             <div className="flex gap-2 flex-shrink-0">
               <Input
                 ref={internalBarcodeInputRef}
-                placeholder="Scan barcode..."
+                placeholder="Scan barcode…   F3"
                 value={manualBarcode}
                 onChange={e => setManualBarcode(e.target.value)}
                 onKeyDown={e => e.key === "Enter" && handleManualSubmit(manualBarcode)}
