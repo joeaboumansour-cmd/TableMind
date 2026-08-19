@@ -29,7 +29,6 @@ const AXIS_LOCK_PX = 8;
 export interface InventoryProduct {
   id: string;
   store_id: string;
-  created_at: string;
   name: string;
   barcode: string | null;
   cost_price: number;

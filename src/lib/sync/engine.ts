@@ -4,14 +4,9 @@
 // and flushes queued transactions to Supabase
 // =============================================
 
+import { createClient } from "@/lib/supabase/client";
+import { refreshProductsIntoCache } from "@/lib/products/refresh";
 import {
-  createClient,
-  fetchAllProducts,
-  fetchAllProductIds,
-  getLastSyncKey,
-} from "@/lib/supabase/client";
-import {
-  cacheProducts,
   getQueuedTransactions,
   removeQueuedTransaction,
   getCachedProductsCount,
@@ -20,9 +15,8 @@ import {
   getPendingWritesByType,
   removePendingWrite,
   recordQueuedTransactionFailure,
-  reconcileProductsCache,
 } from "@/lib/db/localDB";
-import type { CachedProduct, QueuedTransaction, PendingWrite } from "@/lib/db/localDB";
+import type { QueuedTransaction, PendingWrite } from "@/lib/db/localDB";
 import { syncFavoritesFromSupabase, processPendingFavoriteWrites } from "@/lib/frequentlyUsed";
 import { connectivity } from "@/lib/connectivity";
 
@@ -32,60 +26,11 @@ type SyncListener = (status: SyncStatus, pendingCount?: number) => void;
 // Maximum retry attempts for pending writes before they are dropped
 const MAX_PENDING_WRITE_RETRIES = 5;
 
-export type ReconcileDecision =
-  | { reconcile: true }
-  | { reconcile: false; reason: string };
-
-/**
- * Decide whether it is SAFE to delete cached products that are absent from a
- * fetched "live" ID set.
- *
- * Extracted as a pure function because getting this wrong is expensive:
- * reconciliation deletes from the local cache, and the cache is what keeps
- * the POS selling with no internet. The previous implementation deleted on
- * the basis of an unpaginated query that PostgREST truncates at 1000 rows,
- * which wiped every product past that point on stores larger than the cap.
- *
- * The rule: deletion requires positive proof that the ID set is complete.
- * Anything less — an unknown live count, a failed fetch, or a count mismatch
- * suggesting truncation or a concurrent write — means skip and retry later.
- * Skipping is always safe (a stale extra product lingers one more cycle);
- * deleting on bad evidence is not.
- */
-export function evaluateReconcile(params: {
-  /** Products currently in the local cache for this store. */
-  cachedCount: number;
-  /** Server-side exact count, or null if it could not be determined. */
-  liveCount: number | null;
-  /** Number of IDs actually fetched, or null if the fetch failed. */
-  fetchedIdCount: number | null;
-}): ReconcileDecision {
-  const { cachedCount, liveCount, fetchedIdCount } = params;
-
-  if (liveCount === null) {
-    return { reconcile: false, reason: "live product count unavailable" };
-  }
-
-  // A deletion always leaves the cache holding MORE than the server does.
-  // If we're at or below the live count there is nothing stale to remove, so
-  // we can skip the full ID sweep entirely — this is the common case.
-  if (cachedCount <= liveCount) {
-    return { reconcile: false, reason: "cache is not ahead of server" };
-  }
-
-  if (fetchedIdCount === null) {
-    return { reconcile: false, reason: "product ID fetch failed" };
-  }
-
-  if (fetchedIdCount !== liveCount) {
-    return {
-      reconcile: false,
-      reason: `fetched ${fetchedIdCount} IDs but store reports ${liveCount} (truncated or changed mid-fetch)`,
-    };
-  }
-
-  return { reconcile: true };
-}
+// The reconcile-safety rule moved to @/lib/products/refresh alongside the code
+// that acts on it. Re-exported here because this is where it has always been
+// imported from, and it is still the clearest place to go looking for it.
+export { evaluateReconcile } from "@/lib/products/refresh";
+export type { ReconcileDecision } from "@/lib/products/refresh";
 
 class SyncEngine {
   private listeners: Set<SyncListener> = new Set();
@@ -211,12 +156,13 @@ class SyncEngine {
   }
 
   /**
-   * Pull latest products from Supabase into IndexedDB cache.
-   * Uses incremental sync: only fetches products updated since the last sync timestamp.
-   * On first sync (no timestamp), fetches all products.
-   * 
-   * CRITICAL FIX: After any pull, reconciles the cache against the live product ID set.
-   * This detects deletions — products removed in Supabase are removed from the cache.
+   * Refresh the local product cache from Supabase.
+   *
+   * The algorithm — incremental delta against the updated_at watermark, a
+   * completeness check against the server's row count, then a guarded
+   * reconcile for deletions — lives in @/lib/products/refresh. It used to live
+   * here AND in a second, subtly different copy behind the inventory screen's
+   * fetch; the two could run at once and only one of them paginated.
    */
   async pullProducts(): Promise<{
     success: boolean;
@@ -228,162 +174,11 @@ class SyncEngine {
     }
 
     try {
-      const supabase = createClient();
-      
-      // Check if we have a last sync timestamp for incremental sync
-      const lastSyncKey = getLastSyncKey(this.storeId);
-      const lastSync = typeof window !== "undefined" 
-        ? localStorage.getItem(lastSyncKey) || localStorage.getItem('products_last_sync')
-        : null;
-      
-      let products: any[];
-      // Authoritative server-side product count for this store. Used both by
-      // the completeness check below and by the reconcile guard further down,
-      // so we only pay for the COUNT query once per sync.
-      let liveCount: number | null = null;
-
-      if (lastSync) {
-        // Incremental: only fetch products updated since last sync
-        const sinceDate = new Date(parseInt(lastSync)).toISOString();
-        console.log(`[Sync] Incremental pull since ${sinceDate}`);
-        
-        // Use a single query with updated_at filter — no pagination needed for small deltas
-        const { data, error } = await supabase
-          .from("products")
-          .select("*")
-          .eq("store_id", this.storeId)
-          .gte("updated_at", sinceDate)
-          .order("name");
-
-        if (error) throw error;
-        products = data || [];
-        console.log(`[Sync] Incremental pull found ${products.length} changed products`);
-        
-        // CRITICAL FIX: Verify the cache is COMPLETE. Incremental sync only
-        // fetches changed products - if the cache is missing products from
-        // a previous partial fetch (or seed data), they'll never appear.
-        // Do a full fetch if the cache count is less than the store's total count.
-        try {
-          // Get total product count from Supabase
-          const { count: totalCount, error: countError } = await supabase
-            .from("products")
-            .select("id", { count: "exact", head: true })
-            .eq("store_id", this.storeId);
-
-          if (!countError && totalCount !== null) {
-            liveCount = totalCount;
-            // Get cached count
-            const cachedCount = await getCachedProductsCount(this.storeId);
-
-            if (cachedCount < totalCount) {
-              console.log(`[Sync] Cache has ${cachedCount} products but store has ${totalCount} total — doing full pull`);
-              // Full pull to get ALL products
-              products = await fetchAllProducts(supabase, this.storeId);
-              // Update the sync timestamp (fetchAllProducts already does this)
-              return { success: true, count: products?.length || 0 };
-            }
-          }
-        } catch (e) {
-          console.warn("[Sync] Cache completeness check failed (non-fatal):", e);
-        }
-      } else {
-        // Full pull: paginate through all products
-        products = await fetchAllProducts(supabase, this.storeId);
-      }
-
-      if (products && products.length > 0) {
-        // Map to cached product format
-        const cached: CachedProduct[] = products.map((p: any) => ({
-          id: p.id,
-          store_id: p.store_id,
-          name: p.name,
-          barcode: p.barcode,
-          cost_price: p.cost_price,
-          selling_price: p.selling_price,
-          currency: p.currency || "LL",
-          profit_percentage: p.profit_percentage,
-          discount_percentage: p.discount_percentage || 0,
-          stock_quantity: p.stock_quantity,
-          min_stock_threshold: p.min_stock_threshold,
-          parent_id: p.parent_id || null,
-          variant_name: p.variant_name || null,
-          updated_at: p.updated_at || new Date().toISOString(),
-        }));
-
-        await cacheProducts(cached);
-        console.log(`[Sync] Pulled ${cached.length} products to local cache`);
-      }
-
-      // Reconcile the cache against the live product set to detect deletions.
-      // On incremental sync we only fetched changed products, so a product
-      // deleted in Supabase would otherwise linger in the cache forever.
-      //
-      // CRITICAL: reconciliation DELETES from the local cache, so it must only
-      // ever run against a provably complete ID set. This block previously did
-      // an unbounded `.select("id")`, which PostgREST silently truncates at
-      // max-rows (1000). For any store with more products than that, reconcile
-      // deleted every product past row 1000, the completeness check above then
-      // re-pulled the whole catalog, and the next sync deleted them again —
-      // a permanent delete/refetch loop every 30s. Two guards prevent that now:
-      //   1. The ID fetch paginates (fetchAllProductIds).
-      //   2. We refuse to delete unless the fetched ID count matches the
-      //      server's exact COUNT. Incomplete evidence => no deletion.
-      try {
-        // Establish the authoritative live count if the incremental branch
-        // above didn't already (i.e. this was a full pull).
-        if (liveCount === null) {
-          const { count, error: countError } = await supabase
-            .from("products")
-            .select("id", { count: "exact", head: true })
-            .eq("store_id", this.storeId);
-          if (!countError && count !== null) liveCount = count;
-        }
-
-        const cachedCount = await getCachedProductsCount(this.storeId);
-
-        // Cheap pre-check: only pay for the full ID sweep when the cache is
-        // actually ahead of the server, i.e. something may have been deleted.
-        const preCheck = evaluateReconcile({
-          cachedCount,
-          liveCount,
-          fetchedIdCount: null,
-        });
-
-        if (!preCheck.reconcile && preCheck.reason === "cache is not ahead of server") {
-          // Nothing stale to remove — skip without fetching any IDs.
-        } else if (liveCount === null) {
-          console.warn(`[Sync] Skipping reconcile — ${preCheck.reconcile ? "" : preCheck.reason}`);
-        } else {
-          const liveIds = await fetchAllProductIds(supabase, this.storeId);
-          const decision = evaluateReconcile({
-            cachedCount,
-            liveCount,
-            fetchedIdCount: liveIds === null ? null : liveIds.length,
-          });
-
-          if (decision.reconcile && liveIds) {
-            const removed = await reconcileProductsCache(this.storeId, liveIds);
-            if (removed > 0) {
-              console.log(`[Sync] Reconcile removed ${removed} deleted products from cache`);
-            }
-          } else if (!decision.reconcile) {
-            console.warn(`[Sync] Skipping reconcile — ${decision.reason}`);
-          }
-        }
-      } catch (e) {
-        console.warn("[Sync] Cache reconciliation failed (non-fatal):", e);
-      }
-
-      // Update last sync timestamp (per-store key)
-      if (typeof window !== "undefined") {
-        try {
-          localStorage.setItem(lastSyncKey, Date.now().toString());
-          // Also update the global last sync for backward compatibility
-          localStorage.setItem('products_last_sync', Date.now().toString());
-        } catch {}
-      }
-
-      return { success: true, count: products?.length || 0 };
+      const result = await refreshProductsIntoCache(createClient(), this.storeId);
+      console.log(
+        `[Sync] ${result.mode} pull: ${result.count} written, ${result.removed} removed`
+      );
+      return { success: true, count: result.count };
     } catch (error: any) {
       console.error("[Sync] Failed to pull products:", error);
       return { success: false, count: 0, error: error.message };

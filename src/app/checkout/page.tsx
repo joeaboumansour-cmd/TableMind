@@ -36,6 +36,7 @@ import {
   Share2,
 } from "lucide-react";
 import { useCartStore } from "@/lib/stores/cartStore";
+import { useReloadGuard } from "@/lib/pwa/useReloadGuard";
 import { toast } from "@/lib/toast";
 import {
   formatLL,
@@ -91,6 +92,12 @@ function CheckoutContent() {
   const [receiptToken, setReceiptToken] = useState<string>("");
   const [receiptUrl, setReceiptUrl] = useState<string>("");
   const [qrDataUrl, setQrDataUrl] = useState<string>("");
+
+  // Nothing about this screen is ever a safe moment to apply an update: the
+  // cashier is either counting money into the keypad or reading back a receipt
+  // the customer is waiting for. Hold unconditionally; the hold releases when
+  // the screen unmounts.
+  useReloadGuard(true, "checkout");
   // Navigating away from a finished sale is not instant — /pos remounts the
   // catalogue and the scanner. Without a pending state the button looks dead
   // and invites a second tap.

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { createClient } from "@/lib/supabase/client";
@@ -54,8 +54,11 @@ import CSVImportDialog from "@/components/CSVImportDialog";
 import { getFrequentlyUsedProductIds, addFrequentlyUsedProduct, removeFrequentlyUsedProduct, isFrequentlyUsed, syncFavoritesFromSupabase } from "@/lib/frequentlyUsed";
 import { downloadCSV, productsToCSV } from "@/lib/csv/utils";
 import { FeatureFlagGuard, useFeatureFlag } from "@/lib/auth/featureGuard";
-import { fetchProductsCacheFirst } from "@/lib/supabase/client";
+import { refreshProductsIntoCache } from "@/lib/products/refresh";
+import { getCachedProductsSortedByName } from "@/lib/db/localDB";
+import type { CachedProduct } from "@/lib/db/localDB";
 import { connectivity } from "@/lib/connectivity";
+import { useReloadGuard } from "@/lib/pwa/useReloadGuard";
 import BulkPriceDialog from "@/components/pos/BulkPriceDialog";
 import {
   chunkIds,
@@ -76,7 +79,6 @@ interface Product {
   discount_percentage: number;
   stock_quantity: number;
   min_stock_threshold: number;
-  created_at: string;
   parent_id?: string | null;
   variant_name?: string | null;
 }
@@ -138,6 +140,17 @@ function StoreProductsPageContent() {
   const [detailProduct, setDetailProduct] = useState<InventoryProduct | null>(null);
   // Import / export / refresh / sign out, kept out of the header.
   const [showMore, setShowMore] = useState(false);
+  // True while a network refresh runs BEHIND an already-painted list. Distinct
+  // from isLoading, which means "there is nothing to show yet".
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  // Invalidates in-flight loads. Incremented on every new load and on unmount,
+  // so a slow fetch cannot write its result over a newer one - or into a page
+  // that has gone away.
+  const loadTokenRef = useRef(0);
+  /** Abandon every load currently in flight. */
+  const invalidateLoads = useCallback(() => {
+    loadTokenRef.current++;
+  }, []);
 
   // ---- Bulk select ----
   // Selection is keyed by product id, never by list index: the list is
@@ -154,6 +167,24 @@ function StoreProductsPageContent() {
   );
   // Store-level gate for the discount half of the bulk tool.
   const discountEnabled = useFeatureFlag("product_discount");
+
+  // A deployed update must not reload the page out from under a task in
+  // progress. Building a bulk selection is the case that actually broke: the
+  // cart is empty on this screen, so the update listener's cart check never
+  // protected it and a selection of 5 products vanished mid-edit.
+  useReloadGuard(
+    selectMode ||
+      isDialogOpen ||
+      showImportDialog ||
+      showBulkScan ||
+      showBulkApply ||
+      showBarcodeScanner ||
+      showScanSearch ||
+      detailProduct !== null ||
+      isSubmitting ||
+      isApplyingBulk,
+    "inventory-busy"
+  );
 
   // Track online/offline status for UI (heartbeat-based)
   useEffect(() => {
@@ -261,19 +292,18 @@ function StoreProductsPageContent() {
 
   // Load products when user is available
   useEffect(() => {
-    if (user) {
-      setStoreId(user.storeId);
-      // Force refresh on initial load to ensure ALL products are fetched
-      // (with pagination) — not just the cached subset. This is critical
-      // because the cache may only contain 1000 items while Supabase has 2276.
-      fetchProducts(user.storeId, true);
-      // Sync favorites from Supabase (merge remote stars into localStorage)
-      // then force re-render so star icons reflect the merged state
-      syncFavoritesFromSupabase(user.storeId).then(() => {
-        setFreqVersion(v => v + 1);
-      });
-    }
-  }, [user]);
+    if (!user) return;
+    setStoreId(user.storeId);
+    fetchProducts(user.storeId);
+    // Sync favorites from Supabase (merge remote stars into localStorage)
+    // then force re-render so star icons reflect the merged state
+    syncFavoritesFromSupabase(user.storeId).then(() => {
+      setFreqVersion(v => v + 1);
+    });
+    // Invalidate whatever is still in flight. Without this, a fetch that
+    // resolves after the user has left writes into an unmounted page.
+    return invalidateLoads;
+  }, [user, invalidateLoads]);
 
   // Helper: check if user auth exists in localStorage (works offline)
   function hasAuthInStorage(): boolean {
@@ -334,35 +364,97 @@ function StoreProductsPageContent() {
     return { valid: true };
   }, [barcode, barcodeIndex, editingProduct]);
 
-  const fetchProducts = async (storeId: string, forceRefresh = false) => {
+  /**
+   * Cached rows into the page's Product shape. The cache stores {currency} as a
+   * plain string; every price helper downstream expects the union.
+   */
+  const toProducts = (rows: CachedProduct[]): Product[] =>
+    rows.map((p) => ({
+      id: p.id,
+      store_id: p.store_id,
+      name: p.name,
+      barcode: p.barcode,
+      cost_price: p.cost_price,
+      selling_price: p.selling_price,
+      currency: p.currency === "USD" ? "USD" : "LL",
+      profit_percentage: p.profit_percentage,
+      discount_percentage: p.discount_percentage || 0,
+      stock_quantity: p.stock_quantity,
+      min_stock_threshold: p.min_stock_threshold,
+      parent_id: p.parent_id ?? null,
+      variant_name: p.variant_name ?? null,
+    }));
+
+  /**
+   * Load the product list: paint the cache, then refresh behind it.
+   *
+   * This screen used to await a full paginated pull of the whole catalogue
+   * before rendering anything — about 4 seconds of skeletons on a
+   * 2,300-product store, on every single entry. The cache is a complete
+   * mirror, so it is what the user sees within a frame of arriving, and the
+   * network refresh lands behind it.
+   *
+   * It is still genuinely fresh: every load hits Supabase. What changed is
+   * that it asks only for rows whose updated_at moved (see
+   * refreshProductsIntoCache) instead of re-downloading the whole catalogue.
+   */
+  const fetchProducts = async (storeId: string) => {
+    const token = ++loadTokenRef.current;
+    const isStale = () => token !== loadTokenRef.current;
+    let painted = false;
+
     try {
-      // Check if online before attempting the query (heartbeat-based)
-      if (!connectivity.isOnline) {
-        toast.error("No internet connection. Please connect to refresh products.");
+      const cached = await getCachedProductsSortedByName(storeId);
+      if (isStale()) return;
+      if (cached.length > 0) {
+        setProducts(toProducts(cached));
         setIsLoading(false);
+        painted = true;
+      }
+
+      // Offline is NOT an error on this screen — the cache above IS the
+      // product list, and an offline-first POS has to show it. This used to
+      // toast an error and render an empty page on a device holding a
+      // complete catalogue. Only say something when there is nothing to show.
+      if (connectivity.isOffline) {
+        if (!painted) {
+          toast.error("No internet connection. Please connect to load products.");
+        }
         return;
       }
 
-      // Cache-first: render instantly from IndexedDB, then refresh in background.
-      // When forceRefresh is true (after a write), bypass the freshness check
-      // so the UI always reflects the latest data from Supabase.
-      const data = await fetchProductsCacheFirst(supabase, storeId, (cached) => {
-        // onCacheHit: render stale cache immediately for instant perceived load
-        setProducts(cached as Product[]);
-        setIsLoading(false);
-      }, forceRefresh);
+      setIsRefreshing(true);
+      const result = await refreshProductsIntoCache(supabase, storeId);
+      if (isStale()) return;
 
-      setProducts(data || []);
+      // Nothing moved on the server: leave products alone. Replacing the array
+      // rebuilds every row object and forces the virtualiser to re-measure,
+      // which reads as the list jumping under a selection in progress.
+      if (result.changed || !painted) {
+        const fresh = await getCachedProductsSortedByName(storeId);
+        if (isStale()) return;
+        setProducts(toProducts(fresh));
+      }
     } catch (error: any) {
+      if (isStale()) return;
       console.error("Error fetching products:", error);
-      // Show a more helpful error message
-      if (error?.message?.includes("Failed to fetch") || error?.message?.includes("NetworkError")) {
+      if (painted) {
+        // A usable list is already on screen — a failed background refresh is
+        // not worth interrupting the user for.
+        console.warn("[Inventory] Background refresh failed; showing cached products");
+      } else if (
+        error?.message?.includes("Failed to fetch") ||
+        error?.message?.includes("NetworkError")
+      ) {
         toast.error("Network error. Please check your internet connection.");
       } else {
         toast.error("Failed to load products");
       }
     } finally {
-      setIsLoading(false);
+      if (!isStale()) {
+        setIsRefreshing(false);
+        setIsLoading(false);
+      }
     }
   };
 
@@ -496,10 +588,7 @@ function StoreProductsPageContent() {
         console.warn("[Products] Failed to update local cache after save:", cacheError);
       }
 
-      // Invalidate the cache freshness timestamp so the next fetch
-      // doesn't skip the network call, then force a fresh refresh.
-      try { localStorage.removeItem('products_last_sync'); } catch {}
-      fetchProducts(storeId, true);
+      fetchProducts(storeId);
     } catch (error: any) {
       console.error("Error saving product:", error);
       if (error.code === "23505") {
@@ -574,10 +663,7 @@ function StoreProductsPageContent() {
       }
 
       toast.success(`Product "${productName}" deleted`);
-      // Invalidate the cache freshness timestamp and force a fresh refresh
-      // so the deleted product disappears from the UI immediately.
-      try { localStorage.removeItem('products_last_sync'); } catch {}
-      fetchProducts(storeId, true);
+      fetchProducts(storeId);
     } catch (error: any) {
       console.error("Error deleting product:", error);
       toast.error(error?.message || "Failed to delete product");
@@ -1082,10 +1168,7 @@ function StoreProductsPageContent() {
       exitSelectMode();
     }
 
-    // Invalidate cache freshness and force a network read, so the list shows
-    // what the server holds rather than what we hoped it would hold.
-    try { localStorage.removeItem('products_last_sync'); } catch {}
-    fetchProducts(storeId, true);
+    fetchProducts(storeId);
   };
 
   const FILTERS: { key: StockFilter; label: string; count: number }[] = [
@@ -1155,6 +1238,7 @@ function StoreProductsPageContent() {
               <p className="mt-1.5 text-xs text-muted-foreground tnum">
                 {totalProducts} product{totalProducts !== 1 ? "s" : ""}
                 {needsRestockTotal > 0 && ` · ${needsRestockTotal} need restock`}
+                {isRefreshing && " · updating…"}
               </p>
             </div>
           </div>
@@ -1546,7 +1630,7 @@ function StoreProductsPageContent() {
               type="button"
               onClick={() => {
                 setShowMore(false);
-                fetchProducts(storeId, true);
+                fetchProducts(storeId);
               }}
               className="tap flex w-full items-center gap-3 rounded-xl px-4 py-3 text-left text-[15px] font-semibold hover:bg-muted/50"
             >
@@ -2019,10 +2103,7 @@ function StoreProductsPageContent() {
         onOpenChange={setShowImportDialog}
         storeId={storeId}
         onImportComplete={() => {
-          // Invalidate the cache freshness timestamp and force a fresh refresh
-          // so imported products appear immediately.
-          try { localStorage.removeItem('products_last_sync'); } catch {}
-          fetchProducts(storeId, true);
+          fetchProducts(storeId);
           setShowImportDialog(false);
         }}
       />

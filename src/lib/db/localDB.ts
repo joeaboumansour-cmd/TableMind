@@ -239,6 +239,25 @@ export async function getCachedProducts(storeId: string): Promise<CachedProduct[
 }
 
 /**
+ * Cached products for a store, ordered by name — the same order the server
+ * returns them in (`.order("name").order("id")`).
+ *
+ * getCachedProducts() above returns primary-key order, which is arbitrary to a
+ * reader. That is fine for a lookup and wrong for a first paint: the inventory
+ * list would render in one order and visibly reshuffle a moment later when the
+ * ordered server rows landed. Reads through the [store_id+name] compound index,
+ * so the ordering costs nothing extra.
+ */
+export async function getCachedProductsSortedByName(
+  storeId: string
+): Promise<CachedProduct[]> {
+  return db.products_cache
+    .where("[store_id+name]")
+    .between([storeId, Dexie.minKey], [storeId, Dexie.maxKey])
+    .toArray();
+}
+
+/**
  * Look up a cached product by barcode WITHIN a store.
  *
  * The store_id argument is required. Barcodes are not unique across stores,

@@ -67,6 +67,7 @@ import { usePreloadProducts } from "@/hooks/usePreloadProducts";
 import { isDesktop, isIOS, isAndroid } from "@/lib/device";
 import { getFrequentlyUsedProductIds, addFrequentlyUsedProduct, removeFrequentlyUsedProduct, isFrequentlyUsed } from "@/lib/frequentlyUsed";
 import { connectivity } from "@/lib/connectivity";
+import { useReloadGuard } from "@/lib/pwa/useReloadGuard";
 
 const supabase = createClient();
 
@@ -132,6 +133,20 @@ export default function POSPage() {
   const [completedChangeUsd, setCompletedChangeUsd] = useState(0);
   const [completedPaid, setCompletedPaid] = useState(0);
   const [completedPaidUsd, setCompletedPaidUsd] = useState(0);
+
+  // The cart check in PWAUpdateListener already covers a sale in progress. What
+  // it does not cover is the moment AFTER the cart is cleared but while the
+  // completion dialog is still on screen holding the receipt QR, or a confirm
+  // dialog awaiting an answer.
+  // (isScannerActive is deliberately NOT a hold: it is a persisted preference
+  // that defaults to on, so holding on it would defer updates forever.)
+  useReloadGuard(
+    isCompleteDialogOpen ||
+      isQuickEndDialogOpen ||
+      isQuickEndProcessing ||
+      isLogoutDialogOpen,
+    "pos-busy"
+  );
 
   // Token + QR image for the next sale are built ahead of time, so ending a
   // transaction costs zero QR work. See usePrimedReceipt.

@@ -1,14 +1,51 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { useAuth } from "@/lib/auth/AuthContext";
-import { getDefaultFeaturesForPreset, mergeFeaturesWithDefaults } from "@/lib/features";
+import { mergeFeaturesWithDefaults } from "@/lib/features";
 import { connectivity } from "@/lib/connectivity";
 
 interface FeatureFlagsState {
   flags: Record<string, boolean>;
   storeType: string;
   isLoading: boolean;
+}
+
+interface FeatureFlagsData {
+  flags: Record<string, boolean>;
+  storeType: string;
+}
+
+/**
+ * In-flight DB reads, keyed by store.
+ *
+ * Every component that calls useFeatureFlags() gets its own instance, and there
+ * are at least two live on the inventory route (BottomTabBar, plus the
+ * product_discount gate on the page itself). Each was issuing its own request
+ * to the same endpoint and resolving on its own tick, so the UI settled twice.
+ */
+const inFlightByStore = new Map<string, Promise<FeatureFlagsData | null>>();
+
+function sameFlags(a: Record<string, boolean>, b: Record<string, boolean>): boolean {
+  const keys = Object.keys(b);
+  if (Object.keys(a).length !== keys.length) return false;
+  return keys.every((k) => a[k] === b[k]);
+}
+
+/**
+ * The flags to assume before the database answers.
+ *
+ * MUST agree with what the API produces for a store that has never had its
+ * features set, which is `mergeFeaturesWithDefaults({})` — the route returns
+ * `data?.features || {}`. It used to use FEATURE_PRESETS.general instead, whose
+ * product_discount is false while FEATURES.product_discount.default is true.
+ * The two disagreed, so on those stores the flag flipped false → true a second
+ * or two after mount and a guarded subtree appeared underneath the user.
+ * FEATURE_PRESETS stays as it is: it is for provisioning a new store from the
+ * admin screen, not for guessing at an existing one.
+ */
+function optimisticDefaults(): Record<string, boolean> {
+  return mergeFeaturesWithDefaults({});
 }
 
 /**
@@ -39,7 +76,7 @@ export function useFeatureFlags(): {
   const storeId = user?.storeId;
 
   // Load from localStorage (offline-first)
-  const loadFromCache = useCallback(() => {
+  const loadFromCache = useCallback((): FeatureFlagsData | null => {
     if (!storeId) return null;
 
     try {
@@ -57,28 +94,38 @@ export function useFeatureFlags(): {
     return null;
   }, [storeId]);
 
-  // Load from database (online sync)
-  const loadFromDb = useCallback(async () => {
+  // Load from database (online sync), deduped across hook instances
+  const loadFromDb = useCallback(async (): Promise<FeatureFlagsData | null> => {
     if (!storeId || !connectivity.isOnline) return null;
 
-    try {
-      const response = await fetch(`/api/admin/stores/features?store_id=${storeId}`);
-      if (!response.ok) return null;
+    const existing = inFlightByStore.get(storeId);
+    if (existing) return existing;
 
-      const data = await response.json();
-      const flags = mergeFeaturesWithDefaults(data.features);
-      const storeType = data.store_type || "general";
+    const request = (async (): Promise<FeatureFlagsData | null> => {
+      try {
+        const response = await fetch(`/api/admin/stores/features?store_id=${storeId}`);
+        if (!response.ok) return null;
 
-      // Cache to localStorage
-      localStorage.setItem(
-        `store_features_${storeId}`,
-        JSON.stringify({ flags, storeType })
-      );
+        const data = await response.json();
+        const flags = mergeFeaturesWithDefaults(data.features);
+        const storeType = data.store_type || "general";
 
-      return { flags, storeType };
-    } catch {
-      return null;
-    }
+        // Cache to localStorage
+        localStorage.setItem(
+          `store_features_${storeId}`,
+          JSON.stringify({ flags, storeType })
+        );
+
+        return { flags, storeType };
+      } catch {
+        return null;
+      } finally {
+        inFlightByStore.delete(storeId);
+      }
+    })();
+
+    inFlightByStore.set(storeId, request);
+    return request;
   }, [storeId]);
 
   // Initialize
@@ -88,28 +135,33 @@ export function useFeatureFlags(): {
       return;
     }
 
-    // 1. Load from cache immediately
-    const cached = loadFromCache();
-    if (cached) {
-      const merged = mergeFeaturesWithDefaults(cached.flags);
-      setState({ flags: merged, storeType: cached.storeType, isLoading: false });
-    } else {
-      // 2. No cache — use preset defaults
-      const defaults = getDefaultFeaturesForPreset("general");
-      const merged = mergeFeaturesWithDefaults(defaults);
-      setState({ flags: merged, storeType: "general", isLoading: false });
-    }
+    let active = true;
 
-    // 3. Sync from database in background
+    // 1. Resolve something usable immediately — cache if we have one, otherwise
+    //    the same defaults the API would produce for an unconfigured store.
+    const cached = loadFromCache();
+    const initial: FeatureFlagsData = cached
+      ? { flags: mergeFeaturesWithDefaults(cached.flags), storeType: cached.storeType }
+      : { flags: optimisticDefaults(), storeType: "general" };
+    setState({ ...initial, isLoading: false });
+
+    // 2. Sync from database in background.
     loadFromDb().then((dbData) => {
-      if (dbData) {
-        setState((prev) => ({
-          ...prev,
-          flags: dbData.flags,
-          storeType: dbData.storeType,
-        }));
-      }
+      if (!active || !dbData) return;
+      setState((prev) => {
+        // Confirming what we already show costs a full re-render of everything
+        // downstream — including the tab bar, whose height feeds the inventory
+        // list's virtualiser. Only update when something actually differs.
+        if (prev.storeType === dbData.storeType && sameFlags(prev.flags, dbData.flags)) {
+          return prev;
+        }
+        return { ...prev, flags: dbData.flags, storeType: dbData.storeType };
+      });
     });
+
+    return () => {
+      active = false;
+    };
   }, [storeId, loadFromCache, loadFromDb]);
 
   const isEnabled = useCallback(
@@ -131,12 +183,15 @@ export function useFeatureFlags(): {
     }
   }, [loadFromDb]);
 
-  return {
-    isEnabled,
-    isDisabled,
-    flags: state.flags,
-    storeType: state.storeType,
-    isLoading: state.isLoading,
-    refresh,
-  };
+  return useMemo(
+    () => ({
+      isEnabled,
+      isDisabled,
+      flags: state.flags,
+      storeType: state.storeType,
+      isLoading: state.isLoading,
+      refresh,
+    }),
+    [isEnabled, isDisabled, state.flags, state.storeType, state.isLoading, refresh]
+  );
 }

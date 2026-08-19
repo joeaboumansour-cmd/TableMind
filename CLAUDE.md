@@ -80,6 +80,8 @@ The app must keep selling with no internet. This shapes almost every design deci
 >
 > Equally critical and easier to break by accident: **`extendDefaultRuntimeCaching: true` must stay set.** Supplying a custom `runtimeCaching` array *replaces* the 19 defaults unless it's on — including the `pages` rule that caches HTML navigations, which is the only thing letting the POS open cold with no internet (HTML is deliberately not precached).
 >
+> **A service-worker update reloads the page, so it must never land mid-task.** `src/components/PWAUpdateListener.tsx` applies an update on `controllerchange`, but only once nothing holds `src/lib/pwa/reloadGuard.ts`. Screens declare their own busy state with `useReloadGuard(active, reason)` — a non-empty cart alone is not enough, because every screen outside the POS has an empty cart by definition. If you build a screen where a reload would lose typed or selected state, add a hold.
+>
 > Both are asserted by `scripts/verify-sw.mjs`, which runs automatically as part of `npm run build`. **If that check fails, do not ship the worker** — `public/sw.js` is generated and gitignored, so nothing else will catch it. This exact bug has shipped twice.
 
 ### Storage layers
@@ -103,7 +105,7 @@ Every write path is retry-capped at 5 attempts. Queued **transactions** are the 
 
 Idempotency comes from a **`UNIQUE (store_id, transaction_number)`** constraint plus a `23505` duplicate-handling branch in `POST /api/transactions`. If you change how transaction numbers are generated, you break offline-safety.
 
-> **Never reconcile the product cache against an unpaginated query.** Supabase/PostgREST silently caps an unbounded `select` at 1000 rows. Feeding a truncated list to `reconcileProductsCache()` reads as "everything past row 1000 was deleted" and wipes it locally, which the next sync then re-pulls — a permanent delete/refetch loop. Use `fetchAllProductIds()` and the `evaluateReconcile()` guard in `src/lib/sync/engine.ts`: **deletion requires positive proof the ID set is complete.** Skipping is always safe; deleting on partial evidence is not.
+> **Never reconcile the product cache against an unpaginated query.** Supabase/PostgREST silently caps an unbounded `select` at 1000 rows. Feeding a truncated list to `reconcileProductsCache()` reads as "everything past row 1000 was deleted" and wipes it locally, which the next sync then re-pulls — a permanent delete/refetch loop. Use `fetchAllProductIds()` and the `evaluateReconcile()` guard in `src/lib/products/refresh.ts` (re-exported from `src/lib/sync/engine.ts`, where it used to live): **deletion requires positive proof the ID set is complete.** Skipping is always safe; deleting on partial evidence is not.
 
 Stock decrements are **server-side only** now. Do not re-add client-side stock queuing — that was removed deliberately to prevent double-decrements.
 
@@ -140,9 +142,10 @@ There are more mechanisms than there should be. Know which is authoritative:
 | Auth / current user | React Context `src/lib/auth/AuthContext.tsx` — **use `useAuth()`**, don't read localStorage directly |
 | Feature flags | `src/hooks/useFeatureFlags.ts` (localStorage-first, then background DB sync) |
 | Products / transactions offline | Dexie via `src/lib/db/localDB.ts` |
+| Pulling products from Supabase | `refreshProductsIntoCache()` in `src/lib/products/refresh.ts` — the only place that fetches products. Delta against an `updated_at` watermark, full pull when the cache is short, guarded reconcile for deletions, and one in-flight run per store. |
 | Connectivity + sync status | `connectivity` and `syncEngine` singletons |
 
-**TanStack Query is mounted in `src/app/providers.tsx` but never used** — zero `useQuery` calls. Don't assume it's the fetching convention; it isn't.
+**TanStack Query is not installed at all.** It was mounted in `src/app/providers.tsx` and never used, and was removed in the Aug 2026 cleanup — it is no longer in `package.json`. Data fetching is plain `fetch`/Supabase calls in `useEffect`. (`@tanstack/react-virtual` *is* installed and is used by the inventory list — different package.)
 
 Many components read localStorage directly instead of using `useAuth()`. That's the pattern being cleaned up, not the pattern to follow.
 
@@ -184,7 +187,7 @@ What this means for you:
 
 - `npm run typecheck` and `npm run lint` are the only automated gates. Run them.
 - Nothing will catch a regression for you. On money, offline sync, and auth, that raises the bar on care — reason through the change and say explicitly what you verified and how, per §11.
-- Prefer small reversible changes over clever ones, and keep pure logic in pure functions (e.g. `evaluateReconcile` in `src/lib/sync/engine.ts`) so it can be reasoned about directly.
+- Prefer small reversible changes over clever ones, and keep pure logic in pure functions (e.g. `evaluateReconcile` in `src/lib/products/refresh.ts`) so it can be reasoned about directly.
 
 If the suite is ever wanted back, it is in git history at commit `744ad0d`:
 

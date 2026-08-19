@@ -34,6 +34,7 @@ import { useFeatureFlags } from "@/hooks/useFeatureFlags";
 import { formatLL, formatUSD, formatDateTime } from "@/lib/utils/format";
 import { combineCurrencyTotals, computeExpectedDrawer, computeVariance } from "@/lib/cashShift";
 import { connectivity } from "@/lib/connectivity";
+import { useReloadGuard } from "@/lib/pwa/useReloadGuard";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 interface CashShift {
@@ -130,6 +131,18 @@ export function CashRegisterPage() {
   const [adjUsd, setAdjUsd] = useState("");
   const [adjReason, setAdjReason] = useState("");
   const [isAddingAdj, setIsAddingAdj] = useState(false);
+
+  // Counted-cash figures are typed in by hand and exist nowhere else until the
+  // dialog is submitted — a reload here loses a physical count.
+  useReloadGuard(
+    isOpenDialogOpen ||
+      isCloseDialogOpen ||
+      isAdjDialogOpen ||
+      isOpening ||
+      isClosing ||
+      isAddingAdj,
+    "cash-register-busy"
+  );
 
   // Compute expected totals
   const openingTotal = combineCurrencyTotals(shift?.opening_ll || 0, shift?.opening_usd || 0);
