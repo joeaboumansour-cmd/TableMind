@@ -20,6 +20,8 @@ import { useTransition } from "react";
 import { Loader2 } from "lucide-react";
 import { useAuth } from "@/lib/auth/AuthContext";
 import { cn } from "@/lib/utils";
+import { SyncIndicator } from "@/components/SyncIndicator";
+import LogoutButton from "./LogoutButton";
 import { isTabActive, type Tab } from "./tabs";
 
 export default function DesktopNav({ tabs }: { tabs: Tab[] }) {
@@ -79,11 +81,18 @@ export default function DesktopNav({ tabs }: { tabs: Tab[] }) {
         })}
       </ul>
 
-      {user ? (
-        <span className="ml-auto truncate pl-3 text-xs text-muted-foreground">
-          {user.displayName || user.username}
-        </span>
-      ) : null}
+      {/* Connection state and sign-out are the same question on every screen,
+          so they live here rather than being re-implemented per page. The POS
+          desktop header used to carry its own copies. */}
+      <div className="ml-auto flex items-center gap-2 pl-3">
+        <SyncIndicator />
+        {user ? (
+          <span className="max-w-[12rem] truncate text-xs text-muted-foreground">
+            {user.displayName || user.username}
+          </span>
+        ) : null}
+        <LogoutButton />
+      </div>
     </nav>
   );
 }

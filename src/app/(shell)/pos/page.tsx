@@ -20,12 +20,9 @@ import {
   Plus,
   Minus,
   CreditCard,
-  Banknote,
-  Package,
   LogOut,
   X,
   Squirrel,
-  History,
   Menu,
   Trash2,
   Check,
@@ -90,7 +87,7 @@ const FOCUS_SYNC_MIN_INTERVAL_MS = 60_000;
 
 export default function POSPage() {
   const router = useRouter();
-  const { user, logout: authLogout, canAccess, isLoading: authLoading } = useAuth();
+  const { user, logout: authLogout, isLoading: authLoading } = useAuth();
   const { isEnabled } = useFeatureFlags();
   const [isDesktopMode, setIsDesktopMode] = useState(false);
   const [isScannerActive, setIsScannerActive] = useState(() => {
@@ -110,12 +107,6 @@ export default function POSPage() {
   // O(1) barcode lookup — rebuilt whenever products change
   const [barcodeIndex, setBarcodeIndex] = useState<Map<string, Product>>(new Map());
   const barcodeIndexRef = useRef<Map<string, Product>>(new Map());
-  // Check user permissions for History button
-  const [canViewTransactions, setCanViewTransactions] = useState(false);
-  // Check user permissions for Cash Register button
-  const [canViewCash, setCanViewCash] = useState(false);
-  // Check user permissions for Inventory button
-  const [canViewInventory, setCanViewInventory] = useState(false);
   // Confirm before ending the session — see the header button.
   const [isLogoutDialogOpen, setIsLogoutDialogOpen] = useState(false);
   // Quick end transaction state
@@ -183,15 +174,6 @@ export default function POSPage() {
   const getTotalDiscount = useCartStore((s) => s.getTotalDiscount);
   const getTotalOriginal = useCartStore((s) => s.getTotalOriginal);
   const getRoundingAdjustment = useCartStore((s) => s.getRoundingAdjustment);
-
-  // Check user permissions on mount
-  useEffect(() => {
-    if (user) {
-      setCanViewTransactions(canAccess("transactions"));
-      setCanViewCash(canAccess("cash_register") && isEnabled("cash_register"));
-      setCanViewInventory(canAccess("inventory") && isEnabled("inventory"));
-    }
-  }, [user, canAccess, isEnabled]);
 
   // Unlock audio on the first user interaction. Browsers start an AudioContext
   // "suspended" until a real gesture, so without this the first scan of a
@@ -1293,65 +1275,10 @@ export default function POSPage() {
   // flow without the mouse.
   return (
     <div className="flex h-full flex-col overflow-hidden bg-background">
-      <header className="safe-top flex-shrink-0 border-b bg-background">
-        <div className="flex items-center justify-between px-5 py-3">
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary">
-              <Squirrel className="h-5 w-5 text-primary-foreground" />
-            </div>
-            <div>
-              <h1 className="text-lg font-bold leading-tight">GoldenSquirrel</h1>
-              <p className="text-xs text-muted-foreground">Point of Sale</p>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <SyncIndicator />
-            {canViewCash && (
-              <Button
-                variant="ghost"
-                size="sm"
-                className="rounded-xl"
-                onClick={() => router.push("/pos/cash")}
-              >
-                <Banknote className="h-4 w-4" />
-                Cash
-              </Button>
-            )}
-            {canViewTransactions && isEnabled("transactions") && (
-              <Button
-                variant="ghost"
-                size="sm"
-                className="rounded-xl"
-                onClick={() => router.push("/transactions")}
-              >
-                <History className="h-4 w-4" />
-                History
-              </Button>
-            )}
-            {canViewInventory && (
-              <Button
-                variant="ghost"
-                size="sm"
-                className="rounded-xl"
-                onClick={() => router.push("/pos/products")}
-              >
-                <Package className="h-4 w-4" />
-                Inventory
-              </Button>
-            )}
-            <Button
-              variant="ghost"
-              size="icon"
-              className="rounded-xl"
-              onClick={handleLogout}
-              aria-label="Log out"
-            >
-              <LogOut className="h-5 w-5" />
-            </Button>
-          </div>
-        </div>
-      </header>
+      {/* No page header here on purpose. Brand, section nav, connection
+          state and sign-out are all global and live in DesktopNav, rendered
+          by AppShell. A second bar repeating them cost ~64px of vertical
+          space, which is real estate a 1366x768 till cannot spare. */}
 
       <div className="flex flex-1 flex-col gap-4 overflow-hidden p-4">
         {/* ---- Search + primary actions ---- */}
