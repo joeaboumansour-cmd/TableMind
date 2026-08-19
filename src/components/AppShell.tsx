@@ -26,16 +26,24 @@
 // =============================================
 
 import BottomTabBar from "@/components/BottomTabBar";
+import DesktopNav from "@/components/nav/DesktopNav";
+import { useVisibleTabs } from "@/components/nav/tabs";
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
+  // Resolved ONCE here and handed to both bars. Two components each calling
+  // useFeatureFlags() would answer the same question on different ticks, which
+  // is the race described above.
+  const tabs = useVisibleTabs();
+
   return (
     // h-app, not h-dvh: the height comes from visualViewport via
     // ViewportHeightSync, which is the only measurement that stays correct
     // while Android's URL bar slides in and out. dvh remains the fallback
     // until that first measurement lands.
     <div className="flex h-app flex-col overflow-hidden">
+      <DesktopNav tabs={tabs} />
       <div className="min-h-0 flex-1 overflow-hidden">{children}</div>
-      <BottomTabBar />
+      <BottomTabBar tabs={tabs} />
     </div>
   );
 }

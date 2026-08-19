@@ -11,97 +11,32 @@
 // Rendered from the (shell) layout so it stays MOUNTED across navigations —
 // it does not flicker or rebuild when the route changes.
 //
-// Desktop keeps its existing header buttons; this is mobile-only (md:hidden).
+// Mobile only (md:hidden). The desktop counterpart is
+// src/components/nav/DesktopNav.tsx; AppShell renders both and decides which
+// is visible purely in CSS, so they can never appear at once.
+//
+// The tab list arrives as a prop. See src/components/nav/tabs.ts for why it
+// must be resolved once, by AppShell, rather than here.
 // =============================================
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useTransition } from "react";
-import { ScanLine, History, Package, Banknote, Loader2 } from "lucide-react";
-import { useAuth } from "@/lib/auth/AuthContext";
-import { useFeatureFlags } from "@/hooks/useFeatureFlags";
-import type { SectionKey } from "@/lib/auth/permissions";
+import { Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { vibrate } from "@/lib/feedback";
+import { isTabActive, type Tab } from "./nav/tabs";
 
-interface Tab {
-  href: string;
-  label: string;
-  icon: typeof ScanLine;
-  /** Permission required to see this tab. */
-  section: SectionKey;
-  /** Store feature flag required to see this tab, if any. */
-  feature?: string;
-  /** Sub-routes that should also light this tab up. */
-  matches?: (pathname: string) => boolean;
-}
-
-const TABS: Tab[] = [
-  {
-    href: "/pos",
-    label: "Sell",
-    icon: ScanLine,
-    section: "pos",
-    // /pos and /checkout — NOT /pos/products or /pos/cash, which are their own
-    // tabs. Checkout is the back half of the same sale, so leaving every tab
-    // unlit there would read as "you are nowhere".
-    matches: (p) => p === "/pos" || p.startsWith("/checkout"),
-  },
-  {
-    href: "/transactions",
-    label: "History",
-    icon: History,
-    section: "transactions",
-    feature: "transactions",
-    matches: (p) => p.startsWith("/transactions"),
-  },
-  {
-    href: "/pos/products",
-    label: "Inventory",
-    icon: Package,
-    section: "inventory",
-    feature: "inventory",
-    matches: (p) => p.startsWith("/pos/products"),
-  },
-  {
-    href: "/pos/cash",
-    label: "Cash",
-    icon: Banknote,
-    section: "cash_register",
-    feature: "cash_register",
-    matches: (p) => p.startsWith("/pos/cash"),
-  },
-];
-
-/**
- * Which tabs this user can actually see.
- *
- * Deliberately NOT exported. It was, so the shell could reserve room for a
- * fixed bar — but that meant two independent useFeatureFlags() instances
- * deciding the same question and resolving on different ticks. The bar is in
- * flow now, so this is the only place that needs the answer.
- */
-function useVisibleTabs(): Tab[] {
-  const { user, canAccess } = useAuth();
-  const { isEnabled } = useFeatureFlags();
-
-  if (!user) return [];
-  return TABS.filter(
-    (t) => canAccess(t.section) && (!t.feature || isEnabled(t.feature))
-  );
-}
-
-export default function BottomTabBar() {
+export default function BottomTabBar({ tabs }: { tabs: Tab[] }) {
   const pathname = usePathname();
   const router = useRouter();
-  const visible = useVisibleTabs();
   // Gives the tapped tab an immediate pending state. Navigations were
   // imperative router.push() calls with no feedback at all, so the screen just
   // froze on the old page until the next route painted.
   const [isPending, startTransition] = useTransition();
 
   // A single tab is not navigation.
-  if (visible.length < 2) return null;
+  if (tabs.length < 2) return null;
 
   return (
     <nav
@@ -125,8 +60,8 @@ export default function BottomTabBar() {
       )}
     >
       <ul className="flex items-stretch">
-        {visible.map((tab) => {
-          const active = tab.matches ? tab.matches(pathname) : pathname === tab.href;
+        {tabs.map((tab) => {
+          const active = isTabActive(tab, pathname);
           const Icon = tab.icon;
 
           return (
