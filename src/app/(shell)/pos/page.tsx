@@ -52,6 +52,7 @@ import { playSuccessSound, playErrorSound, playCompleteSound, primeFeedback } fr
 import ProductSearchBar from "@/components/ProductSearchBar";
 import { SyncIndicator } from "@/components/SyncIndicator";
 import CartQuantityInput from "@/components/pos/CartQuantityInput";
+import { useDialogArrowNav } from "@/hooks/useDialogArrowNav";
 import { syncEngine } from "@/lib/sync/engine";
 import {
   getCachedProducts,
@@ -139,6 +140,15 @@ export default function POSPage() {
       isLogoutDialogOpen,
     "pos-busy"
   );
+
+  // Any modal on screen owns the keyboard: the F-key shortcuts below go inert
+  // so F8 cannot navigate to checkout out from under a confirmation the
+  // cashier is still answering.
+  const isAnyDialogOpen =
+    isCompleteDialogOpen || isQuickEndDialogOpen || isLogoutDialogOpen;
+
+  // Arrow keys move across the "finish this sale?" actions; Enter confirms.
+  const quickEndActionsRef = useDialogArrowNav<HTMLDivElement>(isQuickEndDialogOpen);
 
   // Token + QR image for the next sale are built ahead of time, so ending a
   // transaction costs zero QR work. See usePrimedReceipt.
@@ -814,6 +824,7 @@ export default function POSPage() {
   // browser panes and F7 toggles caret browsing. F8 is unclaimed.
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (isAnyDialogOpen) return;
       if (e.key === "F2") {
         e.preventDefault();
         searchInputRef.current?.focus();
@@ -840,7 +851,7 @@ export default function POSPage() {
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isEmpty, isDesktopMode, toggleScanner, router]);
+  }, [isEmpty, isDesktopMode, toggleScanner, router, isAnyDialogOpen]);
 
   // Cleanup timeout on unmount
   useEffect(() => {
@@ -1016,7 +1027,7 @@ export default function POSPage() {
             <p className="text-sm text-muted-foreground tnum">{formatUSD(getTotalUsd())}</p>
           </div>
 
-          <DialogFooter className="flex gap-2 sm:justify-between">
+          <DialogFooter ref={quickEndActionsRef} className="flex gap-2 sm:justify-between">
             <Button
               variant="outline"
               className="h-12 flex-1 rounded-2xl"

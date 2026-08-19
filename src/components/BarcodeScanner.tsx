@@ -156,7 +156,22 @@ function BarcodeScanner({ onScan, onClose, isActive = true, desktopMode = false,
   const quaggaInitRef = useRef(false);
   const quaggaStreamRef = useRef<MediaStream | null>(null);
   const internalBarcodeInputRef = useRef<HTMLInputElement | null>(null);
-  const barcodeInputRef = internalBarcodeInputRef;
+
+  // The <input> needs BOTH refs. The external one is how the POS page drives
+  // F3 ("focus the barcode field"); it used to be destructured from props and
+  // then never attached, so the page's ref stayed null and F3 silently did
+  // nothing on the one layout it exists for.
+  const setBarcodeInputRef = useCallback(
+    (node: HTMLInputElement | null) => {
+      internalBarcodeInputRef.current = node;
+      if (typeof externalBarcodeInputRef === "function") {
+        externalBarcodeInputRef(node);
+      } else if (externalBarcodeInputRef) {
+        (externalBarcodeInputRef as React.MutableRefObject<HTMLInputElement | null>).current = node;
+      }
+    },
+    [externalBarcodeInputRef]
+  );
 
   // EVERY MediaStream this component has ever acquired, not just the current
   // one. streamRef alone was a camera leak: any code path that starts the
@@ -641,7 +656,7 @@ function BarcodeScanner({ onScan, onClose, isActive = true, desktopMode = false,
           <div className="p-2 dark:bg-zinc-900 flex flex-col gap-2 flex-1 overflow-hidden">
             <div className="flex gap-2 flex-shrink-0">
               <Input
-                ref={internalBarcodeInputRef}
+                ref={setBarcodeInputRef}
                 placeholder="Scan barcode…   F3"
                 value={manualBarcode}
                 onChange={e => setManualBarcode(e.target.value)}
