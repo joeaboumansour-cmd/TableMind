@@ -591,12 +591,20 @@ function CheckoutContent() {
         </div>
       </header>
 
+      {/* ---- Body ----
+           One column on a phone, exactly as before. From md up it becomes two:
+           what the cashier READS on the left, what they TOUCH on the right.
+           Stretched full width, the keypad's three columns were ~250px per key
+           on a 1366px till — a mouse target the size of a playing card, sitting
+           a screen away from the amount it was entering. */}
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden md:mx-auto md:w-full md:max-w-5xl md:flex-row md:gap-6 md:px-6 md:pb-4">
+
       {/* ---- Information column ----
            Everything above the keypad shares one shrinkable, scrollable
            region. On a normal phone nothing scrolls; on a very short one this
            gives way rather than crushing the keypad below a usable key size,
            which is the one thing on this screen that must stay thumb-sized. */}
-      <div className="no-scrollbar min-h-0 shrink overflow-y-auto">
+      <div className="no-scrollbar min-h-0 shrink overflow-y-auto md:min-w-0 md:flex-1 md:shrink">
       {/* ---- Amount due ---- */}
       <div className="px-5 pt-5">
         <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-muted-foreground">
@@ -774,7 +782,48 @@ function CheckoutContent() {
         </div>
       </div>
 
+      {/* ---- What is being paid for (desktop only) ----
+           On a phone this lives behind the "N items" button, because there is
+           no room for it beside the keypad. A desktop till has a whole empty
+           column next to the entry panel, and a cashier taking cash while the
+           customer watches should not have to open a dialog to answer "what am
+           I paying for?". Same data as the summary dialog. */}
+      <div className="hidden md:mt-4 md:block">
+        <div className="rounded-2xl border bg-card/40 p-4">
+          <div className="mb-3 flex items-baseline justify-between">
+            <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              In this sale
+            </h2>
+            <span className="text-xs text-muted-foreground tnum">
+              {items.length} item{items.length !== 1 ? "s" : ""}
+            </span>
+          </div>
+          <div className="no-scrollbar max-h-[34vh] space-y-2.5 overflow-y-auto">
+            {items.map((item) => (
+              <div key={item.product_id} className="flex justify-between gap-3 text-sm">
+                <span className="min-w-0 flex-1 truncate">
+                  <span className="font-medium">{item.product_name}</span>
+                  <span className="text-muted-foreground tnum"> × {item.quantity}</span>
+                </span>
+                <span className="flex-shrink-0 text-right">
+                  <span className="block font-semibold tnum">{formatLL(item.total_price)}</span>
+                  <span className="block text-xs text-muted-foreground tnum">
+                    {formatUSD(item.total_price_usd)}
+                  </span>
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
       </div>
+
+      </div>
+
+      {/* ---- Entry column ----
+           Keypad + confirm travel together: on desktop they are the whole
+           right-hand panel, at a width that keeps keys thumb-sized rather
+           than letting them sprawl. */}
+      <div className="flex min-h-0 flex-1 flex-col md:w-[380px] md:flex-none">
 
       {/* ---- Keypad ---- */}
       <div className="grid min-h-[212px] flex-1 shrink-0 grid-cols-3 auto-rows-fr gap-2 px-5 py-3">
@@ -821,6 +870,9 @@ function CheckoutContent() {
           )}
         </button>
       </div>
+
+      </div>{/* /entry column */}
+      </div>{/* /body */}
 
       {/* ---- Order summary ---- */}
       <Dialog open={showSummary} onOpenChange={setShowSummary}>
