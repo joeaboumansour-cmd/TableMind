@@ -5,7 +5,12 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Camera, X } from "lucide-react";
-import { BrowserMultiFormatReader } from "@zxing/library";
+// TYPE-ONLY on purpose. @zxing/library is ~420KB and is loaded on demand in
+// startCamera() below. Desktop tills run desktopMode (hardware scanner, no
+// camera) and return before that point, so they never download it at all —
+// which matters most on the Windows 7 machines the legacy build targets, where
+// parsing it cost seconds of main thread for a decoder that is never called.
+import type { BrowserMultiFormatReader } from "@zxing/library";
 
 // ============================================================
 // CONFIG
@@ -527,6 +532,12 @@ function BarcodeScanner({ onScan, onClose, isActive = true, desktopMode = false,
             supportsBarcodeDetector.current = true;
           } catch { supportsBarcodeDetector.current = false; }
         }
+
+        const { BrowserMultiFormatReader } = await import("@zxing/library");
+        // New await, so re-check the start token like every other suspension
+        // point in this function: a stop() during the chunk fetch must not
+        // leave a live camera behind.
+        if (isStale()) { stopAllStreams(); return; }
 
         const zxing = new BrowserMultiFormatReader();
         zxingReaderRef.current = zxing;

@@ -4,6 +4,7 @@ import "./globals.css";
 import { Providers } from "./providers";
 import PWAInstallPrompt from "@/components/PWAInstallPrompt";
 import PWAUpdateListener from "@/components/PWAUpdateListener";
+import BrowserGate from "@/components/BrowserGate";
 
 export const viewport: Viewport = {
   // The EXACT hex of --background (oklch(0.141 0.005 285.823)), so the Android
@@ -85,6 +86,9 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased dark`}
       >
+        {/* Must stay the first thing in the body: it decides whether this
+            browser can render the app at all, before React hydrates. */}
+        <BrowserGate />
         <Providers>
           {children}
           <PWAInstallPrompt />

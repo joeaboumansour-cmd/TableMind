@@ -46,71 +46,174 @@
 
 :root {
   --radius: 0.625rem;
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.141 0.005 285.823);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.141 0.005 285.823);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.141 0.005 285.823);
-  --primary: oklch(0.75 0.15 85);
-  --primary-foreground: oklch(0.2 0.02 285);
-  --secondary: oklch(0.967 0.001 286.375);
-  --secondary-foreground: oklch(0.21 0.006 285.885);
-  --muted: oklch(0.967 0.001 286.375);
-  --muted-foreground: oklch(0.552 0.016 285.938);
-  --accent: oklch(0.85 0.12 85);
-  --accent-foreground: oklch(0.2 0.02 285);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.92 0.004 286.32);
-  --input: oklch(0.92 0.004 286.32);
-  --ring: oklch(0.75 0.15 85);
-  --chart-1: oklch(0.75 0.15 85);
-  --chart-2: oklch(0.65 0.12 75);
-  --chart-3: oklch(0.85 0.1 90);
-  --chart-4: oklch(0.55 0.18 70);
-  --chart-5: oklch(0.95 0.08 95);
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.141 0.005 285.823);
-  --sidebar-primary: oklch(0.75 0.15 85);
-  --sidebar-primary-foreground: oklch(0.2 0.02 285);
-  --sidebar-accent: oklch(0.967 0.001 286.375);
-  --sidebar-accent-foreground: oklch(0.21 0.006 285.885);
-  --sidebar-border: oklch(0.92 0.004 286.32);
-  --sidebar-ring: oklch(0.75 0.15 85);
+  --background: #ffffff;
+  --foreground: #09090b;
+  --card: #ffffff;
+  --card-foreground: #09090b;
+  --popover: #ffffff;
+  --popover-foreground: #09090b;
+  --primary: #d9a514;
+  --primary-foreground: #15151f;
+  --secondary: #f4f4f5;
+  --secondary-foreground: #18181b;
+  --muted: #f4f4f5;
+  --muted-foreground: #71717b;
+  --accent: #f2c86c;
+  --accent-foreground: #15151f;
+  --destructive: #e7000b;
+  --border: #e4e4e7;
+  --input: #e4e4e7;
+  --ring: #d9a514;
+  --chart-1: #d9a514;
+  --chart-2: #b9832c;
+  --chart-3: #e7cb80;
+  --chart-4: #b15600;
+  --chart-5: #ffefb1;
+  --sidebar: #fafafa;
+  --sidebar-foreground: #09090b;
+  --sidebar-primary: #d9a514;
+  --sidebar-primary-foreground: #15151f;
+  --sidebar-accent: #f4f4f5;
+  --sidebar-accent-foreground: #18181b;
+  --sidebar-border: #e4e4e7;
+  --sidebar-ring: #d9a514;
+
+  /* sRGB channel companions. color-mix() cannot be resolved at build time
+     when an argument is a var(), so the Chrome <111 fallbacks below are
+     written as rgb(<channels> / <alpha>). Mirror any change to the hex above. */
+  --primary-rgb: 217 165 20;
+  --card-rgb: 255 255 255;
+  --muted-foreground-rgb: 113 113 123;
 }
 
 .dark {
-  --background: oklch(0.141 0.005 285.823);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.21 0.006 285.885);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.21 0.006 285.885);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.75 0.15 85);
-  --primary-foreground: oklch(0.2 0.02 285);
-  --secondary: oklch(0.274 0.006 286.033);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.274 0.006 286.033);
-  --muted-foreground: oklch(0.705 0.015 286.067);
-  --accent: oklch(0.65 0.12 75);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.75 0.15 85);
-  --chart-1: oklch(0.75 0.15 85);
-  --chart-2: oklch(0.65 0.12 75);
-  --chart-3: oklch(0.85 0.1 90);
-  --chart-4: oklch(0.55 0.18 70);
-  --chart-5: oklch(0.95 0.08 95);
-  --sidebar: oklch(0.21 0.006 285.885);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.75 0.15 85);
-  --sidebar-primary-foreground: oklch(0.2 0.02 285);
-  --sidebar-accent: oklch(0.274 0.006 286.033);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.75 0.15 85);
+  --background: #09090b;
+  --foreground: #fafafa;
+  --card: #18181b;
+  --card-foreground: #fafafa;
+  --popover: #18181b;
+  --popover-foreground: #fafafa;
+  --primary: #d9a514;
+  --primary-foreground: #15151f;
+  --secondary: #27272a;
+  --secondary-foreground: #fafafa;
+  --muted: #27272a;
+  --muted-foreground: #9f9fa9;
+  --accent: #b9832c;
+  --accent-foreground: #fafafa;
+  --destructive: #ff6467;
+  --border: rgba(255, 255, 255, 0.1);
+  --input: rgba(255, 255, 255, 0.15);
+  --ring: #d9a514;
+  --chart-1: #d9a514;
+  --chart-2: #b9832c;
+  --chart-3: #e7cb80;
+  --chart-4: #b15600;
+  --chart-5: #ffefb1;
+  --sidebar: #18181b;
+  --sidebar-foreground: #fafafa;
+  --sidebar-primary: #d9a514;
+  --sidebar-primary-foreground: #15151f;
+  --sidebar-accent: #27272a;
+  --sidebar-accent-foreground: #fafafa;
+  --sidebar-border: rgba(255, 255, 255, 0.1);
+  --sidebar-ring: #d9a514;
+
+  /* sRGB channel companions. color-mix() cannot be resolved at build time
+     when an argument is a var(), so the Chrome <111 fallbacks below are
+     written as rgb(<channels> / <alpha>). Mirror any change to the hex above. */
+  --primary-rgb: 217 165 20;
+  --card-rgb: 24 24 27;
+  --muted-foreground-rgb: 159 159 169;
+}
+
+/* ---------------------------------------------------------------------------
+   Wide-gamut upgrade layer.
+
+   The token blocks above are sRGB hex/rgba on purpose: they are the ONLY
+   values Chrome <111 can parse. An unregistered custom property will happily
+   STORE `oklch(...)`, but the moment it is substituted into `color:` or
+   `background-color:` the declaration is invalid at computed-value time and
+   falls back to `unset` — inherited black text, transparent backgrounds, no
+   borders. That is the entire 'black and white on Windows 7' bug, and Chrome
+   109 is the newest Chrome those machines can ever run.
+
+   So sRGB is the floor, and browsers that understand oklch re-declare the same
+   tokens in wide gamut here. Keep the two lists in sync: any token added above
+   without a partner here silently loses its P3 rendering, and any token added
+   ONLY here is invisible to every Windows 7 client.
+
+   `npm run verify:legacy-css` fails the build if oklch/color-mix ever escapes
+   an @supports guard. See CLAUDE.md and scripts/verify-legacy-css.mjs.
+   --------------------------------------------------------------------------- */
+@supports (color: oklch(0 0 0)) {
+  :root {
+    --background: oklch(1 0 0);
+    --foreground: oklch(0.141 0.005 285.823);
+    --card: oklch(1 0 0);
+    --card-foreground: oklch(0.141 0.005 285.823);
+    --popover: oklch(1 0 0);
+    --popover-foreground: oklch(0.141 0.005 285.823);
+    --primary: oklch(0.75 0.15 85);
+    --primary-foreground: oklch(0.2 0.02 285);
+    --secondary: oklch(0.967 0.001 286.375);
+    --secondary-foreground: oklch(0.21 0.006 285.885);
+    --muted: oklch(0.967 0.001 286.375);
+    --muted-foreground: oklch(0.552 0.016 285.938);
+    --accent: oklch(0.85 0.12 85);
+    --accent-foreground: oklch(0.2 0.02 285);
+    --destructive: oklch(0.577 0.245 27.325);
+    --border: oklch(0.92 0.004 286.32);
+    --input: oklch(0.92 0.004 286.32);
+    --ring: oklch(0.75 0.15 85);
+    --chart-1: oklch(0.75 0.15 85);
+    --chart-2: oklch(0.65 0.12 75);
+    --chart-3: oklch(0.85 0.1 90);
+    --chart-4: oklch(0.55 0.18 70);
+    --chart-5: oklch(0.95 0.08 95);
+    --sidebar: oklch(0.985 0 0);
+    --sidebar-foreground: oklch(0.141 0.005 285.823);
+    --sidebar-primary: oklch(0.75 0.15 85);
+    --sidebar-primary-foreground: oklch(0.2 0.02 285);
+    --sidebar-accent: oklch(0.967 0.001 286.375);
+    --sidebar-accent-foreground: oklch(0.21 0.006 285.885);
+    --sidebar-border: oklch(0.92 0.004 286.32);
+    --sidebar-ring: oklch(0.75 0.15 85);
+  }
+
+  .dark {
+    --background: oklch(0.141 0.005 285.823);
+    --foreground: oklch(0.985 0 0);
+    --card: oklch(0.21 0.006 285.885);
+    --card-foreground: oklch(0.985 0 0);
+    --popover: oklch(0.21 0.006 285.885);
+    --popover-foreground: oklch(0.985 0 0);
+    --primary: oklch(0.75 0.15 85);
+    --primary-foreground: oklch(0.2 0.02 285);
+    --secondary: oklch(0.274 0.006 286.033);
+    --secondary-foreground: oklch(0.985 0 0);
+    --muted: oklch(0.274 0.006 286.033);
+    --muted-foreground: oklch(0.705 0.015 286.067);
+    --accent: oklch(0.65 0.12 75);
+    --accent-foreground: oklch(0.985 0 0);
+    --destructive: oklch(0.704 0.191 22.216);
+    --border: oklch(1 0 0 / 10%);
+    --input: oklch(1 0 0 / 15%);
+    --ring: oklch(0.75 0.15 85);
+    --chart-1: oklch(0.75 0.15 85);
+    --chart-2: oklch(0.65 0.12 75);
+    --chart-3: oklch(0.85 0.1 90);
+    --chart-4: oklch(0.55 0.18 70);
+    --chart-5: oklch(0.95 0.08 95);
+    --sidebar: oklch(0.21 0.006 285.885);
+    --sidebar-foreground: oklch(0.985 0 0);
+    --sidebar-primary: oklch(0.75 0.15 85);
+    --sidebar-primary-foreground: oklch(0.2 0.02 285);
+    --sidebar-accent: oklch(0.274 0.006 286.033);
+    --sidebar-accent-foreground: oklch(0.985 0 0);
+    --sidebar-border: oklch(1 0 0 / 10%);
+    --sidebar-ring: oklch(0.75 0.15 85);
+  }
 }
 
 @layer base {
@@ -298,6 +401,7 @@ html {
 
 @keyframes pulse-success {
   0% {
+    box-shadow: 0 0 0 0 rgb(var(--primary-rgb) / 60%);
     box-shadow: 0 0 0 0 color-mix(in oklch, var(--primary) 60%, transparent);
   }
   100% {
@@ -384,6 +488,7 @@ html {
    backdrop-filter, and an unreadable header over a bright shelf is worse
    than a slightly heavier one. */
 .glass {
+  background-color: rgb(var(--card-rgb) / 88%);
   background-color: color-mix(in oklch, var(--card) 88%, transparent);
   backdrop-filter: blur(20px) saturate(150%);
   -webkit-backdrop-filter: blur(20px) saturate(150%);
@@ -391,6 +496,7 @@ html {
 
 @supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
   .glass {
+    background-color: rgb(var(--card-rgb) / 72%);
     background-color: color-mix(in oklch, var(--card) 72%, transparent);
   }
 }
@@ -433,6 +539,7 @@ html {
 }
 
 .skeleton {
+  background-color: rgb(var(--muted-foreground-rgb) / 22%);
   background-color: color-mix(in oklch, var(--muted-foreground) 22%, transparent);
   border-radius: 8px;
   animation: skeleton-pulse 1.4s ease-in-out infinite;
@@ -494,4 +601,29 @@ html {
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
+}
+
+/* ---------------------------------------------------------------------------
+   Legacy hardware switches.
+
+   `.legacy` is put on <html> by src/components/BrowserGate.tsx when the browser
+   cannot parse oklch(). In practice that means a Windows 7 till: Chrome 109 is
+   the newest Chrome those machines can run, and the hardware under it is a
+   decade old. These rules drop effects whose cost is real and whose benefit is
+   decorative. Colour is NOT touched here — the sRGB token fallbacks above
+   already handle that.
+   --------------------------------------------------------------------------- */
+.legacy .glass {
+  /* Blur + saturate over a live camera feed is the single most expensive
+     thing this UI asks of a GPU. The solid background-color fallback that
+     .glass already declares is perfectly readable without it. */
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+/* Purely decorative loops. Left running they repaint forever on a machine that
+   has better things to do; nothing waits on their animationend. */
+.legacy .skeleton,
+.legacy .animate-pulse-success {
+  animation: none;
 }
