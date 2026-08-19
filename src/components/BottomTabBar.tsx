@@ -115,10 +115,13 @@ export default function BottomTabBar() {
         //
         // z-40 is deliberately BELOW the z-50 used by dialogs, because a modal
         // SHOULD cover navigation, and above ambient floating UI at z-30.
-        "md:hidden relative z-40 flex-shrink-0 border-t border-white/[0.07] bg-card",
-        // Clears the iOS home indicator; the page paints under it because
-        // layout.tsx sets viewportFit: 'cover'.
-        "safe-bottom"
+        "md:hidden relative z-40 flex-shrink-0",
+        // A hairline and the page's own background, not a raised card: the bar
+        // should read as the edge of the screen, not a slab sitting on it.
+        "border-t border-white/[0.06] bg-background",
+        // Bottom inset that adapts per device — ~34px of home indicator on
+        // iOS, a 6px breathing gap on Android where the inset is 0.
+        "tab-bar-inset"
       )}
     >
       <ul className="flex items-stretch">
@@ -140,28 +143,28 @@ export default function BottomTabBar() {
                 }}
                 aria-current={active ? "page" : undefined}
                 className={cn(
-                  // 56px min target — comfortably above the 44px guideline,
-                  // and reachable one-handed.
-                  "tap flex flex-col items-center justify-center gap-1 min-h-14 py-2 px-1",
-                  active
-                    ? "text-primary"
-                    : "text-muted-foreground hover:text-foreground"
+                  // 48px row. With the device inset below it the whole bar
+                  // lands at ~82px on iOS — the same weight as a native tab
+                  // bar — instead of the 90px slab it had grown into.
+                  "tap flex min-h-12 flex-col items-center justify-center gap-1 px-1 py-1.5",
+                  active ? "text-primary" : "text-muted-foreground hover:text-foreground"
                 )}
               >
                 {isPending && !active ? (
-                  <Loader2 className="h-[22px] w-[22px] animate-spin" aria-hidden />
+                  <Loader2 className="h-[19px] w-[19px] animate-spin" aria-hidden />
                 ) : (
+                  // Weight, not scale, carries the active state — a thicker
+                  // stroke reads as deliberate where a 10% bump reads as a
+                  // rendering wobble.
                   <Icon
-                    className={cn(
-                      "h-[22px] w-[22px] transition-transform",
-                      active && "scale-110"
-                    )}
+                    className="h-[19px] w-[19px]"
+                    strokeWidth={active ? 2.4 : 1.8}
                     aria-hidden
                   />
                 )}
                 <span
                   className={cn(
-                    "text-[11px] leading-none",
+                    "text-[10px] leading-none tracking-tight",
                     active ? "font-semibold" : "font-medium"
                   )}
                 >

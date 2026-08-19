@@ -23,7 +23,6 @@ import {
   Banknote,
   Package,
   LogOut,
-  Scan,
   X,
   Squirrel,
   History,
@@ -34,7 +33,6 @@ import {
   Copy,
   Share2,
   Printer,
-  Power,
   ScanLine,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -113,6 +111,8 @@ export default function POSPage() {
   const [canViewCash, setCanViewCash] = useState(false);
   // Check user permissions for Inventory button
   const [canViewInventory, setCanViewInventory] = useState(false);
+  // Confirm before ending the session — see the header button.
+  const [isLogoutDialogOpen, setIsLogoutDialogOpen] = useState(false);
   // Quick end transaction state
   const [isQuickEndDialogOpen, setIsQuickEndDialogOpen] = useState(false);
   const [isQuickEndProcessing, setIsQuickEndProcessing] = useState(false);
@@ -967,6 +967,54 @@ export default function POSPage() {
   // dialogs (and drop their open/close animation) on every cart change.
   const dialogs = (
     <>
+      {/* ---- Confirm sign out ---- */}
+      <Dialog open={isLogoutDialogOpen} onOpenChange={setIsLogoutDialogOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Log out?</DialogTitle>
+            <DialogDescription>
+              You&rsquo;ll need your username and password to get back in.
+            </DialogDescription>
+          </DialogHeader>
+
+          {/* An open cart is the reason this needs a confirm at all — it
+              survives the logout, but the cashier should know that before
+              they hand the till over. */}
+          {!isEmpty() && (
+            <div className="rounded-2xl bg-muted/50 px-4 py-3 text-sm">
+              <p className="font-semibold">
+                {getItemCount()} item{getItemCount() !== 1 ? "s" : ""} still in the cart
+              </p>
+              <p className="mt-0.5 text-muted-foreground tnum">
+                {formatLL(getTotal())} — kept on this device and still here after you
+                log back in.
+              </p>
+            </div>
+          )}
+
+          <DialogFooter className="flex gap-2 sm:justify-between">
+            <Button
+              variant="outline"
+              className="h-12 flex-1 rounded-2xl"
+              onClick={() => setIsLogoutDialogOpen(false)}
+            >
+              Stay
+            </Button>
+            <Button
+              variant="destructive"
+              className="h-12 flex-1 rounded-2xl font-bold"
+              onClick={() => {
+                setIsLogoutDialogOpen(false);
+                handleLogout();
+              }}
+            >
+              <LogOut className="h-4 w-4" />
+              Log out
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* ---- Confirm quick sale ---- */}
       <Dialog open={isQuickEndDialogOpen} onOpenChange={setIsQuickEndDialogOpen}>
         <DialogContent className="max-w-sm rounded-3xl">
@@ -1116,15 +1164,20 @@ export default function POSPage() {
               fullBleed
             />
           ) : (
-            <div className="absolute inset-0 flex flex-col items-center justify-center bg-zinc-950">
+            <div className="absolute inset-0 flex flex-col items-center justify-center bg-zinc-950 px-8 text-center">
               <ScanLine className="h-9 w-9 text-zinc-700" />
-              <p className="mt-3 text-sm text-zinc-500">Scanner is off</p>
+              <p className="mt-3 text-sm font-semibold text-zinc-400">Scanner is off</p>
+              <p className="mt-1 text-xs text-zinc-600">
+                The camera is released. Search or type a barcode below to keep selling.
+              </p>
+              {/* Same wording as the header switch, so the two controls read as
+                  the one setting they are. */}
               <button
                 type="button"
                 onClick={toggleScanner}
-                className="tap mt-4 rounded-full bg-white/10 px-4 py-2 text-sm font-semibold text-white"
+                className="tap mt-5 rounded-full bg-primary px-5 py-2.5 text-sm font-bold text-primary-foreground"
               >
-                Turn on
+                Turn scanner on
               </button>
             </div>
           )}
@@ -1138,35 +1191,80 @@ export default function POSPage() {
         {/* safe-top clears the iOS status bar / notch, which the page paints
             under because appleWebApp.statusBarStyle is 'black-translucent'. */}
         <header className="safe-top absolute inset-x-0 top-0 z-20 px-4 pt-3">
-          <div className="flex items-center justify-between gap-3">
-            <div className="glass flex items-center gap-2 rounded-full py-1.5 pl-1.5 pr-3.5 ring-1 ring-white/10">
-              <span className="flex h-7 w-7 items-center justify-center rounded-full bg-primary text-sm font-black text-primary-foreground">
-                G
+          <div className="flex items-center gap-2">
+            {/* Brand chip. min-w-0 + truncate so it yields space to the
+                controls on a narrow handset rather than pushing them off. */}
+            <div className="glass flex min-w-0 items-center gap-2 rounded-full py-1.5 pl-1.5 pr-3 ring-1 ring-white/10">
+              {/* Same mark as the desktop header — one identity across both
+                  layouts instead of a letter here and a logo there. */}
+              <span className="flex h-7 w-7 flex-none items-center justify-center rounded-full bg-primary">
+                <Squirrel className="h-4 w-4 text-primary-foreground" />
               </span>
-              <span className="text-[15px] font-bold leading-none">GoldenSquirrel</span>
+              {/* Decorative, so it is the first thing to go: below ~390px the
+                  wordmark would truncate to "GoldenSqui…" to make room for the
+                  scanner switch. The avatar and the connectivity dot beside it
+                  are the functional parts and always stay. */}
+              <span className="hidden truncate text-sm font-bold leading-none min-[390px]:inline">
+                GoldenSquirrel
+              </span>
               <SyncIndicator dot />
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="ml-auto flex flex-none items-center gap-2">
+              {/* ---- Scanner switch ----
+                  Was a bare icon button whose state you had to infer from its
+                  tint. It is a real switch now: a written label, a track the
+                  knob visibly slides along, and role="switch" so assistive
+                  tech reads the on/off state instead of guessing. */}
               <button
                 type="button"
+                role="switch"
+                aria-checked={isScannerActive}
+                aria-label="Barcode scanner"
                 onClick={toggleScanner}
-                aria-label={isScannerActive ? "Turn scanner off" : "Turn scanner on"}
-                aria-pressed={isScannerActive}
                 className={cn(
-                  "tap glass flex h-11 w-11 items-center justify-center rounded-full ring-1 ring-white/10",
-                  isScannerActive ? "text-primary" : "text-muted-foreground"
+                  "tap glass flex h-11 items-center gap-2 rounded-full pl-3 pr-1.5 ring-1 transition-colors",
+                  isScannerActive
+                    ? "text-primary ring-primary/40"
+                    : "text-muted-foreground ring-white/10"
                 )}
               >
-                <Scan className="h-5 w-5" />
+                <span className="text-[10px] font-bold uppercase tracking-[0.1em]">
+                  Scanner
+                </span>
+                {/* Track 38x22, knob 16 — 3px of inset all round.
+                    The knob's offsets are explicit rather than left to static
+                    positioning, and the movement is an INLINE transform on
+                    purpose: Tailwind v4 compiles translate-x-* to the CSS
+                    `translate` property, which `transition-transform` does not
+                    animate, so the class-based version jumped instead of
+                    sliding and depended on a static position that put it on
+                    the wrong side. */}
+                <span
+                  aria-hidden
+                  className={cn(
+                    "relative block h-[22px] w-[38px] flex-none rounded-full transition-colors duration-200",
+                    isScannerActive ? "bg-primary" : "bg-white/20"
+                  )}
+                >
+                  <span
+                    className="absolute left-[3px] top-[3px] h-4 w-4 rounded-full bg-white shadow-sm transition-transform duration-200 ease-[cubic-bezier(0.32,0.72,0,1)]"
+                    style={{ transform: `translateX(${isScannerActive ? 16 : 0}px)` }}
+                  />
+                </span>
               </button>
+
+              {/* Signing out mid-shift loses the till to whoever knows the
+                  next password — it gets a confirm, and the universally
+                  understood door icon rather than a power symbol that reads
+                  as "turn the device off". */}
               <button
                 type="button"
-                onClick={handleLogout}
+                onClick={() => setIsLogoutDialogOpen(true)}
                 aria-label="Log out"
                 className="tap glass flex h-11 w-11 items-center justify-center rounded-full text-muted-foreground ring-1 ring-white/10"
               >
-                <Power className="h-5 w-5" />
+                <LogOut className="h-5 w-5" />
               </button>
             </div>
           </div>

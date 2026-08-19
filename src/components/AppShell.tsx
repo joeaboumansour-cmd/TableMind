@@ -29,9 +29,11 @@ import BottomTabBar from "@/components/BottomTabBar";
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
   return (
-    // dvh (not vh) so the bar sits on the real visible viewport on iOS Safari
-    // rather than behind the browser chrome.
-    <div className="flex h-dvh flex-col overflow-hidden">
+    // h-app, not h-dvh: the height comes from visualViewport via
+    // ViewportHeightSync, which is the only measurement that stays correct
+    // while Android's URL bar slides in and out. dvh remains the fallback
+    // until that first measurement lands.
+    <div className="flex h-app flex-col overflow-hidden">
       <div className="min-h-0 flex-1 overflow-hidden">{children}</div>
       <BottomTabBar />
     </div>

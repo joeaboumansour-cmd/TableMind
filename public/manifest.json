@@ -11,8 +11,8 @@
   "lang": "en",
   "dir": "ltr",
   "categories": ["business", "finance", "productivity"],
-  "background_color": "#000000",
-  "theme_color": "#f59e0b",
+  "background_color": "#09090b",
+  "theme_color": "#09090b",
   "prefer_related_applications": false,
   "shortcuts": [
     {

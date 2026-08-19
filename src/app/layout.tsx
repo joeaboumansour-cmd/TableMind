@@ -6,7 +6,12 @@ import PWAInstallPrompt from "@/components/PWAInstallPrompt";
 import PWAUpdateListener from "@/components/PWAUpdateListener";
 
 export const viewport: Viewport = {
-  themeColor: '#f59e0b',
+  // The EXACT hex of --background (oklch(0.141 0.005 285.823)), so the Android
+  // status bar in the installed PWA blends into the app instead of sitting
+  // above it as an amber band. The app forces dark mode, so one value is
+  // correct in every condition — there is no light theme to answer for.
+  // Amber stays the accent colour; it was never meant to be system chrome.
+  themeColor: '#09090b',
   width: 'device-width',
   initialScale: 1,
   maximumScale: 1,

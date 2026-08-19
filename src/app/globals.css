@@ -162,8 +162,13 @@
    things that float near the bottom of the viewport (the PWA install prompt),
    so they can offset above the bar instead of landing on top of it. */
 :root {
-  /* 3.5rem tab height + 1px top border + the home-indicator inset. */
-  --tab-bar-h: calc(3.5rem + 1px + env(safe-area-inset-bottom, 0px));
+  /* 3rem tab row + 1px hairline + the bottom inset.
+     max() is what keeps this honest on BOTH platforms: iOS contributes a ~34px
+     home-indicator inset and needs no padding of its own (adding some on top
+     is what made the bar look bulky), while Android reports 0 and would
+     otherwise have its labels flush against the screen edge. */
+  --tab-bar-inset: max(env(safe-area-inset-bottom, 0px), 0.375rem);
+  --tab-bar-h: calc(3rem + 1px + var(--tab-bar-inset));
 }
 
 /* The bar is md:hidden — desktop keeps its header navigation, so no reserve. */
@@ -181,6 +186,11 @@
   padding-bottom: env(safe-area-inset-bottom, 0px);
 }
 
+/* The tab bar's own bottom padding — see --tab-bar-inset above. */
+.tab-bar-inset {
+  padding-bottom: var(--tab-bar-inset);
+}
+
 .safe-x {
   padding-left: env(safe-area-inset-left, 0px);
   padding-right: env(safe-area-inset-right, 0px);
@@ -196,6 +206,20 @@
 .h-dvh {
   height: 100vh; /* fallback for browsers without dvh */
   height: 100dvh;
+}
+
+/* The app shell's height. Declarations cascade oldest-to-newest, so each
+   browser keeps the last one it understands:
+     100vh   — ancient fallback
+     100dvh  — modern, and what renders before JS runs
+     --app-h — exact visible height from visualViewport (ViewportHeightSync)
+   The variable is what fixes Android: dvh does not track the retractable URL
+   bar closely enough, so the shell overhung the screen and the tab bar fell
+   below the fold. */
+.h-app {
+  height: 100vh;
+  height: 100dvh;
+  height: var(--app-h, 100dvh);
 }
 
 .min-h-dvh {

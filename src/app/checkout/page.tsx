@@ -5,12 +5,15 @@
 //
 // A keypad screen, not a form. The cashier is holding cash in one hand and the
 // phone in the other, so there is no OS keyboard: digits come from an on-screen
-// pad, and the currency the pad is typing into is chosen by the LL / USD
-// segmented control at the top.
+// pad.
 //
-// Split payments are preserved from the old two-input form — the LL and USD
-// amounts are two independent values that both stay entered; the segmented
-// control only decides which one the pad is currently editing.
+// BOTH tenders are on screen at all times. Lebanon runs on split payments —
+// "here is 200,000 and five dollars" is an ordinary transaction — and a
+// currency TOGGLE hid half of that: whichever amount you were not editing was
+// invisible, so the cashier had to remember it and could not check it against
+// the notes in their hand. `activeField` is now only a cursor saying where the
+// next digit lands; neither amount is ever hidden, and the balance is shown in
+// LL and USD together.
 // =============================================
 
 import { useCallback, useEffect, useState, useTransition, Suspense } from "react";
@@ -47,7 +50,8 @@ import { vibrate } from "@/lib/feedback";
 import { cn } from "@/lib/utils";
 import QRCode from "qrcode";
 
-type PayCurrency = "LL" | "USD";
+/** Which amount the keypad is typing into. Both are always displayed. */
+type PayField = "LL" | "USD";
 
 /** Longest entry the pad will accept, in characters. */
 const MAX_ENTRY_LENGTH = 12;
@@ -70,7 +74,7 @@ function appendUSD(prev: string, key: string): string {
 function CheckoutContent() {
   const router = useRouter();
 
-  const [currency, setCurrency] = useState<PayCurrency>("LL");
+  const [activeField, setActiveField] = useState<PayField>("LL");
   const [amountPaidLL, setAmountPaidLL] = useState<string>("");
   const [amountPaidUSD, setAmountPaidUSD] = useState<string>("");
   const [isProcessing, setIsProcessing] = useState(false);
@@ -148,17 +152,17 @@ function CheckoutContent() {
   const pressKey = useCallback(
     (key: string) => {
       vibrate(8);
-      if (currency === "LL") setAmountPaidLL((prev) => appendLL(prev, key));
+      if (activeField === "LL") setAmountPaidLL((prev) => appendLL(prev, key));
       else setAmountPaidUSD((prev) => appendUSD(prev, key));
     },
-    [currency]
+    [activeField]
   );
 
   const pressBackspace = useCallback(() => {
     vibrate(8);
-    if (currency === "LL") setAmountPaidLL((prev) => prev.slice(0, -1));
+    if (activeField === "LL") setAmountPaidLL((prev) => prev.slice(0, -1));
     else setAmountPaidUSD((prev) => prev.slice(0, -1));
-  }, [currency]);
+  }, [activeField]);
 
   const handleClear = useCallback(() => {
     vibrate(12);
@@ -192,9 +196,14 @@ function CheckoutContent() {
       if (/^[0-9]$/.test(e.key)) {
         e.preventDefault();
         pressKey(e.key);
-      } else if (e.key === "." && currency === "USD") {
+      } else if (e.key === "." && activeField === "USD") {
         e.preventDefault();
         pressKey(".");
+      } else if (e.key === "Tab") {
+        // Desktop tills have a keyboard but no touchscreen — Tab is how you
+        // move between the two amounts without reaching for a mouse.
+        e.preventDefault();
+        setActiveField((f) => (f === "LL" ? "USD" : "LL"));
       } else if (e.key === "Backspace") {
         e.preventDefault();
         pressBackspace();
@@ -205,7 +214,7 @@ function CheckoutContent() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [currency, pressKey, pressBackspace, handleClear, transactionComplete]);
+  }, [activeField, pressKey, pressBackspace, handleClear, transactionComplete]);
 
   // Generate transaction number
   const generateTransactionNumber = () => {
@@ -574,25 +583,15 @@ function CheckoutContent() {
   }
 
   // ===================== PAYMENT =====================
+  // "000" is only meaningful for LL (amounts run to six digits); USD needs a
+  // decimal point instead. The rest of the pad is identical, so the keys do
+  // not jump around when the cursor moves.
   const keypadKeys: string[] =
-    currency === "LL"
+    activeField === "LL"
       ? ["1", "2", "3", "4", "5", "6", "7", "8", "9", "000", "0"]
       : ["1", "2", "3", "4", "5", "6", "7", "8", "9", ".", "0"];
 
-  const entry = currency === "LL" ? amountPaidLL : amountPaidUSD;
-  const hasEntry = entry.length > 0;
-  const activeDisplay =
-    currency === "LL" ? formatLLParts(paidLL).value : `$${amountPaidUSD || "0"}`;
-  const activeUnit = currency === "LL" ? "LL" : "";
-
-  const otherLabel =
-    currency === "LL"
-      ? paidUSD > 0
-        ? `${formatUSD(paidUSD)} in USD`
-        : null
-      : paidLL > 0
-        ? `${formatLL(paidLL)} in LL`
-        : null;
+  const hasEntry = amountPaidLL.length > 0 || amountPaidUSD.length > 0;
 
   return (
     <div className="flex h-full flex-col overflow-hidden bg-background">
@@ -622,8 +621,14 @@ function CheckoutContent() {
         </div>
       </header>
 
+      {/* ---- Information column ----
+           Everything above the keypad shares one shrinkable, scrollable
+           region. On a normal phone nothing scrolls; on a very short one this
+           gives way rather than crushing the keypad below a usable key size,
+           which is the one thing on this screen that must stay thumb-sized. */}
+      <div className="no-scrollbar min-h-0 shrink overflow-y-auto">
       {/* ---- Amount due ---- */}
-      <div className="flex-shrink-0 px-5 pt-5">
+      <div className="px-5 pt-5">
         <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-muted-foreground">
           Amount due
         </p>
@@ -645,104 +650,164 @@ function CheckoutContent() {
         )}
       </div>
 
-      {/* ---- Currency ---- */}
-      <div className="flex-shrink-0 px-5 pt-4">
-        <div className="grid grid-cols-2 gap-1 rounded-2xl bg-muted/60 p-1">
-          {(["LL", "USD"] as PayCurrency[]).map((c) => (
-            <button
-              key={c}
-              type="button"
-              onClick={() => {
-                vibrate(10);
-                setCurrency(c);
-              }}
-              aria-pressed={currency === c}
-              className={cn(
-                "tap h-10 rounded-xl text-sm font-bold transition-colors",
-                currency === c
-                  ? "bg-background text-foreground shadow-sm"
-                  : "text-muted-foreground"
-              )}
-            >
-              {c}
-            </button>
-          ))}
+      {/* ---- Received: both tenders, always visible ---- */}
+      <div className="px-5 pt-4">
+        <div className="flex items-baseline justify-between">
+          <span className="text-[11px] font-bold uppercase tracking-[0.14em] text-muted-foreground">
+            Received
+          </span>
+          <button
+            type="button"
+            onClick={handleClear}
+            disabled={!hasEntry}
+            className="tap -mr-1 rounded-lg px-1.5 py-0.5 text-sm font-bold text-destructive disabled:pointer-events-none disabled:opacity-30"
+          >
+            Clear
+          </button>
+        </div>
+
+        <div className="mt-1.5 grid grid-cols-2 gap-2">
+          {(["LL", "USD"] as PayField[]).map((field) => {
+            const isActive = activeField === field;
+            const raw = field === "LL" ? amountPaidLL : amountPaidUSD;
+            // The LL figure is grouped as you type (200000 → 200,000); the USD
+            // figure is shown raw so a half-typed "2." does not disappear.
+            const display =
+              field === "LL" ? (raw ? formatLLParts(paidLL).value : "0") : `$${raw || "0"}`;
+
+            return (
+              <button
+                key={field}
+                type="button"
+                onClick={() => {
+                  vibrate(8);
+                  setActiveField(field);
+                }}
+                aria-pressed={isActive}
+                aria-label={`Amount received in ${field}`}
+                className={cn(
+                  "tap rounded-2xl border px-3.5 py-2.5 text-left transition-colors",
+                  isActive
+                    ? "border-primary bg-primary/10"
+                    : "border-white/10 bg-muted/30"
+                )}
+              >
+                <span className="flex items-center justify-between">
+                  <span
+                    className={cn(
+                      "text-[11px] font-bold uppercase tracking-[0.14em]",
+                      isActive ? "text-primary" : "text-muted-foreground"
+                    )}
+                  >
+                    {field}
+                  </span>
+                  {raw.length > 0 && <Check className="h-3.5 w-3.5 text-emerald-400" />}
+                </span>
+                <span className="mt-0.5 flex items-baseline">
+                  <span
+                    className={cn(
+                      "text-[26px] font-extrabold leading-tight tnum",
+                      raw.length > 0 ? "text-foreground" : "text-muted-foreground/40"
+                    )}
+                  >
+                    {display}
+                  </span>
+                  {isActive && (
+                    <span className="ml-0.5 h-6 w-px animate-pulse bg-primary" aria-hidden />
+                  )}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* What the two tenders add up to, and the rate that got them there —
+            so a split payment can be checked against the notes in hand. */}
+        <div className="mt-2 flex items-baseline justify-between gap-3 px-0.5 text-xs">
+          <span className="min-w-0 truncate text-muted-foreground tnum">
+            {paidUSD > 0
+              ? `${formatUSD(paidUSD)} @ ${formatLL(RETURN_RATE)}/$ = ${formatLL(usdAsLl)}`
+              : "Tap a field, then use the keypad"}
+          </span>
+          <span className="flex-none font-semibold tnum">
+            Total {formatLL(totalPaid)}
+          </span>
         </div>
       </div>
 
-      {/* ---- Received + change ---- */}
-      <div className="flex-shrink-0 px-5 pt-3">
-        <div className="rounded-2xl border border-primary/40 px-4 py-3">
-          <div className="flex items-baseline justify-between gap-3">
-            <span className="min-w-0 truncate text-sm text-muted-foreground">
-              Received
-              {otherLabel && <span className="tnum"> · + {otherLabel}</span>}
-            </span>
-            <button
-              type="button"
-              onClick={handleClear}
-              disabled={!hasEntry && totalPaid <= 0}
-              className="tap -mr-1 flex-none rounded-lg px-1.5 py-0.5 text-sm font-bold text-destructive disabled:pointer-events-none disabled:opacity-30"
-            >
-              Clear
-            </button>
-          </div>
-
-          <p className="mt-0.5 flex items-baseline text-[30px] font-extrabold leading-tight text-primary tnum">
-            {activeDisplay}
-            {activeUnit && <span className="ml-1.5 text-base font-bold">{activeUnit}</span>}
-            <span className="ml-1 h-7 w-px animate-pulse bg-primary" aria-hidden />
-          </p>
-
-          {otherLabel && (
-            <p className="mt-0.5 text-xs text-muted-foreground tnum">
-              Total paid {formatLL(totalPaid)}
-            </p>
+      {/* ---- Balance, in both currencies ---- */}
+      <div className="px-5 pb-1 pt-3">
+        <div
+          className={cn(
+            "rounded-2xl border px-4 py-3 transition-colors",
+            totalPaid <= 0
+              ? "border-white/10"
+              : displayChangeLL > 0 && !isChangeDue
+                ? "border-primary/40 bg-primary/[0.07]"
+                : "border-emerald-500/40 bg-emerald-500/[0.07]"
           )}
-
-          <div className="mt-3 flex items-baseline justify-between border-t border-white/[0.07] pt-2.5">
-            {totalPaid <= 0 ? (
-              <>
-                <span className="text-sm font-semibold text-muted-foreground">Change due</span>
-                <span className="text-lg font-bold text-muted-foreground tnum">—</span>
-              </>
-            ) : isChangeDue ? (
-              <>
-                <span className="text-sm font-semibold text-emerald-400">Change due</span>
-                <span className="text-right">
-                  <span
-                    key={displayChangeLL}
-                    className="animate-value-bump text-[22px] font-extrabold text-emerald-400 tnum"
-                  >
-                    {formatLL(displayChangeLL)}
-                  </span>
-                  <span className="ml-2 text-xs text-emerald-400/80 tnum">
-                    {formatUSD(displayChangeUSD)} · {getChangeRateLabel()}
-                  </span>
-                </span>
-              </>
-            ) : displayChangeLL > 0 ? (
-              <>
-                <span className="text-sm font-semibold text-primary">Still due</span>
+        >
+          {totalPaid <= 0 ? (
+            <div className="flex items-baseline justify-between">
+              <span className="text-[11px] font-bold uppercase tracking-[0.14em] text-muted-foreground">
+                Change due
+              </span>
+              <span className="text-lg font-bold text-muted-foreground tnum">—</span>
+            </div>
+          ) : displayChangeLL === 0 ? (
+            <div className="flex items-center justify-between">
+              <span className="text-sm font-bold text-emerald-400">Exact payment</span>
+              <Check className="h-5 w-5 text-emerald-400" />
+            </div>
+          ) : (
+            <>
+              <div className="flex items-baseline justify-between gap-2">
                 <span
-                  key={displayChangeLL}
-                  className="animate-value-bump text-[22px] font-extrabold text-primary tnum"
+                  className={cn(
+                    "flex-none text-[11px] font-bold uppercase tracking-[0.14em]",
+                    isChangeDue ? "text-emerald-400" : "text-primary"
+                  )}
                 >
-                  {formatLL(displayChangeLL)}
+                  {isChangeDue ? "Change due" : "Still due"}
                 </span>
-              </>
-            ) : (
-              <>
-                <span className="text-sm font-semibold text-emerald-400">Exact payment</span>
-                <Check className="h-5 w-5 text-emerald-400" />
-              </>
-            )}
-          </div>
+                <span className="truncate text-[11px] text-muted-foreground tnum">
+                  {getChangeRateLabel()}
+                </span>
+              </div>
+              {/* Both currencies together: the cashier may hand back either. */}
+              <div
+                key={displayChangeLL}
+                className="animate-value-bump mt-1 flex items-baseline justify-between gap-3"
+              >
+                <span
+                  className={cn(
+                    "text-[28px] font-extrabold leading-none tnum",
+                    isChangeDue ? "text-emerald-400" : "text-primary"
+                  )}
+                >
+                  {formatLLParts(displayChangeLL).value}
+                  <span className="ml-1 text-sm font-bold">
+                    {formatLLParts(displayChangeLL).unit}
+                  </span>
+                </span>
+                <span
+                  className={cn(
+                    "text-xl font-bold tnum",
+                    isChangeDue ? "text-emerald-400/80" : "text-primary/80"
+                  )}
+                >
+                  {formatUSD(displayChangeUSD)}
+                </span>
+              </div>
+            </>
+          )}
         </div>
+      </div>
+
       </div>
 
       {/* ---- Keypad ---- */}
-      <div className="grid min-h-0 flex-1 grid-cols-3 auto-rows-fr gap-2 px-5 py-3">
+      <div className="grid min-h-[212px] flex-1 shrink-0 grid-cols-3 auto-rows-fr gap-2 px-5 py-3">
         {keypadKeys.map((key) => (
           <button
             key={key}
