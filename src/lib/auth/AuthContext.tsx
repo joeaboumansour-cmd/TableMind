@@ -11,8 +11,8 @@ interface AuthContextValue {
   user: StoreUser | null;
   isLoading: boolean;
   login: (storeUsername: string, password: string) => Promise<{ success: boolean; error?: string }>;
-  loginEmployee: (storeId: string, username: string, password: string) => Promise<{ success: boolean; error?: string }>;
-  loginOffline: (storeUsername: string, password: string) => Promise<{ success: boolean; error?: string }>;
+  loginEmployee: (storeId: string, storeUsername: string, username: string, password: string) => Promise<{ success: boolean; error?: string }>;
+  loginOffline: (storeUsername: string, password: string, username?: string) => Promise<{ success: boolean; error?: string }>;
   logout: () => void;
   canAccess: (section: SectionKey) => boolean;
   refresh: () => Promise<void>;
@@ -167,8 +167,9 @@ export function AuthProvider({ children }: AuthProviderProps) {
       setUser(ownerUser);
       saveUserToStorage(ownerUser);
 
-      // Cache credentials for offline login fallback
-      cacheCredentials(storeUsername, password, {
+      // Cache credentials for offline login fallback.
+      // Owner login: the person's username IS the store username.
+      cacheCredentials(storeUsername, store.username, password, {
         id: store.id,
         username: store.username,
         password_hash: store.password_hash,
@@ -184,7 +185,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
     }
   }, []);
 
-  const loginEmployee = useCallback(async (storeId: string, username: string, password: string): Promise<{ success: boolean; error?: string }> => {
+  const loginEmployee = useCallback(async (storeId: string, storeUsername: string, username: string, password: string): Promise<{ success: boolean; error?: string }> => {
     setIsLoading(true);
     try {
       const { data: employee, error } = await supabase
@@ -242,10 +243,15 @@ export function AuthProvider({ children }: AuthProviderProps) {
       setUser(employeeUser);
       saveUserToStorage(employeeUser);
 
-      // Cache credentials for offline login fallback
-      cacheCredentials(username, password, {
+      // Cache credentials for offline login fallback.
+      //
+      // The first argument MUST be the STORE's username, not the employee's.
+      // It used to pass `username` (the employee), so the entry could never be
+      // matched by the login form — which asks for the store username — and
+      // employee offline login simply did not work. (audit P1-10)
+      cacheCredentials(storeUsername, username, password, {
         id: employee.store_id,
-        username: username,
+        username: storeUsername,
         password_hash: employee.password_hash,
         license_expires_at: "", // Will be filled from store data if available
       }, {
@@ -271,12 +277,15 @@ export function AuthProvider({ children }: AuthProviderProps) {
    * Offline login fallback — validates credentials against cached data.
    * Used when the user is offline and cannot reach Supabase.
    */
-  const loginOffline = useCallback(async (storeUsername: string, password: string): Promise<{ success: boolean; error?: string }> => {
+  const loginOffline = useCallback(async (storeUsername: string, password: string, username?: string): Promise<{ success: boolean; error?: string }> => {
     setIsLoading(true);
     try {
-      const cached = validateCachedCredentials(storeUsername, password);
+      // `username` distinguishes colleagues who share a store. Passing it means
+      // an employee gets THEIR entry rather than whichever one happens to match
+      // the password first.
+      const cached = validateCachedCredentials(storeUsername, password, username);
       if (!cached) {
-        return { success: false, error: "No cached credentials found for this store. Please connect to the internet to log in." };
+        return { success: false, error: "No cached credentials found for this user. Please connect to the internet to log in." };
       }
 
       const { storeData, employeeData } = cached;

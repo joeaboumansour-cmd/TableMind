@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { useAuth } from "@/lib/auth/AuthContext";
-import { hasCachedCredentials, getCachedCredentials } from "@/lib/auth/offlineAuth";
+import { hasCachedCredentials, getMostRecentCachedEntry, getCachedUsernamesForStore } from "@/lib/auth/offlineAuth";
 import { connectivity } from "@/lib/connectivity";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -28,6 +28,7 @@ export default function LoginPage() {
   // Offline state tracking (heartbeat-based)
   const [isOffline, setIsOffline] = useState(connectivity.isOffline);
   const [cachedStoreUsername, setCachedStoreUsername] = useState<string | null>(null);
+  const [cachedUsernames, setCachedUsernames] = useState<string[]>([]);
 
   // If already logged in, redirect to POS
   useEffect(() => {
@@ -44,9 +45,13 @@ export default function LoginPage() {
 
     // Check for cached credentials
     if (hasCachedCredentials()) {
-      const cached = getCachedCredentials();
+      const cached = getMostRecentCachedEntry();
       if (cached) {
         setCachedStoreUsername(cached.storeUsername);
+        // Everyone who has signed in online on this device can sign in offline,
+        // so name them — otherwise a cashier has no way to know whether the
+        // till will let them in during an outage.
+        setCachedUsernames(getCachedUsernamesForStore(cached.storeUsername));
         // Pre-fill the store username if the form is empty
         setStoreUsername((prev) => prev || cached.storeUsername);
       }
@@ -71,7 +76,7 @@ export default function LoginPage() {
         return;
       }
 
-      const result = await loginOffline(storeUsername.trim(), password);
+      const result = await loginOffline(storeUsername.trim(), password, username.trim());
       if (result.success) {
         toast.success("Welcome back! (offline login)");
         setTimeout(() => {
@@ -131,7 +136,7 @@ export default function LoginPage() {
 
     // Case 2: Employee login
     // Use loginEmployee from AuthContext which handles caching for offline access
-    const result = await loginEmployee(store.id, username.trim(), password);
+    const result = await loginEmployee(store.id, storeUsername.trim(), username.trim(), password);
     if (result.success) {
       // Backward compatibility — also set legacy goldensquirrel_auth so existing
       // pages that read it for store_id still work
@@ -185,7 +190,9 @@ export default function LoginPage() {
               </p>
               <p className="text-amber-600/80 text-xs mt-0.5">
                 {cachedStoreUsername
-                  ? `Cached credentials available for "${cachedStoreUsername}". You can log in while offline.`
+                  ? cachedUsernames.length > 1
+                    ? `Store "${cachedStoreUsername}" — ${cachedUsernames.length} users can sign in offline: ${cachedUsernames.join(", ")}.`
+                    : `Cached credentials available for "${cachedStoreUsername}". You can log in while offline.`
                   : "No cached credentials available. Please connect to the internet to log in."}
               </p>
             </div>
