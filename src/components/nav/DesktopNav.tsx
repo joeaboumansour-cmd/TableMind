@@ -30,8 +30,17 @@ export default function DesktopNav({ tabs }: { tabs: Tab[] }) {
   const { user } = useAuth();
   const [isPending, startTransition] = useTransition();
 
-  // A single destination is not navigation. Matches BottomTabBar.
-  if (tabs.length < 2) return null;
+  // Render whenever there is a signed-in user, NOT only when there are tabs to
+  // show. This bar is the only sign-out on desktop -- the POS page's own header
+  // was removed when it was added -- so an employee with POS access alone has
+  // exactly one tab, and returning null here stranded them in the till with no
+  // way out. Mobile was unaffected because the mobile POS branch carries its
+  // own sign-out button.
+  if (!user) return null;
+
+  // The "a single destination is not navigation" rule still holds, but it
+  // applies to the tab LIST, not to the chrome around it.
+  const showTabs = tabs.length >= 2;
 
   return (
     <nav
@@ -47,6 +56,7 @@ export default function DesktopNav({ tabs }: { tabs: Tab[] }) {
         Golden<span className="text-primary">Squirrel</span>
       </span>
 
+      {showTabs ? (
       <ul className="flex items-center gap-1">
         {tabs.map((tab) => {
           const active = isTabActive(tab, pathname);
@@ -80,17 +90,16 @@ export default function DesktopNav({ tabs }: { tabs: Tab[] }) {
           );
         })}
       </ul>
+      ) : null}
 
       {/* Connection state and sign-out are the same question on every screen,
           so they live here rather than being re-implemented per page. The POS
           desktop header used to carry its own copies. */}
       <div className="ml-auto flex items-center gap-2 pl-3">
         <SyncIndicator />
-        {user ? (
-          <span className="max-w-[12rem] truncate text-xs text-muted-foreground">
-            {user.displayName || user.username}
-          </span>
-        ) : null}
+        <span className="max-w-[12rem] truncate text-xs text-muted-foreground">
+          {user.displayName || user.username}
+        </span>
         <LogoutButton />
       </div>
     </nav>
