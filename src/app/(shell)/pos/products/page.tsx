@@ -51,6 +51,7 @@ import dynamic from "next/dynamic";
 import { playSuccessSound, playErrorSound } from "@/lib/feedback";
 import { isDesktop } from "@/lib/device";
 import CSVImportDialog from "@/components/CSVImportDialog";
+import { useConfirm } from "@/components/ConfirmDialog";
 import { getFrequentlyUsedProductIds, addFrequentlyUsedProduct, removeFrequentlyUsedProduct, isFrequentlyUsed, syncFavoritesFromSupabase } from "@/lib/frequentlyUsed";
 import { downloadCSV, productsToCSV } from "@/lib/csv/utils";
 import { FeatureFlagGuard, useFeatureFlag } from "@/lib/auth/featureGuard";
@@ -110,6 +111,8 @@ export default function StoreProductsPage() {
 function StoreProductsPageContent() {
   const router = useRouter();
   const { user, logout: authLogout, isLoading: authLoading } = useAuth();
+  // Destructive confirms (delete, wipe-and-replace import) go through this.
+  const { confirm, confirmDialog } = useConfirm();
   // Lazy init supabase client inside component to avoid SSR issues on hard refresh
   const [supabase] = useState(() => createClient());
   const [storeId, setStoreId] = useState<string>("");
@@ -616,9 +619,21 @@ function StoreProductsPageContent() {
   };
 
   const handleDeleteProduct = async (productId: string, productName: string) => {
-    if (!confirm(`Are you sure you want to delete "${productName}"?`)) {
-      return;
-    }
+    // Deleting also takes any variants of this product with it, and there is
+    // no undo — hence the cooldown rather than a bare yes/no.
+    const confirmed = await confirm({
+      title: "Delete this product?",
+      description:
+        "It is removed from your inventory and from every till that has it cached. This cannot be undone.",
+      details: (
+        <div className="rounded-2xl bg-muted/50 px-4 py-3">
+          <p className="font-semibold">{productName}</p>
+        </div>
+      ),
+      confirmLabel: "Delete",
+      confirmIcon: <Trash2 className="h-4 w-4" />,
+    });
+    if (!confirmed) return;
 
     try {
       const { error } = await supabase
@@ -2131,6 +2146,9 @@ function StoreProductsPageContent() {
           setShowImportDialog(false);
         }}
       />
+
+      {/* ---- Destructive confirms (5s cooldown) ---- */}
+      {confirmDialog}
     </div>
   );
 }

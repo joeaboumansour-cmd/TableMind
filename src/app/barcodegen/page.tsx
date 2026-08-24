@@ -31,12 +31,14 @@ import {
   type BarcodeRow,
 } from "@/lib/barcode/generator";
 import BarcodeLabel from "@/components/BarcodeLabel";
+import { useConfirm } from "@/components/ConfirmDialog";
 
 const STORAGE_KEY = "barcodegen_store_id";
 const TABLE_KEY = "barcodegen_table";
 
 export default function BarcodeGeneratorPage() {
   const router = useRouter();
+  const { confirm, confirmDialog } = useConfirm();
   const { user } = useAuth();
   const [supabase] = useState(() => createClient());
 
@@ -239,8 +241,25 @@ export default function BarcodeGeneratorPage() {
   };
 
   // ── Clear all ───────────────────────────────────────────────
-  const handleClearAll = () => {
-    if (!confirm("Clear all generated barcodes? This cannot be undone.")) return;
+  const handleClearAll = async () => {
+    // The table is the only copy of these barcodes until they are pushed to
+    // the POS, so clearing it is a real loss — cooldown it.
+    const confirmed = await confirm({
+      title: "Clear every generated barcode?",
+      description:
+        "The whole table is discarded. Anything not already sent to the POS is gone for good.",
+      details: (
+        <div className="rounded-2xl bg-muted/50 px-4 py-3">
+          <p className="font-semibold tnum">
+            {rows.length} row{rows.length !== 1 ? "s" : ""} in the table
+          </p>
+        </div>
+      ),
+      confirmLabel: "Clear table",
+      confirmIcon: <Trash2 className="h-4 w-4" />,
+    });
+    if (!confirmed) return;
+
     setRows([]);
     toast.success("Table cleared");
   };
@@ -794,6 +813,8 @@ ${labels
         )}
       </div>
 
+      {/* ---- Destructive confirms (5s cooldown) ---- */}
+      {confirmDialog}
     </div>
   );
 }

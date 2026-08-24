@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { useConfirm } from "@/components/ConfirmDialog";
 import { toast } from "@/lib/toast";
 import {
   Upload,
@@ -65,6 +66,7 @@ export default function CSVImportDialog({
   const [dragActive, setDragActive] = useState(false);
   const [importProgress, setImportProgress] = useState({ current: 0, total: 0 });
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const { confirm, confirmDialog } = useConfirm();
 
   const handleDrag = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -128,6 +130,27 @@ export default function CSVImportDialog({
     if (parsedData.length === 0) {
       toast.error("No valid data to import");
       return;
+    }
+
+    // "Replace all" wipes the store's entire catalogue before importing. It is
+    // the only import mode that can lose data, so it is the only one gated.
+    if (importMode === "replace_all") {
+      const confirmed = await confirm({
+        title: "Replace the entire catalogue?",
+        description:
+          "Every product currently in this store is deleted first, then the CSV is imported in its place. This cannot be undone.",
+        details: (
+          <div className="rounded-2xl bg-muted/50 px-4 py-3">
+            <p className="font-semibold tnum">
+              {parsedData.length} product{parsedData.length !== 1 ? "s" : ""} will
+              replace everything in the store
+            </p>
+          </div>
+        ),
+        confirmLabel: "Replace all",
+        confirmIcon: <Upload className="h-4 w-4" />,
+      });
+      if (!confirmed) return;
     }
 
     setIsImporting(true);
@@ -660,6 +683,10 @@ export default function CSVImportDialog({
             </>
           )}
         </DialogFooter>
+
+        {/* Cooldown confirm for "replace all". Portals out, so it layers over
+            this dialog instead of scrolling inside it. */}
+        {confirmDialog}
       </DialogContent>
     </Dialog>
   );

@@ -12,20 +12,16 @@
 // it: the desktop header's logout button called the handler directly, so a
 // till with a full cart signed out with no warning at all. Consolidating here
 // closes that gap.
+//
+// The confirm itself is ConfirmDialog, so signing out carries the same
+// five-second cooldown as every other destructive action.
 // =============================================
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { LogOut } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { useAuth } from "@/lib/auth/AuthContext";
 import { useCartStore } from "@/lib/stores/cartStore";
 import { formatLL } from "@/lib/utils/format";
@@ -52,20 +48,17 @@ export default function LogoutButton() {
         <LogOut className="h-4 w-4" />
       </Button>
 
-      <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="max-w-sm">
-          <DialogHeader>
-            <DialogTitle>Log out?</DialogTitle>
-            <DialogDescription>
-              You&rsquo;ll need your username and password to get back in.
-            </DialogDescription>
-          </DialogHeader>
-
-          {/* An open cart is the reason this needs a confirm at all — it
-              survives the logout, but the cashier should know that before
-              they hand the till over. */}
-          {!isEmpty() && (
-            <div className="rounded-2xl bg-muted/50 px-4 py-3 text-sm">
+      <ConfirmDialog
+        open={open}
+        onOpenChange={setOpen}
+        title="Log out?"
+        description="You'll need your username and password to get back in."
+        // An open cart is the reason this needs a confirm at all — it survives
+        // the logout, but the cashier should know that before they hand the
+        // till over.
+        details={
+          !isEmpty() ? (
+            <div className="rounded-2xl bg-muted/50 px-4 py-3">
               <p className="font-semibold">
                 {itemCount} item{itemCount !== 1 ? "s" : ""} still in the cart
               </p>
@@ -74,31 +67,17 @@ export default function LogoutButton() {
                 log back in.
               </p>
             </div>
-          )}
-
-          <DialogFooter className="flex gap-2 sm:justify-between">
-            <Button
-              variant="outline"
-              className="h-12 flex-1 rounded-2xl"
-              onClick={() => setOpen(false)}
-            >
-              Stay
-            </Button>
-            <Button
-              variant="destructive"
-              className="h-12 flex-1 rounded-2xl font-bold"
-              onClick={() => {
-                setOpen(false);
-                logout();
-                router.push("/login");
-              }}
-            >
-              <LogOut className="h-4 w-4" />
-              Log out
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+          ) : null
+        }
+        cancelLabel="Stay"
+        confirmLabel="Log out"
+        confirmIcon={<LogOut className="h-4 w-4" />}
+        onConfirm={() => {
+          setOpen(false);
+          logout();
+          router.push("/login");
+        }}
+      />
     </>
   );
 }

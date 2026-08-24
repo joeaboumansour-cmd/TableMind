@@ -46,6 +46,7 @@ import {
   Phone,
   MapPin,
 } from "lucide-react";
+import { useConfirm } from "@/components/ConfirmDialog";
 import { toast } from "@/lib/toast";
 import { formatDateTime } from "@/lib/utils/format";
 import { SECTIONS, SectionKey } from "@/lib/auth/permissions";
@@ -79,6 +80,9 @@ const SECTION_KEYS: SectionKey[] = ["pos", "inventory", "transactions", "receipt
 
 export default function AdminPage() {
   const router = useRouter();
+  // Every destructive admin action (delete store, delete employee, sign out)
+  // goes through this — a confirm dialog with a five-second cooldown.
+  const { confirm, confirmDialog } = useConfirm();
   const [stores, setStores] = useState<Store[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isAdmin, setIsAdmin] = useState(false);
@@ -218,9 +222,21 @@ export default function AdminPage() {
   };
 
   const handleDeleteStore = async (storeId: string, username: string) => {
-    if (!confirm(`Are you sure you want to delete "${username}"? This will delete all associated data.`)) {
-      return;
-    }
+    // The single most destructive action in the app: it cascades to that
+    // store's products, employees and transaction history.
+    const confirmed = await confirm({
+      title: "Delete this store?",
+      description:
+        "Every product, employee and transaction belonging to it is deleted with it. This cannot be undone.",
+      details: (
+        <div className="rounded-2xl bg-muted/50 px-4 py-3">
+          <p className="font-semibold">{username}</p>
+        </div>
+      ),
+      confirmLabel: "Delete store",
+      confirmIcon: <Trash2 className="h-4 w-4" />,
+    });
+    if (!confirmed) return;
 
     try {
       const { error } = await supabase
@@ -238,7 +254,16 @@ export default function AdminPage() {
     }
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    const confirmed = await confirm({
+      title: "Log out of the admin panel?",
+      description: "You'll need the admin password to get back in.",
+      cancelLabel: "Stay",
+      confirmLabel: "Log out",
+      confirmIcon: <LogOut className="h-4 w-4" />,
+    });
+    if (!confirmed) return;
+
     localStorage.removeItem("goldensquirrel_admin");
     router.push("/admin/login");
   };
@@ -515,9 +540,24 @@ export default function AdminPage() {
   };
 
   const handleDeleteEmployee = async (employee: Employee) => {
-    if (!confirm(`Delete employee "${employee.display_name || employee.username}"? This cannot be undone.`)) {
-      return;
-    }
+    const confirmed = await confirm({
+      title: "Delete this employee?",
+      description:
+        "They lose access to the till immediately. This cannot be undone.",
+      details: (
+        <div className="rounded-2xl bg-muted/50 px-4 py-3">
+          <p className="font-semibold">
+            {employee.display_name || employee.username}
+          </p>
+          {employee.display_name && (
+            <p className="mt-0.5 text-muted-foreground">{employee.username}</p>
+          )}
+        </div>
+      ),
+      confirmLabel: "Delete employee",
+      confirmIcon: <Trash2 className="h-4 w-4" />,
+    });
+    if (!confirmed) return;
 
     try {
       const response = await fetch(`/api/admin/store-users?id=${employee.id}`, {
@@ -1156,6 +1196,9 @@ export default function AdminPage() {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* ---- Destructive confirms (5s cooldown) ---- */}
+      {confirmDialog}
     </div>
   );
 }
