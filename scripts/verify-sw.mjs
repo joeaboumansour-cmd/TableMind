@@ -18,6 +18,39 @@ import { resolve } from "node:path";
 const SW_PATH = resolve(process.cwd(), "public/sw.js");
 
 /**
+ * Isolate the generated `app-shell` route's options object.
+ *
+ * The worker is minified onto one line, so a bare /maxAgeSeconds/ test over the
+ * whole file would match the twenty other caches that legitimately expire. We
+ * need to look at THIS rule's options and nothing else.
+ *
+ * Workbox emits roughly:
+ *   new e.NetworkFirst({cacheName:"app-shell",networkTimeoutSeconds:3,
+ *                       plugins:[new e.ExpirationPlugin({maxEntries:64})]})
+ *
+ * Returns null when the rule is absent.
+ */
+function appShellOptions(sw) {
+  const marker = /cacheName:\s*"app-shell"/.exec(sw);
+  if (!marker) return null;
+
+  // Walk forward from the cacheName to the end of the enclosing options
+  // object by counting braces, so nested plugin objects are included and the
+  // next rule is not.
+  const start = marker.index;
+  let depth = 1; // we start inside the options object
+  for (let i = start; i < sw.length; i++) {
+    const c = sw[i];
+    if (c === "{") depth++;
+    else if (c === "}") {
+      depth--;
+      if (depth === 0) return sw.slice(start, i);
+    }
+  }
+  return sw.slice(start); // unbalanced — hand back what we have
+}
+
+/**
  * Each check names what breaks if the rule is missing, so a CI failure is
  * self-explanatory to whoever hits it.
  */
@@ -42,6 +75,46 @@ const CHECKS = [
       "Usually means `extendDefaultRuntimeCaching: true` was dropped from",
       "next.config.ts, which makes a custom runtimeCaching array REPLACE all",
       "19 defaults instead of extending them.",
+    ].join("\n    "),
+  },
+  {
+    name: "the `app-shell` navigation rule exists",
+    test: (sw) => appShellOptions(sw) !== null,
+    why: [
+      "This is the rule that lets the POS cold-open with no internet. It is a",
+      "custom runtimeCaching entry in next.config.ts matching",
+      "`sameOrigin && request.mode === 'navigate'` with cacheName 'app-shell'.",
+      "Without it, navigations fall through to the default `pages` rule, whose",
+      "24-hour expiration means the app stops opening after a day offline.",
+    ].join("\n    "),
+  },
+  {
+    name: "`app-shell` never expires (no maxAgeSeconds)",
+    test: (sw) => {
+      const opts = appShellOptions(sw);
+      return opts !== null && !/maxAgeSeconds/.test(opts);
+    },
+    why: [
+      "A maxAgeSeconds on the app shell IS the app's offline shelf life.",
+      "Workbox's ExpirationPlugin treats an entry past its age as a miss and",
+      "deletes it, so the POS would open on day 1 of an outage and fail on",
+      "day 2 — the exact scenario this app is built for. Stale HTML is not a",
+      "risk here: NetworkFirst always prefers the network, so a stale shell is",
+      "only ever served when there is no network. Use maxEntries alone.",
+    ].join("\n    "),
+  },
+  {
+    name: "`app-shell` falls back to cache quickly (networkTimeoutSeconds)",
+    test: (sw) => {
+      const opts = appShellOptions(sw);
+      return opts !== null && /networkTimeoutSeconds:\s*\d+/.test(opts);
+    },
+    why: [
+      "Without a network timeout, NetworkFirst waits for the browser's own",
+      "timeout (30-90s) before consulting the cache. This app's signature",
+      "failure is wifi associated with no upstream, where the request hangs",
+      "rather than failing fast — so the till freezes on launch instead of",
+      "opening from cache. Set networkTimeoutSeconds in next.config.ts.",
     ].join("\n    "),
   },
 ];

@@ -68,6 +68,13 @@ import { isDesktop, isIOS, isAndroid } from "@/lib/device";
 import { getFrequentlyUsedProductIds, addFrequentlyUsedProduct, removeFrequentlyUsedProduct, isFrequentlyUsed } from "@/lib/frequentlyUsed";
 import { connectivity } from "@/lib/connectivity";
 import { useReloadGuard } from "@/lib/pwa/useReloadGuard";
+import { warmAppShell } from "@/lib/pwa/warmAppShell";
+import {
+  ensurePersistentStorage,
+  hasShownPersistNotice,
+  markPersistNoticeShown,
+} from "@/lib/pwa/persistentStorage";
+import { StorageFullError } from "@/lib/db/localDB";
 
 const supabase = createClient();
 
@@ -802,7 +809,18 @@ export default function POSPage() {
       });
     } catch (error) {
       console.error("Error ending transaction:", error);
-      toast.error("Failed to end transaction");
+      // A full disk is not the same problem as a bug, and the cashier can
+      // actually do something about it — but only if we say so. Everything
+      // rebuildable has already been sacrificed by this point (see
+      // writeWithQuotaRescue), so this really does mean out of space.
+      if (error instanceof StorageFullError) {
+        toast.error("Device storage is full — this sale was NOT saved.", {
+          description: "Free up space on the device and ring the sale again before continuing.",
+          duration: 15000,
+        });
+      } else {
+        toast.error("Failed to end transaction");
+      }
     } finally {
       setIsQuickEndProcessing(false);
     }
@@ -897,18 +915,52 @@ export default function POSPage() {
     };
   }, []);
 
-  // Prefetch critical routes while online so they are available offline
+  // Prefetch critical routes while online so they are available offline.
+  //
+  // router.prefetch covers the client-side RSC payloads; warmAppShell covers
+  // the HTML documents, which is what a COLD launch with no internet needs.
+  // The three HEAD requests that used to sit here never did anything: Workbox
+  // registers every route for "GET", so a HEAD was not intercepted, and a HEAD
+  // response has no body to serve a navigation from anyway.
   useEffect(() => {
     if (connectivity.isOnline && user) {
       router.prefetch("/checkout");
       router.prefetch("/pos/products");
       router.prefetch("/transactions");
-      // Also warm the service worker cache by fetching the documents
-      fetch("/checkout", { method: "HEAD", cache: "force-cache" }).catch(() => {});
-      fetch("/pos/products", { method: "HEAD", cache: "force-cache" }).catch(() => {});
-      fetch("/transactions", { method: "HEAD", cache: "force-cache" }).catch(() => {});
+      void warmAppShell();
     }
   }, [router, user]);
+
+  // Ask the browser to stop treating our storage as disposable.
+  //
+  // offline_queue holds sales whose money is already in the drawer. Without a
+  // persistence grant those rows are evictable — iOS clears script-writable
+  // storage after 7 days idle, and Chrome evicts whole origins under pressure.
+  // Neither browser prompts for this; a denial means the app is running in a
+  // plain tab rather than installed, which is worth saying once.
+  useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+
+    void (async () => {
+      const { persisted, supported } = await ensurePersistentStorage();
+      if (cancelled || !supported || persisted) return;
+      if (hasShownPersistNotice()) return;
+
+      markPersistNoticeShown();
+      toast.warning("Install the app to protect offline sales", {
+        description:
+          "In a browser tab, the device can clear unsynced sales during a long outage. Installing Golden Squirrel keeps them safe.",
+        duration: 12000,
+      });
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+    // `toast` is a stable module import from sonner — listed only to satisfy
+    // exhaustive-deps; its identity never changes, so it cannot re-run this.
+  }, [user, toast]);
 
   // Compute saved products for desktop mode (products without barcodes + frequently used)
   // Must be before any early returns to maintain hooks order

@@ -11,10 +11,12 @@ import {
   removeQueuedTransaction,
   getCachedProductsCount,
   getQueuedCount,
+  getDueQueuedCount,
   getPendingWrites,
   getPendingWritesByType,
   removePendingWrite,
   recordQueuedTransactionFailure,
+  recordQueuedTransactionDeferral,
 } from "@/lib/db/localDB";
 import type { QueuedTransaction, PendingWrite } from "@/lib/db/localDB";
 import { syncFavoritesFromSupabase, processPendingFavoriteWrites } from "@/lib/frequentlyUsed";
@@ -25,6 +27,44 @@ type SyncListener = (status: SyncStatus, pendingCount?: number) => void;
 
 // Maximum retry attempts for pending writes before they are dropped
 const MAX_PENDING_WRITE_RETRIES = 5;
+
+/**
+ * A failure that says nothing about the row we tried to send.
+ *
+ * This distinction is the difference between "the shop's DSL blinked" and
+ * "this sale will never be accepted", and it used to not exist: every failure
+ * incremented retry_count. Because the queue is flushed serially and
+ * connectivity is only checked once at the top of syncNow(), a link that died
+ * at sale 12 of 500 made the remaining 488 fail instantly — each burning a
+ * retry — in a fraction of a second. Three such reconnects dead-lettered
+ * every queued sale in the shop.
+ *
+ * Transient:
+ *   - fetch() threw at all (network down, DNS, TLS, aborted). The request
+ *     never reached the server, so the row is unjudged.
+ *   - 5xx: the server is broken, not the payload.
+ *   - 408 / 429: explicitly "try again later".
+ *
+ * Everything else (4xx) is the server having looked at this specific payload
+ * and rejected it, which is worth counting against the retry budget.
+ */
+function isTransientSyncFailure(response: Response | null): boolean {
+  if (!response) return true; // fetch threw — no verdict was ever returned
+  if (response.status >= 500) return true;
+  if (response.status === 408 || response.status === 429) return true;
+  return false;
+}
+
+/**
+ * Carries the HTTP response (if there was one) alongside the error, so the
+ * catch block can classify without re-parsing an error message.
+ */
+class SyncHttpError extends Error {
+  constructor(message: string, public readonly response: Response) {
+    super(message);
+    this.name = "SyncHttpError";
+  }
+}
 
 // The reconcile-safety rule moved to @/lib/products/refresh alongside the code
 // that acts on it. Re-exported here because this is where it has always been
@@ -101,9 +141,12 @@ class SyncEngine {
   private startRetryInterval(): void {
     if (this.retryIntervalId) return;
     this.retryIntervalId = setInterval(async () => {
-      const count = await getQueuedCount();
+      // "Due", not "unsynced": a row inside its retry backoff window is still
+      // unsynced but must not trigger a send. Using the unsynced count here
+      // would defeat the backoff entirely.
+      const count = await getDueQueuedCount();
       if (count > 0 && connectivity.isOnline) {
-        console.log(`[Sync] Periodic check: ${count} queued transactions, attempting sync...`);
+        console.log(`[Sync] Periodic check: ${count} queued transactions due, attempting sync...`);
         this.syncNow();
       }
     }, 30000); // Every 30 seconds
@@ -197,9 +240,21 @@ class SyncEngine {
     pushed: number;
     failed: number;
     deadLettered: number;
+    /**
+     * True when the flush stopped early because the connection died rather
+     * than because anything was wrong with the data. Lets the caller show
+     * "still pending" instead of a scary error for the app's normal condition.
+     */
+    abortedOnTransient: boolean;
     errors: string[];
   }> {
-    const result = { pushed: 0, failed: 0, deadLettered: 0, errors: [] as string[] };
+    const result = {
+      pushed: 0,
+      failed: 0,
+      deadLettered: 0,
+      abortedOnTransient: false,
+      errors: [] as string[],
+    };
 
     // Get all queued transactions ordered by creation time
     const queued = await getQueuedTransactions();
@@ -232,6 +287,15 @@ class SyncEngine {
           ...(txn.receipt_token && {
             receipt_token: txn.receipt_token,
           }),
+          // The moment of SALE, not the moment of sync.
+          //
+          // This was previously omitted, so Postgres applied its DEFAULT NOW()
+          // and every sale made during an outage was recorded as happening on
+          // the day the shop reconnected. That silently corrupts cash-shift
+          // reconciliation (which matches on created_at::date) and the hourly
+          // and weekday analytics. The API clamps this to <= now(), so a
+          // device with a fast clock cannot write future-dated sales.
+          created_at: txn.created_at,
           subtotal: txn.subtotal,
           total_amount: txn.total_amount,
           amount_paid: txn.amount_paid,
@@ -271,7 +335,9 @@ class SyncEngine {
 
         if (!response.ok) {
           const errorBody = await response.text();
-          throw new Error(`API error ${response.status}: ${errorBody}`);
+          // SyncHttpError so the catch below can classify on the status code
+          // rather than trying to parse it back out of a message.
+          throw new SyncHttpError(`API error ${response.status}: ${errorBody}`, response);
         }
 
         const apiResult = await response.json();
@@ -308,24 +374,48 @@ class SyncEngine {
         result.pushed++;
         console.log(`[Sync] Synced transaction ${txn.transaction_number}`);
       } catch (error: any) {
+        const message = error?.message ?? String(error);
+        const response = error instanceof SyncHttpError ? error.response : null;
+        const transient = isTransientSyncFailure(response);
+
         console.error(
-          `[Sync] Failed to sync transaction ${txn.transaction_number}:`,
+          `[Sync] Failed to sync transaction ${txn.transaction_number} (${transient ? "transient" : "permanent"}):`,
           error
         );
         result.failed++;
-        result.errors.push(
-          `Transaction ${txn.transaction_number}: ${error.message}`
-        );
+        result.errors.push(`Transaction ${txn.transaction_number}: ${message}`);
 
-        // Record the attempt. Queued transactions previously had NO retry cap,
-        // so a permanently-rejected sale (e.g. a deleted product_id, or the
-        // DECIMAL(10,2) overflow in audit P1-3) retried forever, every 30s.
-        // The row is dead-lettered rather than deleted — it is a completed
-        // sale whose money was taken, so it must never be silently dropped.
+        if (transient) {
+          // The request never got a verdict, so this row has NOT been judged.
+          // Do not spend a retry on it, and stop the flush: the link is down,
+          // and grinding through the rest of the queue would fail every one of
+          // them instantly and — before this branch existed — dead-letter the
+          // lot. The queue is ordered by created_at, so the next flush simply
+          // resumes here.
+          try {
+            await recordQueuedTransactionDeferral(txn.id, message);
+          } catch (e) {
+            console.warn("[Sync] Failed to record transaction deferral:", e);
+          }
+
+          result.abortedOnTransient = true;
+          const remaining = queued.length - (result.pushed + result.failed);
+          console.warn(
+            `[Sync] Transport failure — stopping flush with ${remaining} transaction(s) untouched. ` +
+              `No retries were consumed; they will be resent on the next reconnect.`
+          );
+          break;
+        }
+
+        // Permanent: the server looked at this specific payload and rejected
+        // it (e.g. a deleted product_id, or the DECIMAL(10,2) overflow in
+        // audit P1-3). Worth counting against the retry budget. The row is
+        // dead-lettered rather than deleted — it is a completed sale whose
+        // money was taken, so it must never be silently dropped.
         try {
           const attempts = await recordQueuedTransactionFailure(
             txn.id,
-            error?.message ?? String(error),
+            message,
             MAX_PENDING_WRITE_RETRIES
           );
           if (attempts >= MAX_PENDING_WRITE_RETRIES) {
@@ -526,16 +616,20 @@ class SyncEngine {
     this.notify();
 
     try {
-      // Pull latest products (refreshed stock, prices, etc.)
-      const pullResult = await this.pullProducts();
-
-      // Sync favorites from Supabase (pull remote favorites into localStorage)
-      if (this.storeId) {
-        await syncFavoritesFromSupabase(this.storeId);
-      }
-
-      // Push queued transactions (stock decrements handled server-side)
+      // MONEY FIRST.
+      //
+      // This used to run pullProducts() and the favourites pull before the
+      // queue flush. After a multi-day outage the catalogue delta is large, so
+      // the money-bearing writes waited behind a big download — on exactly the
+      // fragile connection most likely to drop again mid-flush. Sales that
+      // already happened outrank price updates that have not.
       const pushResult = await this.pushQueuedTransactions();
+
+      // Products and favourites are independent of each other, so they overlap.
+      const [pullResult] = await Promise.all([
+        this.pullProducts(),
+        this.storeId ? syncFavoritesFromSupabase(this.storeId) : Promise.resolve(),
+      ]);
 
       // Process pending stock decrements (only for legacy/offline queued writes)
       const pendingResult = await this.processPendingWrites();
@@ -543,13 +637,26 @@ class SyncEngine {
       // Process pending favorite writes (add/remove starred items)
       const favoriteResult = await processPendingFavoriteWrites();
 
-      const success = pullResult.success;
-      this._status = success ? "idle" : "error";
+      // `success` used to be `pullResult.success` alone, which meant the
+      // indicator showed green while the queue was dead-lettering real sales.
+      // A push failure is the more serious of the two and must be visible.
+      const success =
+        pullResult.success && pushResult.failed === 0 && pushResult.deadLettered === 0;
+
+      // A flush cut short by the link dropping is this app's normal condition,
+      // not an error state — the sales are safe and no retries were spent. Only
+      // a genuine fault (a rejected payload, a failed pull) is worth alarming
+      // the cashier about.
+      const benignInterruption =
+        pushResult.abortedOnTransient && pushResult.deadLettered === 0;
+      this._status = success || benignInterruption ? "idle" : "error";
       this.notify();
 
       console.log(
-        `[Sync] Complete: pulled ${pullResult.count} products, ` +
-        `pushed ${pushResult.pushed} transactions, ` +
+        `[Sync] Complete: pushed ${pushResult.pushed} transactions` +
+        (pushResult.deadLettered ? ` (${pushResult.deadLettered} DEAD-LETTERED)` : "") +
+        (pushResult.abortedOnTransient ? " (flush cut short — link dropped)" : "") +
+        `, pulled ${pullResult.count} products, ` +
         `processed ${pendingResult.processed} stock decrements, ` +
         `processed ${favoriteResult.processed} favorite writes`
       );

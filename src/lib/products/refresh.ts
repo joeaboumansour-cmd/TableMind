@@ -22,6 +22,7 @@ import {
   getCachedProductsCount,
   reconcileProductsCache,
   upsertProducts,
+  writeWithQuotaRescue,
 } from "@/lib/db/localDB";
 import type { CachedProduct } from "@/lib/db/localDB";
 
@@ -236,7 +237,14 @@ export async function fetchAllProducts(
   if (typeof window !== "undefined") {
     try {
       if (allProducts.length > 0) {
-        await upsertProducts(allProducts.map(mapToCachedProduct));
+        // Quota-rescued. A full disk here used to surface as a console.warn
+        // and nothing else: writeLastSync below never ran, so the watermark
+        // never advanced and the app re-pulled the entire catalogue every
+        // cycle, forever, while the cache silently stopped updating.
+        await writeWithQuotaRescue(
+          () => upsertProducts(allProducts.map(mapToCachedProduct)),
+          "cache full product catalogue"
+        );
       }
 
       // Reconcile the cache against the live product set. Without this,
@@ -516,7 +524,10 @@ async function runRefresh(
   }
 
   if (changedRows.length > 0) {
-    await cacheProducts(changedRows.map(mapToCachedProduct));
+    await writeWithQuotaRescue(
+      () => cacheProducts(changedRows.map(mapToCachedProduct)),
+      "cache product delta"
+    );
     console.log(`[Products] Delta pull applied ${changedRows.length} changed products`);
   }
 

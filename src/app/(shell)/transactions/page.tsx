@@ -339,11 +339,16 @@ export default function TransactionHistoryPage() {
    */
   const loadPendingTransactions = useCallback(async () => {
     try {
-      const { getQueuedTransactions, getDeadLetterTransactions } = await import(
+      // getUnsyncedTransactions, NOT getQueuedTransactions: the latter answers
+      // "what should the sync engine send right now" and so omits rows sitting
+      // out a retry backoff. Those are still unsynced sales — omitting them
+      // here would make a sale vanish from History and drop out of the day's
+      // takings for as long as its backoff lasts.
+      const { getUnsyncedTransactions, getDeadLetterTransactions } = await import(
         "@/lib/db/localDB"
       );
       const [queued, deadLettered] = await Promise.all([
-        getQueuedTransactions(),
+        getUnsyncedTransactions(),
         getDeadLetterTransactions(),
       ]);
       if (queued.length === 0 && deadLettered.length === 0) return;

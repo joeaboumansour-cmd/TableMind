@@ -172,7 +172,28 @@ export async function POST(request: Request) {
 
     const { store_id } = JSON.parse(authData);
     const body = await request.json();
-    
+
+    // When the sale actually happened.
+    //
+    // Offline sales sit in the local queue until the shop reconnects, and this
+    // field was previously not sent and not stored — so Postgres applied its
+    // DEFAULT NOW() and three days of offline trading was all recorded as
+    // having happened on the day the link came back. That corrupts cash-shift
+    // reconciliation (021_cash_management.sql matches on created_at::date) and
+    // the hourly/weekday analytics. (audit P1-1)
+    //
+    // Clamped rather than trusted: created_at comes from a till's own clock,
+    // and shop-floor devices drift. A future timestamp would put sales in a
+    // shift that has not started yet, so anything ahead of the server's clock
+    // is pulled back to now. An unparseable or absent value falls through to
+    // the column default, which is the old behaviour.
+    const saleTime = (() => {
+      if (!body.created_at) return null;
+      const parsed = Date.parse(body.created_at);
+      if (Number.isNaN(parsed)) return null;
+      return new Date(Math.min(parsed, Date.now())).toISOString();
+    })();
+
     // Check if a transaction with this transaction_number already exists for this store
     // This prevents duplicate entries when the sync engine pushes the same queued transaction twice
     const { data: existingTxn } = await supabase
@@ -226,6 +247,9 @@ export async function POST(request: Request) {
         ...(body.receipt_token && {
           receipt_token: body.receipt_token,
         }),
+        // Omitted when the client did not send a usable timestamp, so the
+        // column default (NOW()) still applies for online sales.
+        ...(saleTime && { created_at: saleTime }),
         subtotal: body.subtotal,
         total_amount: body.total_amount,
         amount_paid: body.amount_paid,

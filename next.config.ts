@@ -20,12 +20,19 @@ const withPWA = withPWAInit({
   // handled by the connectivity heartbeat + sync engine.
   reloadOnOnline: false,
   // NO fallbacks.document — we NEVER want to show an offline blocking page.
-  // Pages are served via the default NetworkFirst runtime handler, which
-  // always fetches fresh HTML when online and falls back to cache offline.
+  // Pages are served via a NetworkFirst runtime handler, which always fetches
+  // fresh HTML when online and falls back to cache offline.
   // We do NOT precache HTML routes with static revisions — doing so would
   // freeze users on stale content forever (Workbox skips re-fetching when
   // the revision string hasn't changed). Static JS/CSS/font chunks are still
   // precached automatically because their filenames are content-hashed.
+  //
+  // CRITICAL: that runtime cache is the ONLY cached document, so its
+  // expiration IS the offline shelf life of the whole app. The default `pages`
+  // rule ships with maxAgeSeconds: 86400 — Workbox treats an entry past its
+  // age as a miss AND deletes it, so on day 2 of an outage a cold launch found
+  // no document and died on the browser's offline page. The `app-shell` rule
+  // below fixes that; see the long comment on it.
   //
   // CRITICAL: Exclude /api/health from the service worker 'apis' cache.
   // The connectivity heartbeat probes this endpoint to detect real
@@ -62,6 +69,56 @@ const withPWA = withPWAInit({
         urlPattern: ({ url }: { url: URL }) => url.pathname === "/api/health",
         handler: "NetworkOnly" as const,
         method: "GET",
+      },
+      // CRITICAL: the app shell must survive an outage of ANY length.
+      //
+      // HTML is deliberately not precached (see above), so a runtime cache is
+      // the only cached document. The default `pages` rule that used to serve
+      // that role carries `maxAgeSeconds: 86400` from next-pwa's defaults, and
+      // Workbox's ExpirationPlugin returns null for — and deletes — an entry
+      // past its age. So the POS opened fine on day 1 of an outage and failed
+      // on day 2, which is exactly the scenario this app exists for.
+      //
+      // This rule has NO maxAgeSeconds. A cached shell is kept until it is
+      // evicted for space or pushed out by maxEntries. Staleness is not a risk:
+      // NetworkFirst always prefers the network, so a stale shell is only ever
+      // served when there is no network — which is precisely when we want it.
+      //
+      // Two deliberate choices:
+      //
+      //  * A NEW cacheName ("app-shell"), not "pages". extendDefaultRuntimeCaching
+      //    appends a default only when its cacheName is not already taken, so
+      //    claiming "pages" would DELETE the default rule. Using a new name
+      //    leaves it in place beneath this one, so this can only add coverage.
+      //
+      //  * request.mode === "navigate" keeps this rule NARROWER than the
+      //    default `pages` rule. Custom rules are registered FIRST, so a broad
+      //    pattern here would shadow the asset rules (next-static-js-assets,
+      //    static-image-assets, …) that are registered after it.
+      //
+      // networkTimeoutSeconds is the other half of the offline promise. Without
+      // it, NetworkFirst waits for the browser's own timeout (30-90s) before
+      // consulting the cache — and this app's signature failure is wifi that is
+      // associated with no upstream, where the fetch hangs rather than failing.
+      // 3s is well past a healthy response and well short of a frozen till.
+      {
+        urlPattern: ({
+          request,
+          sameOrigin,
+        }: {
+          request: Request;
+          sameOrigin: boolean;
+        }) => sameOrigin && request.mode === "navigate",
+        handler: "NetworkFirst" as const,
+        method: "GET",
+        options: {
+          cacheName: "app-shell",
+          networkTimeoutSeconds: 3,
+          // maxEntries only. Adding maxAgeSeconds here would reintroduce the
+          // exact bug this rule exists to fix — scripts/verify-sw.mjs asserts
+          // its absence in the generated worker.
+          expiration: { maxEntries: 64 },
+        },
       },
     ],
   },

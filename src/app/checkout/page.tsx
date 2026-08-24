@@ -53,6 +53,7 @@ import {
   queueCompletedSale,
   pushSaleInBackground,
 } from "@/lib/pos/saleCompletion";
+import { StorageFullError } from "@/lib/db/localDB";
 import { cn } from "@/lib/utils";
 
 /** Which amount the keypad is typing into. Both are always displayed. */
@@ -445,7 +446,17 @@ function CheckoutContent() {
       });
     } catch (error) {
       console.error("Error processing payment:", error);
-      toast.error("Failed to process payment");
+      // Distinguish "the disk is full" from a bug — it is the one failure here
+      // the cashier can actually act on, and by this point every rebuildable
+      // cache has already been sacrificed to try to make room.
+      if (error instanceof StorageFullError) {
+        toast.error("Device storage is full — this sale was NOT saved.", {
+          description: "Free up space on the device and take the payment again before continuing.",
+          duration: 15000,
+        });
+      } else {
+        toast.error("Failed to process payment");
+      }
     } finally {
       setIsProcessing(false);
     }

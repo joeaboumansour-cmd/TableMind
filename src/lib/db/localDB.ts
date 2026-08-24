@@ -77,6 +77,21 @@ export interface QueuedTransaction {
    * to the user for manual resolution.
    */
   failed_permanently?: boolean;
+  /**
+   * Earliest time this row should be attempted again, as an ISO string.
+   * Absent means "attempt immediately", which is what every row queued before
+   * this field existed will do.
+   *
+   * Retries used to have no delay at all: retry_count was incremented and the
+   * row was tried again on the very next 30s cycle, at full speed, forever.
+   * See computeRetryBackoffMs().
+   *
+   * Deliberately NOT indexed. Adding an index means a Dexie version bump, and
+   * getQueuedTransactions() already reads the whole table and filters in JS —
+   * so an index would buy nothing today. When that scan is fixed, index this
+   * at the same time.
+   */
+  next_attempt_at?: string;
 }
 
 export interface QueuedTransactionItem {
@@ -97,6 +112,8 @@ export interface PendingWrite {
   created_at: string;
   retry_count: number;
   last_error: string | null;
+  /** See QueuedTransaction.next_attempt_at. */
+  next_attempt_at?: string;
 }
 
 // ---- Database ----
@@ -153,6 +170,123 @@ db.version(3).stores({
   pending_writes:
     "id, type, created_at, retry_count",
 });
+
+// ---- Storage Pressure ----
+
+/**
+ * Thrown when a write could not be made to fit even after sacrificing every
+ * expendable cache. Distinct from a generic failure so the UI can say
+ * something true and actionable instead of "Failed to end transaction".
+ */
+export class StorageFullError extends Error {
+  constructor(message: string, public readonly cause?: unknown) {
+    super(message);
+    this.name = "StorageFullError";
+  }
+}
+
+/**
+ * Is this the browser telling us the disk is full?
+ *
+ * Spelled differently per engine: Chrome/Safari throw a DOMException named
+ * QuotaExceededError, Firefox has historically used NS_ERROR_DOM_QUOTA_REACHED,
+ * and legacy code paths only set the numeric code 22. Dexie also wraps some
+ * failures, so the inner error is checked too.
+ */
+function isQuotaError(e: unknown): boolean {
+  type ErrorLike = {
+    name?: unknown;
+    code?: unknown;
+    inner?: unknown;
+    cause?: unknown;
+  };
+
+  const seen = new Set<unknown>();
+  let err: unknown = e;
+
+  while (err && typeof err === "object" && !seen.has(err)) {
+    seen.add(err);
+    const { name, code, inner, cause } = err as ErrorLike;
+    if (
+      name === "QuotaExceededError" ||
+      name === "NS_ERROR_DOM_QUOTA_REACHED" ||
+      name === "QuotaExceeded" ||
+      code === 22 ||
+      code === 1014
+    ) {
+      return true;
+    }
+    err = inner ?? cause;
+  }
+  return false;
+}
+
+/**
+ * Free space by dropping data we can rebuild from the server.
+ *
+ * Order matters, and products_cache is deliberately NOT in it. It would free
+ * the most, but it is also the only thing letting the till sell while offline
+ * — dropping it to save one row would take the whole shop down instead of one
+ * write. transactions_cache is a pure read convenience, and queued favourite
+ * toggles are cosmetic; both are safe to lose and both refill on reconnect.
+ *
+ * offline_queue is never touched. That is the data this exists to protect.
+ */
+async function freeExpendableSpace(): Promise<void> {
+  try {
+    await db.transactions_cache.clear();
+    console.warn("[LocalDB] Storage pressure — dropped transactions_cache to make room");
+  } catch (e) {
+    console.warn("[LocalDB] Could not clear transactions_cache:", e);
+  }
+
+  try {
+    const cosmetic = await db.pending_writes
+      .where("type")
+      .anyOf("favorite_add", "favorite_remove")
+      .primaryKeys();
+    if (cosmetic.length > 0) {
+      await db.pending_writes.bulkDelete(cosmetic);
+      console.warn(`[LocalDB] Storage pressure — dropped ${cosmetic.length} queued favourite writes`);
+    }
+  } catch (e) {
+    console.warn("[LocalDB] Could not clear cosmetic pending writes:", e);
+  }
+}
+
+/**
+ * Run a write, and on a quota failure make room and try once more.
+ *
+ * Every IndexedDB write in this app could previously fail on a full disk with
+ * nothing but a console line or a generic toast. On the sale path that means a
+ * completed sale — money already in the drawer — silently not being recorded.
+ *
+ * Non-quota errors pass straight through untouched: this is a disk-space
+ * rescue, not a general retry.
+ */
+export async function writeWithQuotaRescue<T>(
+  op: () => Promise<T>,
+  label: string
+): Promise<T> {
+  try {
+    return await op();
+  } catch (e) {
+    if (!isQuotaError(e)) throw e;
+
+    console.warn(`[LocalDB] Quota exceeded during "${label}" — attempting rescue`);
+    await freeExpendableSpace();
+
+    try {
+      return await op();
+    } catch (retryError) {
+      if (!isQuotaError(retryError)) throw retryError;
+      throw new StorageFullError(
+        `Device storage is full — "${label}" could not be saved even after clearing rebuildable caches.`,
+        retryError
+      );
+    }
+  }
+}
 
 // ---- Products Cache Operations ----
 
@@ -367,17 +501,44 @@ export async function getCachedTransactionsCount(): Promise<number> {
 export async function queueTransaction(
   transaction: QueuedTransaction
 ): Promise<void> {
-  await db.offline_queue.add(transaction);
+  // Quota-rescued: this is the single most important write in the app. The
+  // money is already in the drawer by the time we get here, so a full disk
+  // must not be allowed to lose the record silently. Throws StorageFullError
+  // if it truly cannot be made to fit.
+  await writeWithQuotaRescue(
+    () => db.offline_queue.add(transaction),
+    `queue sale ${transaction.transaction_number}`
+  );
   console.log(`[LocalDB] Queued transaction ${transaction.transaction_number} for sync`);
 }
 
 /**
- * Transactions eligible for a sync attempt, oldest first.
- * Excludes dead-lettered rows so a permanently-rejected sale stops consuming
- * a network request every 30 seconds. Use getDeadLetterTransactions() to
- * surface those to the user.
+ * Transactions eligible for a sync attempt right now, oldest first.
+ *
+ * Excludes two things:
+ *   - dead-lettered rows, so a permanently-rejected sale stops consuming a
+ *     network request every 30 seconds (see getDeadLetterTransactions())
+ *   - rows still inside their retry backoff window (next_attempt_at)
  */
 export async function getQueuedTransactions(): Promise<QueuedTransaction[]> {
+  const all = await db.offline_queue.orderBy("created_at").toArray();
+  const now = Date.now();
+  return all.filter((t) => {
+    if (t.failed_permanently) return false;
+    if (t.next_attempt_at && Date.parse(t.next_attempt_at) > now) return false;
+    return true;
+  });
+}
+
+/**
+ * Transactions waiting to sync, INCLUDING those inside a backoff window.
+ *
+ * getQueuedTransactions() answers "what should I send right now"; this answers
+ * "what has not reached the server yet", which is what the user needs to see
+ * and what the pending badge should count. A sale in backoff is still an
+ * unsynced sale.
+ */
+export async function getUnsyncedTransactions(): Promise<QueuedTransaction[]> {
   const all = await db.offline_queue.orderBy("created_at").toArray();
   return all.filter((t) => !t.failed_permanently);
 }
@@ -393,8 +554,34 @@ export async function getDeadLetterTransactions(): Promise<QueuedTransaction[]> 
 }
 
 /**
- * Record a failed sync attempt. Returns the new retry count.
- * Once `maxRetries` is reached the row is dead-lettered rather than deleted.
+ * Delay before attempt N may be made, in milliseconds.
+ *
+ * 30s → 1m → 5m → 15m → 1h, with ±20% jitter so a shop full of devices
+ * reconnecting off the same router does not retry in lockstep.
+ *
+ * Retries previously had no delay whatsoever: the only spacing was the 30s
+ * sync cycle, and that is per-cycle rather than per-row, so a large queue
+ * burned its entire retry budget as fast as fetch could fail.
+ */
+export function computeRetryBackoffMs(attempt: number): number {
+  const SCHEDULE_MS = [30_000, 60_000, 300_000, 900_000, 3_600_000];
+  const base = SCHEDULE_MS[Math.min(Math.max(attempt, 1) - 1, SCHEDULE_MS.length - 1)];
+  const jitter = base * 0.2 * (Math.random() * 2 - 1);
+  return Math.max(1_000, Math.round(base + jitter));
+}
+
+/**
+ * Record a PERMANENT failure — the server received the request and rejected
+ * this specific row (a 4xx). Returns the new retry count.
+ *
+ * Only call this when retrying the same payload could plausibly fail the same
+ * way. Once `maxRetries` is reached the row is dead-lettered rather than
+ * deleted, because it is a completed sale whose money was taken.
+ *
+ * For a failure that says nothing about the row — the link dropped, the server
+ * is down — use recordQueuedTransactionDeferral() instead. Burning a retry on
+ * a transport failure is how an entire backlog of good sales gets
+ * dead-lettered by a few flaky reconnects.
  */
 export async function recordQueuedTransactionFailure(
   id: string,
@@ -406,13 +593,37 @@ export async function recordQueuedTransactionFailure(
     const txn = await db.offline_queue.get(id);
     if (!txn) return;
     count = (txn.retry_count || 0) + 1;
+    const dead = count >= maxRetries;
     await db.offline_queue.update(id, {
       retry_count: count,
       last_error: error,
-      failed_permanently: count >= maxRetries,
+      failed_permanently: dead,
+      // A dead row is never retried, so a backoff on it would be meaningless.
+      next_attempt_at: dead
+        ? undefined
+        : new Date(Date.now() + computeRetryBackoffMs(count)).toISOString(),
     });
   });
   return count;
+}
+
+/**
+ * Record a TRANSIENT failure — the request never got a verdict from the
+ * server (fetch threw, or a 5xx/408/429 came back).
+ *
+ * Deliberately does NOT touch retry_count, so the row can never be
+ * dead-lettered by a bad connection. It only notes the error for display and
+ * holds the row back briefly so a dead link is not hammered.
+ */
+export async function recordQueuedTransactionDeferral(
+  id: string,
+  error: string,
+  delayMs: number = 30_000
+): Promise<void> {
+  await db.offline_queue.update(id, {
+    last_error: error,
+    next_attempt_at: new Date(Date.now() + delayMs).toISOString(),
+  });
 }
 
 export async function removeQueuedTransaction(
@@ -421,8 +632,19 @@ export async function removeQueuedTransaction(
   await db.offline_queue.delete(id);
 }
 
-/** Count of transactions still awaiting a sync attempt (excludes dead-lettered). */
+/**
+ * Count of sales that have not reached the server (excludes dead-lettered).
+ *
+ * Counts rows inside a retry backoff window too — this is the number the
+ * cashier sees, and a sale waiting out a backoff is still an unsynced sale.
+ * Use getDueQueuedCount() for "is there anything to send right now".
+ */
 export async function getQueuedCount(): Promise<number> {
+  return (await getUnsyncedTransactions()).length;
+}
+
+/** Count of queued sales eligible for a send attempt right now. */
+export async function getDueQueuedCount(): Promise<number> {
   return (await getQueuedTransactions()).length;
 }
 
