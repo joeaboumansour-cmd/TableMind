@@ -807,25 +807,51 @@ export default function POSPage() {
     }
   };
 
+  // handleQuickEnd is redefined on every render. The shortcut effect reads it
+  // through this ref so it does not have to re-register a window listener on
+  // every keystroke in the cart.
+  const quickEndRef = useRef<() => void>(() => {});
+  useEffect(() => {
+    quickEndRef.current = handleQuickEnd;
+  });
+
   // Refs for F-key shortcuts
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const barcodeInputRef = useRef<HTMLInputElement | null>(null);
 
-  // F-key shortcuts: F2=Search, F3=Scanner/barcode, F4=Done, F8=Checkout.
+  // F-key shortcuts: F1=Search, F3=Barcode, F4=Checkout, F8=Done.
   //
   // These deliberately fire even while an input has focus. On a hardware-scanner
   // till the barcode field is focused essentially all the time -- it re-focuses
-  // itself after every scan -- so the old "return early if the target is an
-  // input" guard meant the shortcuts almost never worked on the one layout they
+  // itself after every scan -- so a "return early if the target is an input"
+  // guard would mean the shortcuts almost never worked on the one layout they
   // exist for. F-keys type no characters, so there is nothing to collide with.
   //
-  // F8 rather than F5/F6/F7 for checkout: F5 reloads (which on this app means
-  // losing an in-progress screen to a service-worker update check), F6 cycles
-  // browser panes and F7 toggles caret browsing. F8 is unclaimed.
+  // Both F8 and F4 are DOUBLE-PRESS: the first opens a step, the second commits
+  // it. F8, F8 finishes a sale without leaving the POS; F4, F4 goes to checkout
+  // and completes it there (see src/app/checkout/page.tsx).
+  //
+  // e.repeat is essential, not a nicety. Holding a key auto-repeats, and
+  // without this a leaned-on F8 would open the confirmation and immediately
+  // answer it -- completing a sale nobody confirmed.
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.repeat) return;
+
+      // Second F8 while the confirmation is up = "yes, finish it".
+      if (isQuickEndDialogOpen) {
+        if (e.key === "F8") {
+          e.preventDefault();
+          if (!isQuickEndProcessing) quickEndRef.current();
+        }
+        return;
+      }
+
+      // Any other modal owns the keyboard.
       if (isAnyDialogOpen) return;
-      if (e.key === "F2") {
+
+      if (e.key === "F1") {
+        // Chrome opens its help centre on F1; preventDefault suppresses that.
         e.preventDefault();
         searchInputRef.current?.focus();
       } else if (e.key === "F3") {
@@ -838,20 +864,28 @@ export default function POSPage() {
         }
       } else if (e.key === "F4") {
         e.preventDefault();
-        if (!isEmpty()) {
-          setIsQuickEndDialogOpen(true);
-        }
-      } else if (e.key === "F8") {
-        e.preventDefault();
         // Same condition as the Checkout button: nothing to pay for otherwise.
         if (!isEmpty()) {
           router.push("/checkout");
+        }
+      } else if (e.key === "F8") {
+        e.preventDefault();
+        if (!isEmpty()) {
+          setIsQuickEndDialogOpen(true);
         }
       }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isEmpty, isDesktopMode, toggleScanner, router, isAnyDialogOpen]);
+  }, [
+    isEmpty,
+    isDesktopMode,
+    toggleScanner,
+    router,
+    isAnyDialogOpen,
+    isQuickEndDialogOpen,
+    isQuickEndProcessing,
+  ]);
 
   // Cleanup timeout on unmount
   useEffect(() => {
@@ -1047,6 +1081,7 @@ export default function POSPage() {
                 <Check className="h-4 w-4" />
               )}
               Done
+              <span className="ml-1 text-xs font-semibold opacity-60">F8</span>
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1312,7 +1347,7 @@ export default function POSPage() {
           <ProductSearchBar
             products={products}
             onSelect={handleProductAdd}
-            placeholder="Search products by name or barcode…   F2"
+            placeholder="Search products by name or barcode…   F1"
             className="flex-1"
             inputClassName="h-11 rounded-2xl"
             inputRef={searchInputRef}
@@ -1325,7 +1360,7 @@ export default function POSPage() {
               >
                 <Check className="h-4 w-4 text-emerald-400" />
                 Done
-                <span className="ml-1 text-xs font-semibold opacity-50">F4</span>
+                <span className="ml-1 text-xs font-semibold opacity-50">F8</span>
               </Button>
               <Button
                 className="tap h-11 rounded-2xl px-5 font-bold"
@@ -1333,7 +1368,7 @@ export default function POSPage() {
               >
                 <CreditCard className="h-4 w-4" />
                 Checkout
-                <span className="ml-1 text-xs font-semibold opacity-60">F8</span>
+                <span className="ml-1 text-xs font-semibold opacity-60">F4</span>
               </Button>
             </div>
           )}

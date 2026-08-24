@@ -16,7 +16,7 @@
 // LL and USD together.
 // =============================================
 
-import { useCallback, useEffect, useState, useTransition, Suspense } from "react";
+import { useCallback, useEffect, useRef, useState, useTransition, Suspense } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import {
@@ -237,6 +237,45 @@ function CheckoutContent() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [activeField, pressKey, pressBackspace, handleClear, transactionComplete]);
 
+  // ---- F4: complete the sale ----
+  //
+  // The second half of the POS double-press. F4 there navigates here; F4 again
+  // completes. Unlike the handler above this one fires even while a field has
+  // focus, because on a till the LL amount box holds focus the whole time.
+  //
+  // Three cases, deliberately distinct:
+  //   enough tendered -> normal completion, change and all
+  //   nothing tendered -> express path, recorded as paying the total exactly,
+  //                       identical to what the POS "Done" button records
+  //   part tendered    -> refused. A half-typed amount is a mistake, and
+  //                       rounding it up to the total would invent money that
+  //                       never crossed the counter.
+  //
+  // e.repeat guards a leaned-on key completing a sale on its own.
+  const processPaymentRef =
+    useRef<(o?: { assumeExactPayment?: boolean }) => void>(() => {});
+  useEffect(() => {
+    processPaymentRef.current = handleProcessPayment;
+  });
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.repeat || e.key !== "F4") return;
+      e.preventDefault();
+      if (transactionComplete || isProcessing || items.length === 0) return;
+
+      if (totalPaid >= total) {
+        processPaymentRef.current();
+      } else if (totalPaid === 0) {
+        processPaymentRef.current({ assumeExactPayment: true });
+      } else {
+        toast.error("Insufficient payment amount");
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [transactionComplete, isProcessing, items.length, totalPaid, total]);
+
   // Generate transaction number
   const generateTransactionNumber = () => {
     const timestamp = Date.now().toString(36).toUpperCase();
@@ -245,20 +284,36 @@ function CheckoutContent() {
   };
 
   // Handle payment processing
-  const handleProcessPayment = async () => {
+  /**
+   * `assumeExactPayment` is the F4 express path: complete the sale with no
+   * tender typed, recording the customer as having paid the total exactly and
+   * taken no change. That is precisely what the POS "Done" button already
+   * records (amount_paid: total, change_given: 0), so the two fast paths agree
+   * with each other and with the books.
+   *
+   * It is NOT a way to record a shortfall. The caller only passes it when
+   * nothing at all has been entered -- a half-typed amount is treated as a
+   * mistake and refused, because silently rounding a partial tender up to the
+   * total would invent money that never crossed the counter.
+   */
+  const handleProcessPayment = async (options?: { assumeExactPayment?: boolean }) => {
+    const assumeExact = options?.assumeExactPayment === true;
+
     if (items.length === 0) {
       toast.error("Cart is empty");
       return;
     }
 
-    if (totalPaid <= 0) {
-      toast.error("Please enter payment amount");
-      return;
-    }
+    if (!assumeExact) {
+      if (totalPaid <= 0) {
+        toast.error("Please enter payment amount");
+        return;
+      }
 
-    if (totalPaid < total) {
-      toast.error("Insufficient payment amount");
-      return;
+      if (totalPaid < total) {
+        toast.error("Insufficient payment amount");
+        return;
+      }
     }
 
     setIsProcessing(true);
@@ -269,8 +324,12 @@ function CheckoutContent() {
       // Claimed synchronously — token and QR image were generated on mount.
       const receipt = takeReceipt();
 
-      const calculatedChangeGiven = totalPaid - total;
-      const calcChangeUsd = calculatedChangeGiven / changeRate;
+      // Express path pays the total exactly and returns nothing, matching the
+      // POS "Done" flow. Otherwise these are the entered tenders as before.
+      const effectiveTotalPaid = assumeExact ? total : totalPaid;
+      const effectivePaidUsd = assumeExact ? 0 : paidUSD;
+      const calculatedChangeGiven = assumeExact ? 0 : totalPaid - total;
+      const calcChangeUsd = assumeExact ? 0 : calculatedChangeGiven / changeRate;
 
       // Get current user info
       const currentUser = JSON.parse(localStorage.getItem("goldensquirrel_user") || "{}");
@@ -311,12 +370,12 @@ function CheckoutContent() {
         receipt_token: receipt.token,
         subtotal: getSubtotal(),
         total_amount: total,
-        amount_paid: totalPaid,
+        amount_paid: effectiveTotalPaid,
         change_given: calculatedChangeGiven,
         payment_method: "cash",
         usd_subtotal: getSubtotalUsd(),
         usd_total_amount: totalUsd,
-        usd_amount_paid: paidUSD,
+        usd_amount_paid: effectivePaidUsd,
         usd_change_given: calcChangeUsd,
         items: lineItems,
         ...userInfo,
@@ -332,12 +391,12 @@ function CheckoutContent() {
         receipt_token: receipt.token,
         subtotal: getSubtotal(),
         total_amount: total,
-        amount_paid: totalPaid,
+        amount_paid: effectiveTotalPaid,
         change_given: calculatedChangeGiven,
         payment_method: "cash",
         subtotal_usd: getSubtotalUsd(),
         total_usd: totalUsd,
-        amount_paid_usd: paidUSD,
+        amount_paid_usd: effectivePaidUsd,
         change_given_usd: calcChangeUsd,
         items: lineItems,
         created_at: new Date().toISOString(),
@@ -358,7 +417,7 @@ function CheckoutContent() {
       setReceiptToken(receipt.token);
       setReceiptUrl(receipt.receiptUrl);
       setQrDataUrl(receipt.qrDataUrl);
-      setPaidAmount(totalPaid);
+      setPaidAmount(effectiveTotalPaid);
       setChangeGiven(calculatedChangeGiven);
       setChangeUsd(calcChangeUsd);
       setTransactionComplete(true);
@@ -515,7 +574,7 @@ function CheckoutContent() {
                 <img
                   src={qrDataUrl}
                   alt="Digital receipt QR code"
-                  className="h-36 w-36 rounded-xl bg-white p-2"
+                  className="h-44 w-44 rounded-xl bg-white p-2"
                 />
               </div>
               <div className="grid grid-cols-3 gap-2">
@@ -853,7 +912,7 @@ function CheckoutContent() {
       <div className="flex-shrink-0 px-5 pb-3">
         <button
           type="button"
-          onClick={handleProcessPayment}
+          onClick={() => handleProcessPayment()}
           disabled={isProcessing || totalPaid < total}
           className="tap flex h-14 w-full items-center justify-center gap-2 rounded-2xl bg-primary text-base font-bold text-primary-foreground disabled:pointer-events-none disabled:opacity-40"
         >
@@ -866,6 +925,7 @@ function CheckoutContent() {
             <>
               <Check className="h-5 w-5" />
               <span className="tnum">Process Payment · {formatLL(total)}</span>
+              <span className="ml-1 text-xs font-semibold opacity-60">F4</span>
             </>
           )}
         </button>
