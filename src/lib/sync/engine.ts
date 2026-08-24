@@ -44,14 +44,26 @@ const MAX_PENDING_WRITE_RETRIES = 5;
  *     never reached the server, so the row is unjudged.
  *   - 5xx: the server is broken, not the payload.
  *   - 408 / 429: explicitly "try again later".
+ *   - 401 / 403: see below.
  *
  * Everything else (4xx) is the server having looked at this specific payload
  * and rejected it, which is worth counting against the retry budget.
+ *
+ * 401/403 are deliberately transient even though they are 4xx. They say
+ * nothing about the sale — they say the CALLER is not currently authenticated,
+ * which is a client-state problem that a re-login fixes. This is not
+ * hypothetical: an offline login used to leave `goldensquirrel_auth` unset, so
+ * the engine sent `x-auth-data: {}` and every queued sale came back
+ * `401 Unauthorized - No store_id in auth data`. Counting that against the
+ * budget would dead-letter a whole day of real takings because of a login
+ * bug. Root cause is fixed in AuthContext.saveLegacyAuthToStorage; this is the
+ * belt-and-braces so no future auth regression can destroy money.
  */
 function isTransientSyncFailure(response: Response | null): boolean {
   if (!response) return true; // fetch threw — no verdict was ever returned
   if (response.status >= 500) return true;
   if (response.status === 408 || response.status === 429) return true;
+  if (response.status === 401 || response.status === 403) return true;
   return false;
 }
 

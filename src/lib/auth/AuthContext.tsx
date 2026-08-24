@@ -74,6 +74,37 @@ function saveUserToStorage(user: StoreUser) {
   localStorage.setItem("goldensquirrel_user", JSON.stringify(user));
 }
 
+/**
+ * Write the legacy `goldensquirrel_auth` key.
+ *
+ * This is NOT cosmetic. It is the tenancy header for every API call:
+ * `sync/engine.ts` sends `localStorage.getItem("goldensquirrel_auth")` as
+ * `x-auth-data`, and many components still read `store_id` out of it directly
+ * rather than going through useAuth().
+ *
+ * Both ONLINE login paths write it from inside the login page. The OFFLINE
+ * path did not — so an offline login produced a session where
+ * `goldensquirrel_user` was set but this key was absent, the sync engine sent
+ * `x-auth-data: {}`, and the API answered
+ * `401 Unauthorized - No store_id in auth data` for every queued sale.
+ *
+ * That is the exact multi-day-outage scenario: a cashier logs in offline,
+ * sells all day, and none of it can ever sync. Confirmed on production
+ * 2026-08-24. Writing it here rather than in the page means no future caller
+ * of loginOffline can forget it.
+ */
+function saveLegacyAuthToStorage(storeId: string, username: string, licenseExpiresAt?: string) {
+  localStorage.setItem(
+    "goldensquirrel_auth",
+    JSON.stringify({
+      store_id: storeId,
+      username,
+      license_expires_at: licenseExpiresAt ?? null,
+      timestamp: Date.now(),
+    })
+  );
+}
+
 function clearUserFromStorage() {
   localStorage.removeItem("goldensquirrel_user");
   localStorage.removeItem("goldensquirrel_auth"); // legacy cleanup
@@ -286,6 +317,12 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
         setUser(employeeUser);
         saveUserToStorage(employeeUser);
+        // Without this the session cannot sync — see saveLegacyAuthToStorage.
+        saveLegacyAuthToStorage(
+          employeeData.store_id,
+          employeeData.username,
+          storeData.license_expires_at
+        );
         return { success: true };
       }
 
@@ -301,6 +338,12 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
       setUser(ownerUser);
       saveUserToStorage(ownerUser);
+      // Without this the session cannot sync — see saveLegacyAuthToStorage.
+      saveLegacyAuthToStorage(
+        storeData.id,
+        storeData.username,
+        storeData.license_expires_at
+      );
       return { success: true };
     } catch (err) {
       console.error("Offline login error:", err);
