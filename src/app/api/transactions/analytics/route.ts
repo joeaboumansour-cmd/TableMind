@@ -1,6 +1,6 @@
 import { createServiceRoleClient } from "@/lib/supabase/server";
 import { NextResponse } from "next/server";
-import { convertUsdToLl } from "@/lib/utils/format";
+import { productCostInLL } from "@/lib/analytics/profit";
 
 interface AnalyticsResponse {
   summary: {
@@ -211,14 +211,9 @@ export async function GET(request: Request) {
 
       if (products) {
         products.forEach((p) => {
-          let cost = p.cost_price || 0;
-          // Convert USD cost to LL using the same sell rate (90,000) the cart
-          // store uses when turning a USD selling_price into LL. This keeps
-          // cost and revenue in the same currency (LL).
-          if (p.currency === 'USD') {
-            cost = convertUsdToLl(cost);
-          }
-          costPriceMap[p.id] = cost;
+          // Shared with the offline path in @/lib/analytics/profit so the two
+          // cannot drift — see that module's header.
+          costPriceMap[p.id] = productCostInLL(p) ?? 0;
         });
       }
     }

@@ -9,6 +9,16 @@ import Dexie, { type EntityTable } from "dexie";
 
 export interface CachedTransactionItem {
   id: string;
+  /**
+   * The join key to products_cache, and the reason Profit works offline.
+   *
+   * Without it, History could compute revenue, item counts and averages
+   * on-device but had to show "—" for Profit, because cost_price lives on the
+   * product and there was no way to get from a sold line back to its product.
+   * Optional because rows cached before this field existed will not have it;
+   * computeProfit() falls back to the line's unit_price in that case.
+   */
+  product_id?: string | null;
   product_name: string;
   quantity: number;
   unit_price: number;

@@ -107,6 +107,7 @@ export async function GET(request: Request) {
         user_name,
         transaction_items (
           id,
+          product_id,
           product_name,
           quantity,
           unit_price,
@@ -220,6 +221,7 @@ export async function POST(request: Request) {
         user_name,
         transaction_items (
           id,
+          product_id,
           product_name,
           quantity,
           unit_price,
@@ -290,6 +292,7 @@ export async function POST(request: Request) {
         user_name,
         transaction_items (
           id,
+          product_id,
           product_name,
           quantity,
           unit_price,

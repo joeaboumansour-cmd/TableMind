@@ -29,6 +29,48 @@ type SyncListener = (status: SyncStatus, pendingCount?: number) => void;
 const MAX_PENDING_WRITE_RETRIES = 5;
 
 /**
+ * Name of the cross-tab sync lock.
+ *
+ * `syncInProgress` below is a per-INSTANCE guard, and every tab has its own
+ * SyncEngine instance — but they all share one IndexedDB. So two tabs would
+ * each read `offline_queue` and each POST the same sales. The unique
+ * (store_id, transaction_number) constraint meant this was correct by luck
+ * rather than by design: the loser hits the duplicate branch, which returns
+ * early and SKIPS the stock decrement.
+ *
+ * A Web Lock makes only one tab flush at a time, device-wide. Held for the
+ * whole sync so a second tab waits rather than racing.
+ */
+const SYNC_LOCK = "goldensquirrel_sync";
+
+/**
+ * Run `fn` holding the cross-tab sync lock, or skip if another tab holds it.
+ *
+ * `ifAvailable` rather than queueing: if a sibling tab is already flushing,
+ * this tab has nothing useful to add — the queue is shared, so that flush is
+ * doing this tab's work too. Waiting would just pile up redundant syncs.
+ *
+ * Falls back to running unlocked where the Web Locks API is unavailable
+ * (older WebViews), which is exactly the behaviour that existed before.
+ */
+async function withSyncLock<T>(fn: () => Promise<T>, skipped: T): Promise<T> {
+  if (typeof navigator === "undefined" || !navigator.locks?.request) {
+    return fn();
+  }
+  return navigator.locks.request(
+    SYNC_LOCK,
+    { ifAvailable: true },
+    async (lock) => {
+      if (!lock) {
+        console.log("[Sync] Another tab is already syncing — skipping this run");
+        return skipped;
+      }
+      return fn();
+    }
+  ) as Promise<T>;
+}
+
+/**
  * A failure that says nothing about the row we tried to send.
  *
  * This distinction is the difference between "the shop's DSL blinked" and
@@ -613,16 +655,31 @@ class SyncEngine {
     failed: number;
     errors: string[];
   }> {
+    const noop = {
+      success: connectivity.isOnline,
+      pulled: 0,
+      pushed: 0,
+      failed: 0,
+      errors: [] as string[],
+    };
+
     if (this.syncInProgress || !connectivity.isOnline) {
-      return {
-        success: connectivity.isOnline,
-        pulled: 0,
-        pushed: 0,
-        failed: 0,
-        errors: [],
-      };
+      return noop;
     }
 
+    // Device-wide guard. syncInProgress only covers THIS tab; the queue is
+    // shared across all of them. See withSyncLock.
+    return withSyncLock(() => this.runSync(), noop);
+  }
+
+  /** The actual sync body. Only ever entered holding the cross-tab lock. */
+  private async runSync(): Promise<{
+    success: boolean;
+    pulled: number;
+    pushed: number;
+    failed: number;
+    errors: string[];
+  }> {
     this.syncInProgress = true;
     this._status = "syncing";
     this.notify();

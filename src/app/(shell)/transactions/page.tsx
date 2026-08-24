@@ -7,10 +7,11 @@
 // item count, tender, amount. Refunds read red, and anything still sitting in
 // the offline queue is flagged inline rather than in a banner nobody reads.
 //
-// The takings card shows PROFIT, not a cash/card split — profit needs cost
-// prices, which transaction rows do not carry, so it comes from the analytics
-// endpoint (the one place that joins products and converts USD costs into LL).
-// Everything else on this screen is computed locally and works offline.
+// The takings card shows PROFIT, not a cash/card split. Profit needs cost
+// prices, so it prefers the analytics endpoint (which sees the whole range),
+// but it now falls back to an on-device calculation against products_cache
+// when the till is offline — using the same shared arithmetic the server runs,
+// see @/lib/analytics/profit. The whole screen therefore works offline.
 // =============================================
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
@@ -89,6 +90,8 @@ function getStoreIdFromStorage(): string | null {
 
 interface TransactionItem {
   id: string;
+  /** Join key to products_cache; enables the offline profit calculation. */
+  product_id?: string | null;
   product_name: string;
   quantity: number;
   unit_price: number;
@@ -217,6 +220,16 @@ export default function TransactionHistoryPage() {
   // which always saw the initial [] — so its "do I already have data?"
   // fallbacks never worked. A ref gives it the current value safely.
   const transactionsRef = useRef<TransactionWithChange[]>([]);
+  // The rows currently passing the date/search filter. Read by the offline
+  // profit fallback, which must price exactly the sales shown in the card —
+  // and read from a ref so fetchRangeProfit does not have to depend on (and be
+  // rebuilt by) every keystroke in the search box.
+  const filteredRef = useRef<TransactionWithChange[]>([]);
+  // Product costs for the offline profit fallback, built once per store.
+  const costMapRef = useRef<{
+    storeId: string;
+    byId: Map<string, { cost_price: number; currency: string }>;
+  } | null>(null);
   useEffect(() => {
     transactionsRef.current = transactions;
   }, [transactions]);
@@ -294,6 +307,8 @@ export default function TransactionHistoryPage() {
                 user_name: t.user_name,
                 transaction_items: (t.transaction_items || []).map((item: any) => ({
                   id: item.id,
+                  // Join key to products_cache — lets Profit be computed offline.
+                  product_id: item.product_id ?? null,
                   product_name: item.product_name,
                   quantity: item.quantity,
                   unit_price: item.unit_price,
@@ -367,6 +382,7 @@ export default function TransactionHistoryPage() {
         user_name: q.user_name,
         transaction_items: (q.items || []).map((it, i) => ({
           id: `${q.id}-${i}`,
+          product_id: it.product_id ?? null,
           product_name: it.product_name,
           quantity: it.quantity,
           unit_price: it.unit_price,
@@ -395,29 +411,100 @@ export default function TransactionHistoryPage() {
     }
   }, []);
 
-  /** Profit for the active range. Server-side because it needs cost prices. */
+  /**
+   * Profit for the sales currently on screen, computed on-device.
+   *
+   * Used offline, and as the fallback whenever the analytics endpoint cannot
+   * be reached. Costs come from products_cache, which mirrors the whole
+   * catalogue, and the arithmetic is the SAME shared function the server runs
+   * (@/lib/analytics/profit) so the two cannot drift.
+   *
+   * Returns null when nothing can be priced — better a dash than a wrong
+   * number on a money screen.
+   */
+  const computeLocalProfit = useCallback(async (rows: TransactionWithChange[]) => {
+    if (rows.length === 0) return 0;
+    try {
+      const { computeProfit } = await import("@/lib/analytics/profit");
+      const storeId = user?.storeId || getStoreIdFromStorage();
+      if (!storeId) return null;
+
+      // Cost map is built once and reused. Reading the whole catalogue out of
+      // IndexedDB (2,000+ rows) on every keystroke in the search box would be
+      // far more expensive than the calculation it feeds.
+      if (!costMapRef.current || costMapRef.current.storeId !== storeId) {
+        const { getCachedProducts } = await import("@/lib/db/localDB");
+        const products = await getCachedProducts(storeId);
+        costMapRef.current = {
+          storeId,
+          byId: new Map(products.map((p) => [p.id, { cost_price: p.cost_price, currency: p.currency }])),
+        };
+      }
+      const byId = costMapRef.current.byId;
+      if (byId.size === 0) return null;
+
+      // Only price sales whose lines carry a product_id. Rows cached before
+      // that field existed would otherwise fall back to unit_price-as-cost and
+      // silently report zero profit for a whole historical range.
+      const priceable = rows.filter((t) =>
+        t.transaction_items.length > 0 &&
+        t.transaction_items.every((i) => !!i.product_id && byId.has(i.product_id))
+      );
+      if (priceable.length === 0) return null;
+
+      const { totalProfit } = computeProfit(
+        priceable.map((t) => ({
+          total_amount: t.total_amount,
+          items: t.transaction_items.map((i) => ({
+            product_id: i.product_id,
+            quantity: i.quantity,
+            unit_price: i.unit_price,
+          })),
+        })),
+        (id) => byId.get(id)
+      );
+      return totalProfit;
+    } catch (e) {
+      console.warn("[Transactions] Local profit calculation failed:", e);
+      return null;
+    }
+  }, [user]);
+
+  /**
+   * Profit for the active range.
+   *
+   * Prefers the server (it sees the full range, not just the loaded page), and
+   * falls back to the on-device calculation when offline or when the request
+   * fails. This used to just blank out — profit was the one figure on this
+   * screen that needed the network, on a POS whose whole point is working
+   * without one.
+   */
   const fetchRangeProfit = useCallback(async () => {
-    if (!isEnabled("transaction_analytics") || !connectivity.isOnline) {
+    if (!isEnabled("transaction_analytics")) {
       setRangeProfit(null);
       return;
     }
     const authData = localStorage.getItem("goldensquirrel_auth");
-    if (!authData) return;
-    try {
-      // analyticsQuery carries the window start resolved in THIS device's
-      // timezone, so "today" means the shop's midnight rather than the
-      // server's.
-      const res = await fetch(`/api/transactions/analytics?${analyticsQuery(dateFilter)}`, {
-        headers: { "x-auth-data": authData },
-      });
-      if (!res.ok) throw new Error(String(res.status));
-      const data = await res.json();
-      setRangeProfit(Number(data?.summary?.totalProfit) || 0);
-    } catch {
-      // Profit is supplementary — the feed and takings still stand without it.
-      setRangeProfit(null);
+
+    if (connectivity.isOnline && authData) {
+      try {
+        // analyticsQuery carries the window start resolved in THIS device's
+        // timezone, so "today" means the shop's midnight rather than the
+        // server's.
+        const res = await fetch(`/api/transactions/analytics?${analyticsQuery(dateFilter)}`, {
+          headers: { "x-auth-data": authData },
+        });
+        if (!res.ok) throw new Error(String(res.status));
+        const data = await res.json();
+        setRangeProfit(Number(data?.summary?.totalProfit) || 0);
+        return;
+      } catch {
+        // fall through to the local calculation
+      }
     }
-  }, [dateFilter, isEnabled]);
+
+    setRangeProfit(await computeLocalProfit(filteredRef.current));
+  }, [dateFilter, isEnabled, computeLocalProfit]);
 
   /**
    * Append the next page of older transactions.
@@ -517,6 +604,19 @@ export default function TransactionHistoryPage() {
 
     return filtered;
   }, [searchQuery, dateFilter, transactions]);
+
+  // Mirror the filtered rows into a ref for the offline profit fallback, and
+  // recompute while offline so the figure tracks the visible sales. Online the
+  // server value stands — it covers the whole range, not just the loaded page.
+  useEffect(() => {
+    filteredRef.current = filteredTransactions;
+    if (!isOffline) return;
+    let cancelled = false;
+    void computeLocalProfit(filteredTransactions).then((p) => {
+      if (!cancelled) setRangeProfit(p);
+    });
+    return () => { cancelled = true; };
+  }, [filteredTransactions, isOffline, computeLocalProfit]);
 
   // Takings for the visible range, plus the same figures per day for the
   // group headers. One pass, not four.
