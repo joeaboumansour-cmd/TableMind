@@ -53,6 +53,50 @@ function getCutoffDate(filter: string): Date | null {
 
 const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
+/**
+ * Where the shop is, used when the client does not say. This app serves
+ * Lebanese stores, so falling back to Beirut is right far more often than
+ * falling back to the server's own zone (UTC on Vercel) ever was.
+ */
+const STORE_FALLBACK_TZ = "Asia/Beirut";
+
+/** The client's IANA zone if it is one this runtime knows, else the store's. */
+function resolveTimeZone(raw: string | null): string {
+  if (!raw) return STORE_FALLBACK_TZ;
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: raw });
+    return raw;
+  } catch {
+    return STORE_FALLBACK_TZ;
+  }
+}
+
+/**
+ * Wall-clock hour and weekday of an instant, in `timeZone`.
+ *
+ * Intl rather than an offset in minutes: Beirut runs EET/EEST, so a 90-day
+ * window crosses a DST change and a single fixed offset would misplace every
+ * transaction on one side of it. Intl resolves the offset per instant.
+ */
+function makeLocalClock(timeZone: string) {
+  const fmt = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    hour12: false,
+    hour: "2-digit",
+    weekday: "long",
+  });
+  return (date: Date) => {
+    let hour = 0;
+    let weekday = "";
+    for (const part of fmt.formatToParts(date)) {
+      // Some ICU builds render midnight as "24" under hour12:false.
+      if (part.type === "hour") hour = Number.parseInt(part.value, 10) % 24;
+      else if (part.type === "weekday") weekday = part.value;
+    }
+    return { hour, dayOfWeek: DAY_NAMES.indexOf(weekday) };
+  };
+}
+
 export async function GET(request: Request) {
   try {
     if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
@@ -87,6 +131,9 @@ export async function GET(request: Request) {
     // which for a Beirut store starts the day three hours late and made the
     // profit figure disagree with the sales listed next to it. getCutoffDate
     // remains as the fallback for older clients and direct calls.
+    // Same reasoning as `from`: the device knows which clock the shop runs on.
+    const localClock = makeLocalClock(resolveTimeZone(url.searchParams.get("tz")));
+
     const fromParam = url.searchParams.get("from");
     let cutoff: Date | null = getCutoffDate(dateFilter);
     if (fromParam) {
@@ -183,9 +230,10 @@ export async function GET(request: Request) {
       totalRevenue += revenue;
       totalItemsSold += t.transaction_items?.length || 0;
 
-      const createdAt = new Date(t.created_at);
-      const hour = createdAt.getHours();
-      const dayOfWeek = createdAt.getDay();
+      // NOT getHours()/getDay(): those are the SERVER's clock, so on Vercel
+      // an 11am Beirut sale was filed under 8am and a sale just after midnight
+      // under the previous day.
+      const { hour, dayOfWeek } = localClock(new Date(t.created_at));
 
       // Update hourly stats
       if (!hourlyStats[hour]) {
@@ -194,12 +242,16 @@ export async function GET(request: Request) {
       hourlyStats[hour].revenue += revenue;
       hourlyStats[hour].transactions += 1;
 
-      // Update day of week stats
-      if (!dayOfWeekStats[dayOfWeek]) {
-        dayOfWeekStats[dayOfWeek] = { revenue: 0, transactions: 0 };
+      // Update day of week stats. dayOfWeek is -1 only if Intl returned a
+      // weekday name DAY_NAMES does not carry, which should not happen under
+      // the en-US locale above -- but silently writing to index -1 would.
+      if (dayOfWeek >= 0) {
+        if (!dayOfWeekStats[dayOfWeek]) {
+          dayOfWeekStats[dayOfWeek] = { revenue: 0, transactions: 0 };
+        }
+        dayOfWeekStats[dayOfWeek].revenue += revenue;
+        dayOfWeekStats[dayOfWeek].transactions += 1;
       }
-      dayOfWeekStats[dayOfWeek].revenue += revenue;
-      dayOfWeekStats[dayOfWeek].transactions += 1;
 
       // Calculate cost of items
       t.transaction_items?.forEach((item) => {

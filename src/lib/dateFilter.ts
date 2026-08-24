@@ -49,12 +49,35 @@ export function getFilterCutoff(filter: DateFilter, from: Date = new Date()): Da
 }
 
 /**
+ * The device's IANA timezone, e.g. "Asia/Beirut". Empty when the browser will
+ * not say, which is rare enough that the server just falls back to the store's
+ * own zone.
+ */
+export function deviceTimeZone(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "";
+  } catch {
+    return "";
+  }
+}
+
+/**
  * Analytics query string for a filter. Carries the resolved window as `from`
- * so the server never has to guess a day boundary in its own timezone.
+ * so the server never has to guess a day boundary in its own timezone, and
+ * `tz` so it does not have to guess a CLOCK either.
+ *
+ * `from` alone fixed which sales are counted; it did nothing for how they are
+ * bucketed once counted. "Sales by hour" and "Revenue by day of week" were
+ * still built from getHours()/getDay() on the server, i.e. UTC on Vercel, so
+ * an 11am sale in Beirut appeared in the 8am column and a sale just after
+ * midnight landed on the previous day. Same three-hour gap as the bug above,
+ * one step further down the pipeline.
  */
 export function analyticsQuery(filter: DateFilter | string): string {
   const params = new URLSearchParams({ dateFilter: String(filter) });
   const cutoff = getFilterCutoff(filter as DateFilter);
   if (cutoff) params.set("from", cutoff.toISOString());
+  const tz = deviceTimeZone();
+  if (tz) params.set("tz", tz);
   return params.toString();
 }
