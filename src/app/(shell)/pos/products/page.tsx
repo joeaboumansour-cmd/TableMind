@@ -946,6 +946,19 @@ function StoreProductsPageContent() {
   // captured when each row was ticked, so a refetch mid-selection can never
   // apply a percentage against a stale cost price. Products deleted in the
   // meantime drop out on their own.
+  // Parent id → its variant rows. Built in one pass so the selection below does
+  // not filter the whole catalogue once per selected product.
+  const variantIdsByParent = useMemo(() => {
+    const map = new Map<string, string[]>();
+    for (const p of products) {
+      if (!p.parent_id) continue;
+      const bucket = map.get(p.parent_id);
+      if (bucket) bucket.push(p.id);
+      else map.set(p.parent_id, [p.id]);
+    }
+    return map;
+  }, [products]);
+
   const selectedTargets = useMemo<BulkTarget[]>(() => {
     if (selectedIds.size === 0) return [];
     return products
@@ -957,8 +970,11 @@ function StoreProductsPageContent() {
         cost_price: p.cost_price,
         selling_price: p.selling_price,
         discount_percentage: p.discount_percentage || 0,
+        // Only the currency planner uses these — a variant is never repriced,
+        // but it has to follow its parent's denomination.
+        variantIds: variantIdsByParent.get(p.id) ?? [],
       }));
-  }, [products, selectedIds]);
+  }, [products, selectedIds, variantIdsByParent]);
 
   const selectionCount = selectedTargets.length;
 
@@ -1102,7 +1118,9 @@ function StoreProductsPageContent() {
 
     type AppliedRow = {
       id: string;
+      cost_price: number;
       selling_price: number;
+      currency: string | null;
       profit_percentage: number;
       discount_percentage: number;
     };
@@ -1120,7 +1138,9 @@ function StoreProductsPageContent() {
             // entirely on RLS. Scoping the bulk write by store as well is a
             // strengthening — do not drop it to make something work.
             .eq("store_id", storeId)
-            .select("id, selling_price, profit_percentage, discount_percentage");
+            .select(
+              "id, cost_price, selling_price, currency, profit_percentage, discount_percentage"
+            );
 
           if (error) throw error;
           if (data) applied.push(...(data as AppliedRow[]));
@@ -1142,7 +1162,9 @@ function StoreProductsPageContent() {
           if (!row) return p;
           return {
             ...p,
+            cost_price: Number(row.cost_price),
             selling_price: Number(row.selling_price),
+            currency: row.currency === "USD" ? "USD" : "LL",
             profit_percentage: Number(row.profit_percentage),
             discount_percentage: Number(row.discount_percentage),
           };
@@ -1157,7 +1179,9 @@ function StoreProductsPageContent() {
           .modify((cached) => {
             const row = byId.get(cached.id);
             if (!row) return;
+            cached.cost_price = Number(row.cost_price);
             cached.selling_price = Number(row.selling_price);
+            cached.currency = row.currency === "USD" ? "USD" : "LL";
             cached.profit_percentage = Number(row.profit_percentage);
             cached.discount_percentage = Number(row.discount_percentage);
           });
@@ -1169,14 +1193,20 @@ function StoreProductsPageContent() {
     setIsApplyingBulk(false);
     setBulkProgress(null);
 
+    // Variant rows ride along in the currency patch but were never counted as
+    // changes, so report against the plan rather than against every row the
+    // database handed back.
+    const plannedIds = new Set(plan.changes.map((change) => change.id));
+    const appliedCount = applied.filter((row) => plannedIds.has(row.id)).length;
+
     if (failure) {
       toast.error(
-        `Updated ${applied.length} of ${plan.changes.length} — ${failure}`,
+        `Updated ${appliedCount} of ${plan.changes.length} — ${failure}`,
         { key: "bulk-apply" }
       );
     } else {
       toast.success(
-        `Updated ${applied.length} product${applied.length !== 1 ? "s" : ""}`,
+        `Updated ${appliedCount} product${appliedCount !== 1 ? "s" : ""}`,
         { key: "bulk-apply" }
       );
       setShowBulkApply(false);
