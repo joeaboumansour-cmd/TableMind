@@ -25,7 +25,7 @@ import { useTransition } from "react";
 import { Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { vibrate } from "@/lib/feedback";
-import { isTabActive, type Tab } from "./nav/tabs";
+import { isTabActive, shouldShowTabList, type Tab } from "./nav/tabs";
 
 export default function BottomTabBar({ tabs }: { tabs: Tab[] }) {
   const pathname = usePathname();
@@ -35,8 +35,15 @@ export default function BottomTabBar({ tabs }: { tabs: Tab[] }) {
   // froze on the old page until the next route painted.
   const [isPending, startTransition] = useTransition();
 
-  // A single tab is not navigation.
-  if (tabs.length < 2) return null;
+  // Unlike DesktopNav this bar holds nothing but tabs, so no tabs means no
+  // bar. That is fine ONLY because sign-out on mobile lives in the POS page's
+  // own header (the door icon, top right) rather than here.
+  //
+  // Do not remove that button. The desktop equivalent was removed when the
+  // global nav arrived, and an employee with POS access alone -- one tab --
+  // was left in the till with no way to log out. This bar disappearing under
+  // exactly those conditions is the same trap, one screen away.
+  if (!shouldShowTabList(tabs)) return null;
 
   return (
     <nav

@@ -22,7 +22,7 @@ import { useAuth } from "@/lib/auth/AuthContext";
 import { cn } from "@/lib/utils";
 import { SyncIndicator } from "@/components/SyncIndicator";
 import LogoutButton from "./LogoutButton";
-import { isTabActive, type Tab } from "./tabs";
+import { isTabActive, shouldShowTabList, type Tab } from "./tabs";
 
 export default function DesktopNav({ tabs }: { tabs: Tab[] }) {
   const pathname = usePathname();
@@ -38,9 +38,10 @@ export default function DesktopNav({ tabs }: { tabs: Tab[] }) {
   // own sign-out button.
   if (!user) return null;
 
-  // The "a single destination is not navigation" rule still holds, but it
-  // applies to the tab LIST, not to the chrome around it.
-  const showTabs = tabs.length >= 2;
+  // Same rule as the mobile bar, from the same place -- but applied to the tab
+  // LIST only, because the chrome around it carries the sync indicator, the
+  // user label and the only desktop sign-out.
+  const showTabs = shouldShowTabList(tabs);
 
   return (
     <nav

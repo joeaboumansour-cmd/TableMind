@@ -79,6 +79,23 @@ export function useVisibleTabs(): Tab[] {
   );
 }
 
+/**
+ * Whether the tab row is worth showing at all.
+ *
+ * One destination is not navigation -- a bar with a single tab reads as
+ * broken rather than minimal. Both bars share this rule so they can never
+ * drift apart on it.
+ *
+ * NOTE this governs the tab ROW, not the bar around it. DesktopNav also
+ * carries the sync indicator, the user label and the ONLY desktop sign-out,
+ * so it renders whenever someone is signed in and merely hides the row.
+ * BottomTabBar carries nothing else, so an empty row means an empty bar and
+ * it hides completely. That asymmetry is deliberate; see BottomTabBar.
+ */
+export function shouldShowTabList(tabs: Tab[]): boolean {
+  return tabs.length >= 2;
+}
+
 /** True when `pathname` is the tab's destination. */
 export function isTabActive(tab: Tab, pathname: string): boolean {
   return tab.matches ? tab.matches(pathname) : pathname === tab.href;
