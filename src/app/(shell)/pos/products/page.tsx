@@ -1243,7 +1243,29 @@ function StoreProductsPageContent() {
             </div>
           </div>
 
+          {/* Desktop has room for labels, so the two actions a shopkeeper
+              actually reaches for come out of the overflow menu and onto the
+              bar. Import/export and sign out stay in the menu: rare, and one
+              of them is destructive enough to be worth a deliberate trip.
+              Phones keep the compact icon row -- there is no width for this. */}
           <div className="flex flex-none items-center gap-2">
+            <button
+              type="button"
+              onClick={enterSelectMode}
+              className="tap hidden h-11 items-center gap-2 rounded-2xl bg-muted/60 px-4 text-sm font-semibold text-muted-foreground hover:text-foreground md:flex"
+            >
+              <CheckSquare className="h-4 w-4" />
+              Select products
+            </button>
+            <button
+              type="button"
+              onClick={() => fetchProducts(storeId)}
+              disabled={isRefreshing}
+              className="tap hidden h-11 items-center gap-2 rounded-2xl bg-muted/60 px-4 text-sm font-semibold text-muted-foreground hover:text-foreground disabled:opacity-60 md:flex"
+            >
+              <RefreshCw className={cn("h-4 w-4", isRefreshing && "animate-spin")} />
+              Refresh from server
+            </button>
             <button
               type="button"
               onClick={() => setShowMore(true)}
@@ -1260,9 +1282,10 @@ function StoreProductsPageContent() {
               }}
               disabled={isOffline}
               aria-label="Add product"
-              className="tap flex h-11 w-11 items-center justify-center rounded-2xl bg-primary text-primary-foreground disabled:opacity-40"
+              className="tap flex h-11 w-11 items-center justify-center gap-2 rounded-2xl bg-primary text-sm font-semibold text-primary-foreground disabled:opacity-40 md:w-auto md:px-4"
             >
-              <Plus className="h-5 w-5" />
+              <Plus className="h-5 w-5 md:h-4 md:w-4" />
+              <span className="hidden md:inline">Add product</span>
             </button>
           </div>
         </div>
@@ -1615,13 +1638,14 @@ function StoreProductsPageContent() {
           </DialogHeader>
 
           <div className="space-y-1">
+            {/* md:hidden — promoted to the toolbar on desktop. */}
             <button
               type="button"
               onClick={() => {
                 setShowMore(false);
                 enterSelectMode();
               }}
-              className="tap flex w-full items-center gap-3 rounded-xl px-4 py-3 text-left text-[15px] font-semibold hover:bg-muted/50"
+              className="tap flex w-full items-center gap-3 rounded-xl px-4 py-3 text-left text-[15px] font-semibold hover:bg-muted/50 md:hidden"
             >
               <CheckSquare className="h-4 w-4 text-muted-foreground" />
               Select products
@@ -1632,7 +1656,7 @@ function StoreProductsPageContent() {
                 setShowMore(false);
                 fetchProducts(storeId);
               }}
-              className="tap flex w-full items-center gap-3 rounded-xl px-4 py-3 text-left text-[15px] font-semibold hover:bg-muted/50"
+              className="tap flex w-full items-center gap-3 rounded-xl px-4 py-3 text-left text-[15px] font-semibold hover:bg-muted/50 md:hidden"
             >
               <RefreshCw className="h-4 w-4 text-muted-foreground" />
               Refresh from server
