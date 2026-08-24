@@ -39,7 +39,7 @@ import { useCartStore } from "@/lib/stores/cartStore";
 import { useAuth } from "@/lib/auth/AuthContext";
 import { Product } from "@/lib/types/product";
 import { useToastManager } from "@/hooks/useToastManager";
-import { formatCurrency, formatLL, formatUSD, convertLlToUsd, convertLlToUsdForSale, convertLlToUsdForReturn, SELL_RATE, RETURN_RATE } from "@/lib/utils/format";
+import { formatCurrency, formatLL, formatUSD, convertLlToUsd, convertLlToUsdForSale, convertLlToUsdForReturn, convertUsdToLl, SELL_RATE, RETURN_RATE } from "@/lib/utils/format";
 import { usePrimedReceipt } from "@/lib/pos/usePrimedReceipt";
 import {
   warmLocalDB,
@@ -1511,8 +1511,22 @@ export default function POSPage() {
                         <span className="break-words text-sm font-semibold leading-tight">
                           {product.name}
                         </span>
+                        {/* Every button shows both currencies in the same order —
+                            USD on top, LL underneath — regardless of which one the
+                            product is priced in, so the grid reads consistently.
+                            Whichever side is derived goes through the helpers:
+                            USD→LL at the sell rate (the customer is paying) rounded
+                            to a payable 5,000 multiple, LL→USD at the return rate to
+                            match what the cart actually charges. */}
                         <span className="text-xs text-muted-foreground tnum">
-                          {formatLL(product.selling_price)}
+                          {product.currency === "USD"
+                            ? formatUSD(product.selling_price)
+                            : formatUSD(convertLlToUsdForReturn(product.selling_price))}
+                        </span>
+                        <span className="text-[11px] leading-none text-muted-foreground/70 tnum">
+                          {product.currency === "USD"
+                            ? formatLL(convertUsdToLl(product.selling_price))
+                            : formatLL(product.selling_price)}
                         </span>
                       </button>
                     ))}
