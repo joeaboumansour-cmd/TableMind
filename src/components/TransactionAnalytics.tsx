@@ -2,10 +2,9 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
-import { ProductPerformanceChart } from "@/components/charts/TransactionCharts";
-import { HourlySalesHeatmap } from "@/components/charts/HourlySalesHeatmap";
+import { HourlySalesChart } from "@/components/charts/HourlySalesChart";
 import { DayOfWeekChart } from "@/components/charts/DayOfWeekChart";
-import { SlowMovingProducts } from "@/components/SlowMovingProducts";
+import { RankedBarList } from "@/components/charts/RankedBarList";
 import {
   formatLL,
   formatLLParts,
@@ -46,12 +45,6 @@ interface AnalyticsData {
     revenue: number;
     transactions: number;
   }>;
-  slowMovingProducts: Array<{
-    product_name: string;
-    totalQuantity: number;
-    lastSold: string;
-    daysSinceLastSale: number;
-  }>;
 }
 
 interface TransactionAnalyticsProps {
@@ -60,13 +53,21 @@ interface TransactionAnalyticsProps {
 }
 
 /** Section wrapper — one heading style for the whole panel. */
-function Panel({ title, children }: { title: string; children: React.ReactNode }) {
+function Panel({
+  title,
+  children,
+  className,
+}: {
+  title: string;
+  children: React.ReactNode;
+  className?: string;
+}) {
   return (
-    <section>
+    <section className={className}>
       <h3 className="mb-2 text-[11px] font-bold uppercase tracking-[0.14em] text-muted-foreground">
         {title}
       </h3>
-      <div className="rounded-3xl border border-white/10 bg-card p-4">{children}</div>
+      <div className="h-full rounded-3xl border border-white/10 bg-card p-4">{children}</div>
     </section>
   );
 }
@@ -185,15 +186,13 @@ export function TransactionAnalytics({
   }
 
   const { summary } = analytics;
-  const maxQuantity = Math.max(
-    1,
-    ...analytics.topProductsByQuantity.map((p) => p.totalQuantity)
-  );
 
   return (
     <div className="space-y-5">
-      {/* ---- Headline ---- */}
-      <div className="grid grid-cols-2 gap-3">
+      {/* ---- Headline ----
+           Four figures, so two columns on a phone and one row on a desktop
+           where there is width for them to sit side by side. */}
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Stat
           label="Revenue"
           value={formatLLParts(summary.totalRevenue).value}
@@ -214,58 +213,45 @@ export function TransactionAnalytics({
         <Stat label="Items sold" value={String(summary.totalItemsSold)} />
       </div>
 
-      {/* ---- When the store is busy ---- */}
-      <Panel title="Sales by hour">
-        <HourlySalesHeatmap data={analytics.hourlySales} />
-      </Panel>
+      {/* ---- When the store is busy ----
+           Two charts of the same kind, so they pair naturally into two
+           columns once there is room. */}
+      <div className="grid gap-5 lg:grid-cols-2">
+        <Panel title="Sales by hour">
+          <HourlySalesChart data={analytics.hourlySales} />
+        </Panel>
 
-      <Panel title="Revenue by day of week">
-        <DayOfWeekChart data={analytics.dayOfWeekSales} />
-      </Panel>
+        <Panel title="Revenue by day of week">
+          <DayOfWeekChart data={analytics.dayOfWeekSales} />
+        </Panel>
+      </div>
 
-      {/* ---- What sells ---- */}
-      <Panel title="Top products by revenue">
-        <ProductPerformanceChart products={analytics.topProductsByRevenue} />
-      </Panel>
+      {/* ---- What sells ----
+           Both lists now use the same component: revenue was a pie chart,
+           which made the two halves of the same question look unrelated. */}
+      <div className="grid gap-5 lg:grid-cols-2">
+        <Panel title="Top products by revenue">
+          <RankedBarList
+            items={analytics.topProductsByRevenue.map((p) => ({
+              name: p.product_name,
+              value: p.totalRevenue,
+              primary: formatLL(p.totalRevenue),
+              secondary: `×${p.totalQuantity}`,
+            }))}
+          />
+        </Panel>
 
-      <Panel title="Top products by quantity">
-        {analytics.topProductsByQuantity.length === 0 ? (
-          <p className="py-6 text-center text-sm text-muted-foreground">
-            Nothing sold in this range.
-          </p>
-        ) : (
-          <ol className="space-y-2.5">
-            {analytics.topProductsByQuantity.map((product, index) => (
-              <li key={`${product.product_name}-${index}`}>
-                <div className="flex items-baseline justify-between gap-3">
-                  <span className="min-w-0 flex-1 truncate text-sm font-medium">
-                    <span className="mr-2 text-xs text-muted-foreground tnum">
-                      {index + 1}
-                    </span>
-                    {product.product_name}
-                  </span>
-                  <span className="flex-none text-right text-sm">
-                    <span className="font-semibold tnum">×{product.totalQuantity}</span>
-                    <span className="ml-2 text-xs text-muted-foreground tnum">
-                      {formatLL(product.totalRevenue)}
-                    </span>
-                  </span>
-                </div>
-                {/* A bar reads faster than a column of numbers when you only
-                    want to know which few products carry the store. */}
-                <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-muted/60">
-                  <div
-                    className="h-full rounded-full bg-primary"
-                    style={{ width: `${(product.totalQuantity / maxQuantity) * 100}%` }}
-                  />
-                </div>
-              </li>
-            ))}
-          </ol>
-        )}
-      </Panel>
-
-      <SlowMovingProducts products={analytics.slowMovingProducts} />
+        <Panel title="Top products by quantity">
+          <RankedBarList
+            items={analytics.topProductsByQuantity.map((p) => ({
+              name: p.product_name,
+              value: p.totalQuantity,
+              primary: `×${p.totalQuantity}`,
+              secondary: formatLL(p.totalRevenue),
+            }))}
+          />
+        </Panel>
+      </div>
     </div>
   );
 }

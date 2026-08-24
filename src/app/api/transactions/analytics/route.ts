@@ -31,12 +31,6 @@ interface AnalyticsResponse {
     revenue: number;
     transactions: number;
   }>;
-  slowMovingProducts: Array<{
-    product_name: string;
-    totalQuantity: number;
-    lastSold: string;
-    daysSinceLastSale: number;
-  }>;
 }
 
 function getCutoffDate(filter: string): Date | null {
@@ -141,7 +135,6 @@ export async function GET(request: Request) {
     let totalRevenue = 0;
     let totalItemsSold = 0;
     const productStats: Record<string, { quantity: number; revenue: number }> = {};
-    const productLastSold: Record<string, string> = {};
 
     // Time-based analytics
     const hourlyStats: Record<number, { revenue: number; transactions: number }> = {};
@@ -220,11 +213,6 @@ export async function GET(request: Request) {
         }
         productStats[name].quantity += item.quantity;
         productStats[name].revenue += Number(item.total_price) || 0;
-
-        // Track last sold date
-        if (!productLastSold[name] || new Date(t.created_at) > new Date(productLastSold[name])) {
-          productLastSold[name] = t.created_at;
-        }
       });
     });
 
@@ -267,25 +255,6 @@ export async function GET(request: Request) {
       transactions: dayOfWeekStats[index]?.transactions || 0,
     }));
 
-    // Slow moving / dead stock (products with low or no sales)
-    // Consider products with only 1 sale as slow moving
-    const slowMovingProducts = Object.entries(productStats)
-      .filter(([_, stats]) => stats.quantity <= 1)
-      .map(([product_name, stats]) => {
-        const lastSold = productLastSold[product_name] || "";
-        const daysSinceLastSale = lastSold
-          ? Math.floor((Date.now() - new Date(lastSold).getTime()) / (1000 * 60 * 60 * 24))
-          : 999;
-        return {
-          product_name,
-          totalQuantity: stats.quantity,
-          lastSold,
-          daysSinceLastSale,
-        };
-      })
-      .sort((a, b) => b.daysSinceLastSale - a.daysSinceLastSale)
-      .slice(0, 10);
-
     const response: AnalyticsResponse = {
       summary: {
         totalRevenue,
@@ -299,7 +268,6 @@ export async function GET(request: Request) {
       topProductsByQuantity,
       hourlySales,
       dayOfWeekSales,
-      slowMovingProducts,
     };
 
     return NextResponse.json(response);

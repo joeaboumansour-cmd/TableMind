@@ -569,6 +569,11 @@ export default function TransactionHistoryPage() {
             {viewMode === "analytics" ? "Analytics" : "History"}
           </h1>
 
+          {/* Desktop has the width for labels, so these stop being three
+              unexplained circles. Phones keep the icon-only row -- there is no
+              space for words beside a 26px title. The date control shows the
+              filter that is actually applied rather than the word "Date",
+              which is the more useful thing to read at a glance. */}
           <button
             type="button"
             onClick={() => {
@@ -578,19 +583,21 @@ export default function TransactionHistoryPage() {
             aria-label="Search sales"
             aria-pressed={showSearch}
             className={cn(
-              "tap flex h-10 w-10 items-center justify-center rounded-full bg-muted/60",
+              "tap flex h-10 w-10 items-center justify-center gap-2 rounded-full bg-muted/60 text-sm font-semibold md:w-auto md:px-4",
               showSearch && "bg-primary/20 text-primary"
             )}
           >
             <Search className="h-[18px] w-[18px]" />
+            <span className="hidden md:inline">Search</span>
           </button>
           <button
             type="button"
             onClick={() => setShowFilters(true)}
             aria-label="Filter by date"
-            className="tap flex h-10 w-10 items-center justify-center rounded-full bg-muted/60"
+            className="tap flex h-10 w-10 items-center justify-center gap-2 rounded-full bg-muted/60 text-sm font-semibold md:w-auto md:px-4"
           >
             <SlidersHorizontal className="h-[18px] w-[18px]" />
+            <span className="hidden md:inline">{activeFilter.long}</span>
           </button>
           {showAnalytics && (
             <button
@@ -601,11 +608,12 @@ export default function TransactionHistoryPage() {
               aria-label="Toggle analytics"
               aria-pressed={viewMode === "analytics"}
               className={cn(
-                "tap flex h-10 w-10 items-center justify-center rounded-full bg-muted/60",
+                "tap flex h-10 w-10 items-center justify-center gap-2 rounded-full bg-muted/60 text-sm font-semibold md:w-auto md:px-4",
                 viewMode === "analytics" && "bg-primary/20 text-primary"
               )}
             >
               <BarChart3 className="h-[18px] w-[18px]" />
+              <span className="hidden md:inline">Analytics</span>
             </button>
           )}
         </div>

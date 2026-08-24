@@ -101,6 +101,30 @@ export function formatLLParts(amount: number): { value: string; unit: string } {
 }
 
 /**
+ * A deliberately approximate LL amount, for chart AXIS TICKS only.
+ *
+ * Axis gridlines are read as magnitudes, not as figures -- "70k" beside a bar
+ * says how tall it is, and a full "70,000 LL" on every gridline is noise that
+ * crowds the plot. Every EXACT amount the user reads -- tooltips, list values,
+ * totals -- must still go through formatLL().
+ *
+ * Lives here rather than in a chart file so there is still one module that
+ * decides how an LL amount is written.
+ */
+export function formatLLCompact(amount: number): string {
+  const abs = Math.abs(amount);
+  if (abs >= 1_000_000) {
+    const m = amount / 1_000_000;
+    return `${Number.isInteger(m) ? m : m.toFixed(1)}M`;
+  }
+  if (abs >= 1_000) {
+    const k = amount / 1_000;
+    return `${Number.isInteger(k) ? k : k.toFixed(0)}k`;
+  }
+  return String(Math.round(amount));
+}
+
+/**
  * Format amount as USD
  */
 export function formatUSD(amount: number): string {
