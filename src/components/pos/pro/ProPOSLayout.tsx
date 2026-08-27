@@ -45,6 +45,7 @@ import ProCartRow from "./ProCartRow";
 import CartLineEditor, { type EditScope, type LineEditPatch } from "./CartLineEditor";
 import ProTotalsPanel from "./ProTotalsPanel";
 import QuickGrid from "./QuickGrid";
+import { useScanFocus } from "./useScanFocus";
 
 /** How often the WAITING badges recompute. */
 const LANE_TICK_MS = 1000;
@@ -123,15 +124,22 @@ export default function ProPOSLayout({
   // there is nowhere to manage what would be created.
   const canEditInventory = isEnabled("inventory") && canAccess("inventory");
 
+  // Focus belongs to the scan field unless something else legitimately owns the
+  // keyboard. A wedge scanner types wherever the caret is, so focus resting on
+  // the last button pressed means the next scan is silently lost.
+  const keyboardBusy =
+    editingLineId !== null ||
+    unknownBarcode !== null ||
+    laneToClose !== null ||
+    clearConfirmOpen ||
+    isWriting;
+  useScanFocus(searchInputRef, keyboardBusy);
+
   // A half-typed new product, or a line mid-edit, is exactly the state a
   // service-worker reload would throw away. The cart alone does not cover it:
   // the capture strip can be open with an empty cart.
   useReloadGuard(
-    unknownBarcode !== null ||
-      editingLineId !== null ||
-      isWriting ||
-      laneToClose !== null ||
-      clearConfirmOpen,
+    keyboardBusy,
     "pos-pro-editing"
   );
 
