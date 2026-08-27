@@ -2,36 +2,8 @@
 
 import { useState, useEffect, useRef, useMemo, useCallback, startTransition } from "react";
 import { useRouter } from "next/navigation";
-import { createClient, fetchAllProducts } from "@/lib/supabase/client";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-  DialogFooter,
-} from "@/components/ui/dialog";
-import { Badge } from "@/components/ui/badge";
-import { Separator } from "@/components/ui/separator";
-import {
-  ShoppingCart,
-  Plus,
-  Minus,
-  CreditCard,
-  LogOut,
-  X,
-  Squirrel,
-  Menu,
-  Trash2,
-  Check,
-  Loader2,
-  Copy,
-  Share2,
-  Printer,
-  ScanLine,
-} from "lucide-react";
+import { createClient } from "@/lib/supabase/client";
+import { LogOut, ScanLine, Squirrel } from "lucide-react";
 import { cn } from "@/lib/utils";
 import CartSheet from "@/components/pos/CartSheet";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
@@ -39,33 +11,20 @@ import { useCartStore } from "@/lib/stores/cartStore";
 import { useAuth } from "@/lib/auth/AuthContext";
 import { Product } from "@/lib/types/product";
 import { useToastManager } from "@/hooks/useToastManager";
-import { formatCurrency, formatLL, formatUSD, convertLlToUsd, convertLlToUsdForSale, convertLlToUsdForReturn, convertUsdToLl, SELL_RATE, RETURN_RATE } from "@/lib/utils/format";
-import { usePrimedReceipt } from "@/lib/pos/usePrimedReceipt";
-import {
-  warmLocalDB,
-  queueCompletedSale,
-  pushSaleInBackground,
-} from "@/lib/pos/saleCompletion";
+import { formatLL } from "@/lib/utils/format";
+import { warmLocalDB } from "@/lib/pos/saleCompletion";
 import dynamic from "next/dynamic";
 // Imported from the standalone feedback module, NOT from BarcodeScanner —
 // importing it from there would pull ZXing back into this bundle.
-import { playSuccessSound, playErrorSound, playCompleteSound, primeFeedback } from "@/lib/feedback";
+import { playSuccessSound, playErrorSound, primeFeedback } from "@/lib/feedback";
 import ProductSearchBar from "@/components/ProductSearchBar";
 import { SyncIndicator } from "@/components/SyncIndicator";
-import CartQuantityInput from "@/components/pos/CartQuantityInput";
-import { useDialogArrowNav } from "@/hooks/useDialogArrowNav";
 import { syncEngine } from "@/lib/sync/engine";
-import {
-  getCachedProducts,
-  getCachedProductByBarcode,
-  getCachedProductsCount,
-  seedProductsIfNeeded,
-} from "@/lib/db";
+import { getCachedProducts, seedProductsIfNeeded } from "@/lib/db";
 import type { CachedProduct } from "@/lib/db";
 import { useFeatureFlags } from "@/hooks/useFeatureFlags";
-import { usePreloadProducts } from "@/hooks/usePreloadProducts";
-import { isDesktop, isIOS, isAndroid } from "@/lib/device";
-import { getFrequentlyUsedProductIds, addFrequentlyUsedProduct, removeFrequentlyUsedProduct, isFrequentlyUsed } from "@/lib/frequentlyUsed";
+import { isDesktop } from "@/lib/device";
+import { getFrequentlyUsedProductIds } from "@/lib/frequentlyUsed";
 import { connectivity } from "@/lib/connectivity";
 import { useReloadGuard } from "@/lib/pwa/useReloadGuard";
 import { warmAppShell } from "@/lib/pwa/warmAppShell";
@@ -74,9 +33,8 @@ import {
   hasShownPersistNotice,
   markPersistNoticeShown,
 } from "@/lib/pwa/persistentStorage";
-import { StorageFullError } from "@/lib/db/localDB";
-
-const supabase = createClient();
+import { mapToCachedProduct, cachedToProduct } from "@/lib/products/refresh";
+import ProPOSLayout from "@/components/pos/pro/ProPOSLayout";
 
 // BarcodeScanner statically imports @zxing/library (~420KB) plus the camera
 // pipeline. It is only ever rendered when the scanner is open, so loading it
@@ -109,7 +67,6 @@ export default function POSPage() {
   });
   const [products, setProducts] = useState<Product[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [merchant, setMerchant] = useState<any>(null);
   // Throttles the focus-triggered refresh (see the load effect below)
   const lastFocusSyncRef = useRef(0);
   const [highlightedItemId, setHighlightedItemId] = useState<string | null>(null);
@@ -119,21 +76,6 @@ export default function POSPage() {
   const barcodeIndexRef = useRef<Map<string, Product>>(new Map());
   // Confirm before ending the session — see the header button.
   const [isLogoutDialogOpen, setIsLogoutDialogOpen] = useState(false);
-  // Quick end transaction state
-  const [isQuickEndDialogOpen, setIsQuickEndDialogOpen] = useState(false);
-  const [isQuickEndProcessing, setIsQuickEndProcessing] = useState(false);
-  // Quick end completion (QR receipt) state
-  const [completedTxnNumber, setCompletedTxnNumber] = useState("");
-  const [completedReceiptUrl, setCompletedReceiptUrl] = useState("");
-  const [completedQrDataUrl, setCompletedQrDataUrl] = useState("");
-  const [isCompleteDialogOpen, setIsCompleteDialogOpen] = useState(false);
-  const [completedTotal, setCompletedTotal] = useState(0);
-  const [completedTotalUsd, setCompletedTotalUsd] = useState(0);
-  const [completedItemCount, setCompletedItemCount] = useState(0);
-  const [completedChange, setCompletedChange] = useState(0);
-  const [completedChangeUsd, setCompletedChangeUsd] = useState(0);
-  const [completedPaid, setCompletedPaid] = useState(0);
-  const [completedPaidUsd, setCompletedPaidUsd] = useState(0);
 
   // The cart check in PWAUpdateListener already covers a sale in progress. What
   // it does not cover is the moment AFTER the cart is cleared but while the
@@ -141,34 +83,22 @@ export default function POSPage() {
   // dialog awaiting an answer.
   // (isScannerActive is deliberately NOT a hold: it is a persisted preference
   // that defaults to on, so holding on it would defer updates forever.)
-  useReloadGuard(
-    isCompleteDialogOpen ||
-      isQuickEndDialogOpen ||
-      isQuickEndProcessing ||
-      isLogoutDialogOpen,
-    "pos-busy"
-  );
+  useReloadGuard(isLogoutDialogOpen, "pos-busy");
 
-  // Any modal on screen owns the keyboard: the F-key shortcuts below go inert
-  // so F8 cannot navigate to checkout out from under a confirmation the
-  // cashier is still answering.
-  const isAnyDialogOpen =
-    isCompleteDialogOpen || isQuickEndDialogOpen || isLogoutDialogOpen;
-
-  // Arrow keys move across the "finish this sale?" actions; Enter confirms.
-  const quickEndActionsRef = useDialogArrowNav<HTMLDivElement>(isQuickEndDialogOpen);
-
-  // Token + QR image for the next sale are built ahead of time, so ending a
-  // transaction costs zero QR work. See usePrimedReceipt.
-  const { takeReceipt } = usePrimedReceipt();
-
-  // Open the Dexie chunk/connection now rather than inside the sale handler,
-  // where it would sit in front of the receipt.
+  // Open the Dexie chunk/connection now rather than at checkout, where it
+  // would sit in front of the receipt.
   useEffect(() => {
     warmLocalDB();
   }, []);
 
   const { toast } = useToastManager({ throttleMs: 1200 });
+
+  // CachedProduct -> Product. Was written out inline twice inside the load
+  // effect below; it lives in products/refresh.ts now, next to its inverse.
+  const toProducts = useCallback(
+    (cached: CachedProduct[]): Product[] => cached.map(cachedToProduct),
+    []
+  );
 
   // Narrow selectors rather than `useCartStore()` with no selector. Actions and
   // getters are defined once in the store's create() closure, so their
@@ -179,11 +109,8 @@ export default function POSPage() {
   const addItem = useCartStore((s) => s.addItem);
   const incrementQuantity = useCartStore((s) => s.incrementQuantity);
   const decrementQuantity = useCartStore((s) => s.decrementQuantity);
-  const updateQuantity = useCartStore((s) => s.updateQuantity);
   const clearCart = useCartStore((s) => s.clearCart);
   const setStoreId = useCartStore((s) => s.setStoreId);
-  const getSubtotal = useCartStore((s) => s.getSubtotal);
-  const getSubtotalUsd = useCartStore((s) => s.getSubtotalUsd);
   const getTotal = useCartStore((s) => s.getTotal);
   const getTotalUsd = useCartStore((s) => s.getTotalUsd);
   const getItemCount = useCartStore((s) => s.getItemCount);
@@ -192,7 +119,6 @@ export default function POSPage() {
   // which does not subscribe — they only appeared to update because `items`
   // triggered the render anyway. Selecting them makes the dependency real.
   const getTotalDiscount = useCartStore((s) => s.getTotalDiscount);
-  const getTotalOriginal = useCartStore((s) => s.getTotalOriginal);
   const getRoundingAdjustment = useCartStore((s) => s.getRoundingAdjustment);
 
   // Unlock audio on the first user interaction. Browsers start an AudioContext
@@ -263,33 +189,14 @@ export default function POSPage() {
           }
 
           const store_id = user.storeId;
-          setMerchant({ id: store_id });
           setStoreId(store_id);
           syncEngine.setStoreId(store_id);
-
-          // Helper to map cached products to Product type
-          const mapCachedToProducts = (cached: CachedProduct[]): Product[] =>
-            cached.map((p) => ({
-              id: p.id,
-              store_id: p.store_id,
-              name: p.name,
-              barcode: p.barcode,
-              cost_price: p.cost_price,
-              selling_price: p.selling_price,
-              currency: (p.currency === "USD" ? "USD" : "LL") as "LL" | "USD",
-              profit_percentage: p.profit_percentage,
-              discount_percentage: p.discount_percentage || 0,
-              stock_quantity: p.stock_quantity,
-              min_stock_threshold: p.min_stock_threshold,
-              parent_id: p.parent_id || undefined,
-              variant_name: p.variant_name || undefined,
-            }));
 
           // ALWAYS load from local cache first for instant display
           const cached = await getCachedProducts(store_id);
           if (cached && cached.length > 0) {
             if (isMounted) {
-              setProducts(mapCachedToProducts(cached));
+              setProducts(toProducts(cached));
               // Drop the loading gate the moment we have something real to
               // show. isLoading previously stayed true until the `finally`
               // below, which is AFTER the network sync — so the whole point of
@@ -314,7 +221,7 @@ export default function POSPage() {
                   const { getCachedProducts } = await import("@/lib/db/localDB");
                   const updated = await getCachedProducts(store_id);
                   if (updated && updated.length > 0) {
-                    setProducts(mapCachedToProducts(updated));
+                    setProducts(toProducts(updated));
                   }
                 });
               }
@@ -326,7 +233,7 @@ export default function POSPage() {
             if (seeded > 0 && isMounted) {
               const seededProducts = await getCachedProducts(store_id);
               if (seededProducts && seededProducts.length > 0) {
-                setProducts(mapCachedToProducts(seededProducts));
+                setProducts(toProducts(seededProducts));
               }
               toast.success(`Loaded ${seeded} default products (offline mode)`);
             }
@@ -337,24 +244,8 @@ export default function POSPage() {
         // Try local cache as fallback with empty store_id
         try {
           const cached = await getCachedProducts("");
-          const mapCachedToProducts = (cached: CachedProduct[]): Product[] =>
-            cached.map((p) => ({
-              id: p.id,
-              store_id: p.store_id,
-              name: p.name,
-              barcode: p.barcode,
-              cost_price: p.cost_price,
-              selling_price: p.selling_price,
-              currency: (p.currency === "USD" ? "USD" : "LL") as "LL" | "USD",
-              profit_percentage: p.profit_percentage,
-              discount_percentage: p.discount_percentage || 0,
-              stock_quantity: p.stock_quantity,
-              min_stock_threshold: p.min_stock_threshold,
-              parent_id: p.parent_id || undefined,
-              variant_name: p.variant_name || undefined,
-            }));
           if (cached && cached.length > 0 && isMounted) {
-            setProducts(mapCachedToProducts(cached));
+            setProducts(toProducts(cached));
           }
         } catch {}
       } finally {
@@ -386,7 +277,7 @@ export default function POSPage() {
     // inside this effect, so including it made the effect re-fire and run a
     // full loadData() (and therefore a full sync) twice on every mount.
     // The store id is read from `user.storeId` directly instead.
-  }, [router, setStoreId, user, authLogout, toast]);
+  }, [router, setStoreId, user, authLogout, toast, toProducts]);
 
   // ---- Build O(1) barcode index whenever products change ----
   useEffect(() => {
@@ -476,119 +367,116 @@ export default function POSPage() {
     // above so this callback stays referentially stable.
   }, [addItem, incrementQuantity, isEnabled, isDesktopMode, toast]);
 
-  // Handle barcode scan from camera — O(1) local first, then live Supabase fallback to guarantee zero misses
-  // MUST stay referentially stable. This is the `onScan` prop of the memoized
-  // scanner: as a plain function it was a new identity on every POS render,
-  // which defeated React.memo AND cascaded through the scanner's own
-  // useCallbacks into its camera lifecycle effect, restarting the camera on
-  // every render. `barcodeIndex` is the only value here that legitimately
-  // changes, and only when the catalog does.
-  const handleBarcodeScan = useCallback(async (barcode: string) => {
-    const trimmed = barcode.trim();
-    if (!trimmed) {
-      toast.error("Empty barcode", { key: "scan-miss" });
-      return;
-    }
+  // Resolve a scanned code to a product: the O(1) local index first, then a
+  // live Supabase lookup for something that exists server-side but has not
+  // reached this device's cache yet.
+  //
+  // Returns null for a genuine miss and says nothing about it. Reporting is
+  // the caller's job, because the two callers want opposite things: the
+  // desktop till turns a miss into the "name this barcode" prompt, while the
+  // mobile camera just beeps — a camera fires misreads, and a prompt on every
+  // one of them would be unusable.
+  //
+  // MUST stay referentially stable: it feeds the memoized scanner's onScan, so
+  // a new identity on every render would restart the camera mid-scan.
+  // `barcodeIndex` is the only value here that legitimately changes, and only
+  // when the catalogue does.
+  const resolveBarcode = useCallback(
+    async (barcode: string): Promise<Product | null> => {
+      const trimmed = barcode.trim();
+      if (!trimmed) return null;
 
-    // 1. Try local O(1) index
-    const product = barcodeIndex.get(trimmed);
-    if (product) {
-      handleProductAdd(product);
-      return;
-    }
+      const local = barcodeIndex.get(trimmed);
+      if (local) return local;
 
-    // 2. Fallback: query Supabase directly if online — this fixes scan misses for products
-    //    that exist server-side but aren't in the local cache/state yet
-    if (!connectivity.isOnline) {
-      playErrorSound();
-      toast.error("Product not found in local data", { key: "scan-miss" });
-      return;
-    }
+      if (!connectivity.isOnline) return null;
 
-    const storeId = user?.storeId;
-    if (!storeId) {
-      toast.error("No store selected");
-      return;
-    }
+      const storeId = user?.storeId;
+      if (!storeId) return null;
 
-    try {
-      toast.loading("Verifying barcode...", { key: "scan-fallback" });
+      try {
+        // A fresh client so the lookup carries the current store header.
+        const liveClient = createClient();
+        const { data, error } = await liveClient
+          .from("products")
+          .select("*")
+          .eq("barcode", trimmed)
+          .eq("store_id", storeId)
+          .single();
 
-      // Use a fresh client to ensure latest restaurant header
-      const liveClient = createClient();
-      const { data, error } = await liveClient
-        .from("products")
-        .select("*")
-        .eq("barcode", trimmed)
-        .eq("store_id", storeId)
-        .single();
+        if (error || !data) return null;
 
-      if (error || !data) {
-        toast.dismiss("scan-fallback");
-        playErrorSound();
-        toast.error("Product not found", { key: "scan-miss" });
+        const cached = mapToCachedProduct(data);
+        const mapped = cachedToProduct(cached);
+
+        // Merge into local state so the next scan of this code is instant.
+        setProducts((prev) => {
+          if (prev.some((p) => p.id === mapped.id)) return prev;
+          return [...prev, mapped];
+        });
+
+        // And warm IndexedDB so the cache is never stale on it again. Single
+        // upsert, not a cache clear.
+        try {
+          const { upsertSingleProduct } = await import("@/lib/db/localDB");
+          await upsertSingleProduct(cached);
+        } catch (e) {
+          console.warn("[POS Scan] upsert single product failed:", e);
+        }
+
+        return mapped;
+      } catch (err) {
+        console.error("[POS Scan] fallback error:", err);
+        return null;
+      }
+    },
+    [barcodeIndex, user?.storeId]
+  );
+
+  // Camera scan (mobile). A miss is reported and dropped — see resolveBarcode.
+  const handleBarcodeScan = useCallback(
+    async (barcode: string) => {
+      if (!barcode.trim()) {
+        toast.error("Empty barcode", { key: "scan-miss" });
         return;
       }
 
-      // -- Merge the live product into local state so it's available for future scans --
-      const mapped: Product = {
-        id: data.id,
-        store_id: data.store_id,
-        name: data.name,
-        barcode: data.barcode,
-        cost_price: data.cost_price,
-        selling_price: data.selling_price,
-        currency: (data.currency === "USD" ? "USD" : "LL") as "LL" | "USD",
-        profit_percentage: data.profit_percentage,
-        discount_percentage: data.discount_percentage || 0,
-        stock_quantity: data.stock_quantity,
-        min_stock_threshold: data.min_stock_threshold,
-        parent_id: data.parent_id || undefined,
-        variant_name: data.variant_name || undefined,
-      };
+      // The local index answers instantly; only the server fallback is slow
+      // enough to need saying something about, and it only runs when the code
+      // is not in the cache. Without this the camera looks like it froze.
+      const needsServerLookup =
+        connectivity.isOnline && !barcodeIndex.has(barcode.trim());
+      if (needsServerLookup) toast.loading("Verifying barcode...", { key: "scan-fallback" });
 
-      // Add to local products state (reacts no-op if already there)
-      setProducts((prev) => {
-        if (prev.some((p) => p.id === mapped.id)) return prev;
-        return [...prev, mapped];
-      });
+      const product = await resolveBarcode(barcode);
+      if (needsServerLookup) toast.dismiss("scan-fallback");
 
-      // Also warm IndexedDB so the cache is never stale again
-      // Uses upsertSingleProduct to avoid clearing the entire cache
-      try {
-        const { upsertSingleProduct } = await import("@/lib/db/localDB");
-        await upsertSingleProduct({
-          id: mapped.id,
-          store_id: mapped.store_id,
-          name: mapped.name,
-          barcode: mapped.barcode,
-          cost_price: mapped.cost_price,
-          selling_price: mapped.selling_price,
-          currency: mapped.currency,
-          profit_percentage: mapped.profit_percentage,
-          discount_percentage: mapped.discount_percentage,
-          stock_quantity: mapped.stock_quantity,
-          min_stock_threshold: mapped.min_stock_threshold,
-          parent_id: mapped.parent_id || null,
-          variant_name: mapped.variant_name || null,
-          updated_at: new Date().toISOString(),
-        } as any);
-      } catch (e) {
-        console.warn("[POS Scan] upsert single product failed:", e);
+      if (product) {
+        handleProductAdd(product);
+        return;
       }
 
-      toast.dismiss("scan-fallback");
-      toast.success("Found via server — added to cart", { key: "cart-add" });
-
-      // 3. Add to cart
-      handleProductAdd(mapped);
-    } catch (err) {
-      console.error("[POS Scan] fallback error:", err);
-      toast.dismiss("scan-fallback");
       playErrorSound();
-      toast.error("Product not found", { key: "scan-miss" });
-    }
-  }, [barcodeIndex, handleProductAdd, user?.storeId, toast]);
+      toast.error(
+        connectivity.isOnline ? "Product not found" : "Product not found in local data",
+        { key: "scan-miss" }
+      );
+    },
+    [resolveBarcode, handleProductAdd, toast, barcodeIndex]
+  );
+
+  // A product created or repriced from the desktop till. Folding it into
+  // `products` here is what makes the next scan, the search list and the quick
+  // grid agree with what was just saved.
+  const handleProductUpserted = useCallback((product: Product) => {
+    setProducts((prev) => {
+      const index = prev.findIndex((p) => p.id === product.id);
+      if (index === -1) return [...prev, product];
+      const next = prev.slice();
+      next[index] = product;
+      return next;
+    });
+  }, []);
 
   // useCallback so the keydown effect below doesn't tear down and re-register
   // its listener on every render (this was a plain function in a dep array).
@@ -616,295 +504,29 @@ export default function POSPage() {
     router.push("/login");
   };
 
-  // Generate transaction number
-  const generateTransactionNumber = () => {
-    const timestamp = Date.now().toString(36).toUpperCase();
-    const random = Math.random().toString(36).substring(2, 6).toUpperCase();
-    return `TXN-${timestamp}-${random}`;
-  };
-
-  // Copy receipt link to clipboard
-  const handleCopyCompletedLink = async () => {
-    try {
-      await navigator.clipboard.writeText(completedReceiptUrl);
-      toast.success("Receipt link copied to clipboard");
-    } catch (err) {
-      console.error("Failed to copy link:", err);
-      toast.error("Failed to copy link");
-    }
-  };
-
-  // Share receipt link via Web Share API
-  const handleShareCompletedReceipt = async () => {
-    if (navigator.share) {
-      try {
-        await navigator.share({
-          title: `Receipt - ${completedTxnNumber}`,
-          text: `Your receipt for transaction ${completedTxnNumber}`,
-          url: completedReceiptUrl,
-        });
-      } catch (err) {
-        // User cancelled share
-      }
-    } else {
-      await handleCopyCompletedLink();
-    }
-  };
-
-  // Print the QR code (for hard-copy at the register)
-  const handlePrintCompletedQR = () => {
-    const printWindow = window.open("", "_blank", "width=400,height=500");
-    if (!printWindow) {
-      toast.error("Please allow pop-ups to print the QR code");
-      return;
-    }
-    printWindow.document.write(`
-      <html>
-        <head>
-          <title>Receipt QR - ${completedTxnNumber}</title>
-          <style>
-            body { font-family: Arial, sans-serif; text-align: center; padding: 20px; }
-            h2 { margin-bottom: 4px; }
-            p { color: #666; margin-bottom: 16px; }
-            img { max-width: 300px; }
-            .url { font-size: 12px; color: #888; word-break: break-all; margin-top: 12px; }
-          </style>
-        </head>
-        <body>
-          <h2>Scan for Digital Receipt</h2>
-          <p>Transaction #${completedTxnNumber}</p>
-          <img src="${completedQrDataUrl}" alt="Receipt QR Code" />
-          <div class="url">${completedReceiptUrl}</div>
-          <script>window.print();</script>
-        </body>
-      </html>
-    `);
-    printWindow.document.close();
-  };
-
-  // Quick end transaction - immediately completes the sale without checkout
-  const handleQuickEnd = async () => {
-    if (items.length === 0) return;
-
-    setIsQuickEndProcessing(true);
-
-    try {
-      const txnNumber = generateTransactionNumber();
-      const total = getTotal();
-      const totalUsd = getTotalUsd();
-      const itemCount = getItemCount();
-
-      // Claimed synchronously — token and QR image were generated ahead of time.
-      const receipt = takeReceipt();
-
-      // Get current user info
-      const currentUser = JSON.parse(localStorage.getItem("goldensquirrel_user") || "{}");
-
-      // Build user info - always include user_name for tracking who processed the transaction
-      // user_id is only for employees (references store_users table)
-      const userInfo: any = {};
-      if (currentUser && currentUser.username) {
-        userInfo.user_name = currentUser.displayName || currentUser.username;
-        // Only set user_id for employees (not owners, whose ID is a store_id)
-        if (!currentUser.isOwner && currentUser.id) {
-          userInfo.user_id = currentUser.id;
-        }
-      }
-
-      const lineItems = items.map((item) => ({
-        product_id: item.product_id,
-        product_name: item.product_name,
-        quantity: item.quantity,
-        unit_price: item.unit_price,
-        total_price: item.total_price,
-        currency: item.currency,
-        unit_price_usd: item.unit_price_usd,
-        total_price_usd: item.total_price_usd,
-      }));
-
-      // Payload for POST /api/transactions (server field names).
-      const transactionData: any = {
-        transaction_number: txnNumber,
-        receipt_token: receipt.token,
-        subtotal: getSubtotal(),
-        total_amount: total,
-        amount_paid: total,
-        change_given: 0,
-        payment_method: "cash",
-        usd_subtotal: getSubtotalUsd(),
-        usd_total_amount: totalUsd,
-        usd_amount_paid: totalUsd,
-        usd_change_given: 0,
-        items: lineItems,
-        ...userInfo,
-      };
-
-      // Payload for the local offline queue (Dexie field names).
-      const authDataOffline = JSON.parse(localStorage.getItem("goldensquirrel_auth") || "{}");
-      const queuedId = crypto.randomUUID();
-      const offlineTxnData: any = {
-        id: queuedId,
-        store_id: authDataOffline.store_id || "",
-        transaction_number: txnNumber,
-        receipt_token: receipt.token,
-        subtotal: getSubtotal(),
-        total_amount: total,
-        amount_paid: total,
-        change_given: 0,
-        payment_method: "cash",
-        subtotal_usd: getSubtotalUsd(),
-        total_usd: totalUsd,
-        amount_paid_usd: totalUsd,
-        change_given_usd: 0,
-        items: lineItems,
-        created_at: new Date().toISOString(),
-        ...userInfo,
-      };
-
-      // Make the sale durable BEFORE showing a receipt for it. IndexedDB
-      // write, single-digit ms. Everything slow happens after this point.
-      const wasOffline = !navigator.onLine;
-      await queueCompletedSale(offlineTxnData);
-
-      // NOTE: Stock decrements are handled server-side in the /api/transactions
-      // POST route; the local cache decrement rides along in the background
-      // push below. No client-side stock queuing — that double-decrements.
-
-      // --- Receipt is on screen from here. ---
-      setCompletedTxnNumber(txnNumber);
-      setCompletedReceiptUrl(receipt.receiptUrl);
-      setCompletedQrDataUrl(receipt.qrDataUrl);
-      setCompletedTotal(total);
-      setCompletedTotalUsd(totalUsd);
-      setCompletedItemCount(itemCount);
-      setCompletedChange(0);
-      setCompletedChangeUsd(0);
-      setCompletedPaid(total);
-      setCompletedPaidUsd(totalUsd);
-      clearCart();
-      setIsQuickEndDialogOpen(false);
-      playCompleteSound();
-      setIsCompleteDialogOpen(true);
-      toast.success("Transaction completed!");
-      if (wasOffline) {
-        toast.info("Transaction saved offline - will sync when online");
-      }
-
-      // Only reachable if the sale ended within ~30ms of the QR being primed.
-      if (!receipt.qrDataUrl) {
-        void receipt.whenQrReady.then((dataUrl) => {
-          if (dataUrl) setCompletedQrDataUrl(dataUrl);
-        });
-      }
-
-      // Server write + local stock cache, off the critical path. On failure
-      // the queued row above stays put and the sync engine retries it.
-      pushSaleInBackground({
-        queuedId,
-        payload: transactionData,
-        stockDecrements: lineItems.map((item) => ({
-          product_id: item.product_id,
-          quantity: item.quantity,
-        })),
-      });
-    } catch (error) {
-      console.error("Error ending transaction:", error);
-      // A full disk is not the same problem as a bug, and the cashier can
-      // actually do something about it — but only if we say so. Everything
-      // rebuildable has already been sacrificed by this point (see
-      // writeWithQuotaRescue), so this really does mean out of space.
-      if (error instanceof StorageFullError) {
-        toast.error("Device storage is full — this sale was NOT saved.", {
-          description: "Free up space on the device and ring the sale again before continuing.",
-          duration: 15000,
-        });
-      } else {
-        toast.error("Failed to end transaction");
-      }
-    } finally {
-      setIsQuickEndProcessing(false);
-    }
-  };
-
-  // handleQuickEnd is redefined on every render. The shortcut effect reads it
-  // through this ref so it does not have to re-register a window listener on
-  // every keystroke in the cart.
-  const quickEndRef = useRef<() => void>(() => {});
+  // ---- Shortcuts ----
+  //
+  // Only F3 lives here now, and only for the mobile camera layout, where it
+  // toggles the scanner. Everything the desktop till uses — F1 to focus the
+  // scan field, F4 to check out, ALT+1..9 to change lane — targets something
+  // ProPOSLayout renders, so it is registered there instead of reaching across
+  // two layouts from here.
+  //
+  // e.repeat guards against a leaned-on key firing the toggle repeatedly.
   useEffect(() => {
-    quickEndRef.current = handleQuickEnd;
-  });
+    if (isDesktopMode) return;
 
-  // Refs for F-key shortcuts
-  const searchInputRef = useRef<HTMLInputElement | null>(null);
-  const barcodeInputRef = useRef<HTMLInputElement | null>(null);
-
-  // F-key shortcuts: F1=Search, F3=Barcode, F4=Checkout, F8=Done.
-  //
-  // These deliberately fire even while an input has focus. On a hardware-scanner
-  // till the barcode field is focused essentially all the time -- it re-focuses
-  // itself after every scan -- so a "return early if the target is an input"
-  // guard would mean the shortcuts almost never worked on the one layout they
-  // exist for. F-keys type no characters, so there is nothing to collide with.
-  //
-  // Both F8 and F4 are DOUBLE-PRESS: the first opens a step, the second commits
-  // it. F8, F8 finishes a sale without leaving the POS; F4, F4 goes to checkout
-  // and completes it there (see src/app/checkout/page.tsx).
-  //
-  // e.repeat is essential, not a nicety. Holding a key auto-repeats, and
-  // without this a leaned-on F8 would open the confirmation and immediately
-  // answer it -- completing a sale nobody confirmed.
-  useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.repeat) return;
-
-      // Second F8 while the confirmation is up = "yes, finish it".
-      if (isQuickEndDialogOpen) {
-        if (e.key === "F8") {
-          e.preventDefault();
-          if (!isQuickEndProcessing) quickEndRef.current();
-        }
-        return;
-      }
-
-      // Any other modal owns the keyboard.
-      if (isAnyDialogOpen) return;
-
-      if (e.key === "F1") {
-        // Chrome opens its help centre on F1; preventDefault suppresses that.
+      if (isLogoutDialogOpen) return; // the modal owns the keyboard
+      if (e.key === "F3") {
         e.preventDefault();
-        searchInputRef.current?.focus();
-      } else if (e.key === "F3") {
-        e.preventDefault();
-        if (!isDesktopMode) {
-          toggleScanner();
-        } else {
-          barcodeInputRef.current?.focus();
-          barcodeInputRef.current?.select();
-        }
-      } else if (e.key === "F4") {
-        e.preventDefault();
-        // Same condition as the Checkout button: nothing to pay for otherwise.
-        if (!isEmpty()) {
-          router.push("/checkout");
-        }
-      } else if (e.key === "F8") {
-        e.preventDefault();
-        if (!isEmpty()) {
-          setIsQuickEndDialogOpen(true);
-        }
+        toggleScanner();
       }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [
-    isEmpty,
-    isDesktopMode,
-    toggleScanner,
-    router,
-    isAnyDialogOpen,
-    isQuickEndDialogOpen,
-    isQuickEndProcessing,
-  ]);
+  }, [isDesktopMode, toggleScanner, isLogoutDialogOpen]);
 
   // Cleanup timeout on unmount
   useEffect(() => {
@@ -1040,9 +662,9 @@ export default function POSPage() {
     );
   }
 
-  // Shared by both layouts. Held as JSX rather than an inner component so it
-  // is not a fresh component type on every render — that would remount the
-  // dialogs (and drop their open/close animation) on every cart change.
+  // Shared by both layouts. Held as JSX rather than an inner component so it is
+  // not a fresh component type on every render — that would remount the dialog
+  // (and drop its open/close animation) on every cart change.
   const dialogs = (
     <>
       {/* ---- Confirm sign out ---- */}
@@ -1076,130 +698,6 @@ export default function POSPage() {
         }}
       />
 
-      {/* ---- Confirm quick sale ---- */}
-      <Dialog open={isQuickEndDialogOpen} onOpenChange={setIsQuickEndDialogOpen}>
-        <DialogContent className="max-w-sm rounded-3xl">
-          <DialogHeader>
-            <DialogTitle>Finish this sale?</DialogTitle>
-            <DialogDescription>
-              Records {getItemCount()} item{getItemCount() !== 1 ? "s" : ""} immediately and
-              skips checkout. No change is calculated.
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="rounded-2xl bg-muted/50 px-4 py-3">
-            <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-muted-foreground">
-              Total
-            </p>
-            <p className="text-3xl font-extrabold leading-tight text-primary tnum">
-              {formatLL(getTotal())}
-            </p>
-            <p className="text-sm text-muted-foreground tnum">{formatUSD(getTotalUsd())}</p>
-          </div>
-
-          <DialogFooter ref={quickEndActionsRef} className="flex gap-2 sm:justify-between">
-            <Button
-              variant="outline"
-              className="h-12 flex-1 rounded-2xl"
-              onClick={() => setIsQuickEndDialogOpen(false)}
-              disabled={isQuickEndProcessing}
-            >
-              Cancel
-            </Button>
-            <Button
-              className="h-12 flex-1 rounded-2xl font-bold"
-              onClick={handleQuickEnd}
-              disabled={isQuickEndProcessing}
-            >
-              {isQuickEndProcessing ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Check className="h-4 w-4" />
-              )}
-              Done
-              <span className="ml-1 text-xs font-semibold opacity-60">F8</span>
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* ---- Sale complete — digital receipt ---- */}
-      <Dialog open={isCompleteDialogOpen} onOpenChange={setIsCompleteDialogOpen}>
-        <DialogContent className="max-w-sm rounded-3xl">
-          <div className="text-center">
-            <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-emerald-500/10">
-              <Check className="h-7 w-7 text-emerald-400" />
-            </div>
-            <DialogHeader>
-              <DialogTitle>Sale complete</DialogTitle>
-              <DialogDescription className="tnum">
-                #{completedTxnNumber} · {completedItemCount} item
-                {completedItemCount !== 1 ? "s" : ""}
-              </DialogDescription>
-            </DialogHeader>
-
-            <div className="my-4 space-y-2 rounded-2xl bg-muted/50 px-4 py-3 text-sm">
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Total</span>
-                <span className="font-bold tnum">{formatLL(completedTotal)}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Paid</span>
-                <span className="font-bold tnum">{formatLL(completedPaid)}</span>
-              </div>
-              {completedChange > 0 && (
-                <div className="flex justify-between text-emerald-400">
-                  <span>Change</span>
-                  <span className="font-bold tnum">{formatLL(completedChange)}</span>
-                </div>
-              )}
-            </div>
-
-            {completedQrDataUrl ? (
-              <div className="mb-4 rounded-2xl border p-4">
-                <p className="mb-3 text-xs text-muted-foreground">
-                  Customer scans this for their receipt
-                </p>
-                <div className="mb-3 flex justify-center">
-                  <img
-                    src={completedQrDataUrl}
-                    alt="Digital receipt QR code"
-                    className="h-44 w-44 rounded-xl bg-white p-2"
-                  />
-                </div>
-                <div className="grid grid-cols-3 gap-2">
-                  <Button variant="outline" size="sm" className="rounded-xl" onClick={handleCopyCompletedLink}>
-                    <Copy className="h-4 w-4" />
-                    Copy
-                  </Button>
-                  <Button variant="outline" size="sm" className="rounded-xl" onClick={handleShareCompletedReceipt}>
-                    <Share2 className="h-4 w-4" />
-                    Share
-                  </Button>
-                  <Button variant="outline" size="sm" className="rounded-xl" onClick={handlePrintCompletedQR}>
-                    <Printer className="h-4 w-4" />
-                    Print
-                  </Button>
-                </div>
-              </div>
-            ) : (
-              <div className="mb-4 flex items-center justify-center gap-2 rounded-2xl border p-6 text-sm text-muted-foreground">
-                <Loader2 className="h-4 w-4 animate-spin" />
-                Generating QR…
-              </div>
-            )}
-
-            <DialogFooter>
-              <Button
-                className="h-12 w-full rounded-2xl font-bold"
-                onClick={() => setIsCompleteDialogOpen(false)}
-              >
-                New sale
-              </Button>
-            </DialogFooter>
-          </div>
-        </DialogContent>
-      </Dialog>
     </>
   );
 
@@ -1356,7 +854,6 @@ export default function POSPage() {
             onIncrement={incrementQuantity}
             onDecrement={decrementQuantity}
             onClear={handleClearCart}
-            onDone={() => setIsQuickEndDialogOpen(true)}
             onCheckout={() => router.push("/checkout")}
           />
         </div>
@@ -1366,231 +863,27 @@ export default function POSPage() {
     );
   }
 
-  // ===================== DESKTOP: HARDWARE-SCANNER SPLIT =====================
-  // A till with a wedge scanner and a keyboard, not a phone. The cart gets the
-  // width, the barcode field keeps focus, and F2 / F3 / F4 drive the whole
-  // flow without the mouse.
+  // ===================== DESKTOP: PRO TILL =====================
+  // A wide screen, a keyboard, a wedge scanner and often a touchscreen. The
+  // layout lives in ProPOSLayout; this page stays responsible for the data —
+  // loading the catalogue, keeping the barcode index, and driving sync.
+  //
+  // No page header here on purpose. Brand, section nav, connection state and
+  // sign-out are global and live in DesktopNav, rendered by AppShell. A second
+  // bar repeating them costs ~64px, which a 1366x768 till cannot spare.
   return (
-    <div className="flex h-full flex-col overflow-hidden bg-background">
-      {/* No page header here on purpose. Brand, section nav, connection
-          state and sign-out are all global and live in DesktopNav, rendered
-          by AppShell. A second bar repeating them cost ~64px of vertical
-          space, which is real estate a 1366x768 till cannot spare. */}
-
-      <div className="flex flex-1 flex-col gap-4 overflow-hidden p-4">
-        {/* ---- Search + primary actions ---- */}
-        <div className="flex flex-shrink-0 items-center gap-3">
-          <ProductSearchBar
-            products={products}
-            onSelect={handleProductAdd}
-            placeholder="Search products by name or barcode…   F1"
-            className="flex-1"
-            inputClassName="h-11 rounded-2xl"
-            inputRef={searchInputRef}
-          />
-          {!isEmpty() && (
-            <div className="flex flex-shrink-0 gap-2">
-              <Button
-                className="tap h-11 rounded-2xl bg-secondary px-5 font-bold text-secondary-foreground hover:bg-secondary/80"
-                onClick={() => setIsQuickEndDialogOpen(true)}
-              >
-                <Check className="h-4 w-4 text-emerald-400" />
-                Done
-                <span className="ml-1 text-xs font-semibold opacity-50">F8</span>
-              </Button>
-              <Button
-                className="tap h-11 rounded-2xl px-5 font-bold"
-                onClick={() => router.push("/checkout")}
-              >
-                <CreditCard className="h-4 w-4" />
-                Checkout
-                <span className="ml-1 text-xs font-semibold opacity-60">F4</span>
-              </Button>
-            </div>
-          )}
-        </div>
-
-        <div className="flex min-h-0 flex-1 flex-row gap-4 overflow-hidden">
-          {/* ---- Cart — 65% ---- */}
-          <div className="flex min-w-0 flex-[65] flex-col overflow-hidden">
-            <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-3xl border bg-card">
-              {isEmpty() ? (
-                <div className="flex h-full flex-col items-center justify-center text-muted-foreground">
-                  <ScanLine className="mb-4 h-12 w-12 opacity-25" />
-                  <p className="text-lg font-semibold">Scan items to add</p>
-                  <p className="mt-1 text-sm">Barcode field is on the right — F3 to focus</p>
-                </div>
-              ) : (
-                <>
-                  <div className="flex flex-shrink-0 items-baseline justify-between px-5 pb-2 pt-4">
-                    <h2 className="text-lg font-bold">
-                      Cart{" "}
-                      <span className="text-sm font-medium text-muted-foreground">
-                        · {getItemCount()} item{getItemCount() !== 1 ? "s" : ""}
-                      </span>
-                    </h2>
-                    <button
-                      type="button"
-                      onClick={handleClearCart}
-                      className="tap -mr-2 rounded-lg px-2 py-1 text-sm font-semibold text-destructive"
-                    >
-                      Clear
-                    </button>
-                  </div>
-
-                  <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto px-2">
-                    {items.map((item) => (
-                      <div
-                        key={item.product_id}
-                        id={`cart-item-${item.product_id}`}
-                        className={cn(
-                          "animate-cart-item-in flex items-center gap-3 rounded-2xl px-3 py-2.5 transition-colors duration-300",
-                          highlightedItemId === item.product_id
-                            ? "bg-primary/15 ring-1 ring-primary/60"
-                            : "ring-1 ring-transparent"
-                        )}
-                      >
-                        <div className="min-w-0 flex-1">
-                          <p className="truncate text-[15px] font-semibold leading-tight">
-                            {item.product_name}
-                          </p>
-                          <p className="mt-0.5 truncate text-xs text-muted-foreground tnum">
-                            {item.discount_percentage > 0 ? (
-                              <>
-                                <span className="line-through opacity-60">
-                                  {formatLL(item.original_unit_price)}
-                                </span>{" "}
-                                <span className="font-semibold text-emerald-400">
-                                  {formatLL(item.unit_price)}
-                                </span>{" "}
-                                each · −{item.discount_percentage}%
-                              </>
-                            ) : (
-                              <>
-                                {formatLL(item.unit_price)} · {formatUSD(item.unit_price_usd)} each
-                              </>
-                            )}
-                          </p>
-                        </div>
-
-                        <div className="flex flex-shrink-0 items-center rounded-xl bg-muted/70">
-                          <button
-                            type="button"
-                            aria-label={`Decrease ${item.product_name}`}
-                            onClick={() => decrementQuantity(item.product_id)}
-                            className="tap flex h-9 w-9 items-center justify-center rounded-xl text-muted-foreground"
-                          >
-                            <Minus className="h-4 w-4" />
-                          </button>
-                          <CartQuantityInput
-                            quantity={item.quantity}
-                            productName={item.product_name}
-                            onCommit={(q) => updateQuantity(item.product_id, q)}
-                          />
-                          <button
-                            type="button"
-                            aria-label={`Increase ${item.product_name}`}
-                            onClick={() => incrementQuantity(item.product_id)}
-                            className="tap flex h-9 w-9 items-center justify-center rounded-xl text-primary"
-                          >
-                            <Plus className="h-4 w-4" />
-                          </button>
-                        </div>
-
-                        <div className="w-[132px] flex-shrink-0 text-right">
-                          <p className="text-[15px] font-semibold tnum">
-                            {formatLL(item.total_price)}
-                          </p>
-                          <p className="text-xs text-muted-foreground tnum">
-                            {formatUSD(item.total_price_usd)}
-                          </p>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-
-                  <div className="flex flex-shrink-0 items-end justify-between gap-3 border-t px-5 py-4">
-                    <div className="min-w-0">
-                      <p className="text-[11px] font-bold uppercase tracking-[0.14em] text-muted-foreground">
-                        Total
-                        {getRoundingAdjustment() !== 0 && (
-                          <span className="tnum">
-                            {" · Rounded "}
-                            {getRoundingAdjustment() > 0 ? "+" : "−"}
-                            {Math.abs(Math.round(getRoundingAdjustment())).toLocaleString("en-US")}
-                          </span>
-                        )}
-                      </p>
-                      {getTotalDiscount() > 0 && (
-                        <p className="mt-0.5 text-xs font-semibold text-emerald-400 tnum">
-                          Saved {formatLL(getTotalDiscount())}
-                        </p>
-                      )}
-                      <p className="mt-0.5 text-sm text-muted-foreground tnum">
-                        {formatUSD(getTotalUsd())}
-                      </p>
-                    </div>
-                    <p
-                      key={getTotal()}
-                      className="animate-value-bump flex-shrink-0 text-[34px] font-extrabold leading-none text-primary tnum"
-                    >
-                      {formatLL(getTotal())}
-                    </p>
-                  </div>
-                </>
-              )}
-            </div>
-          </div>
-
-          {/* ---- Barcode field + saved products — 35% ---- */}
-          <div className="flex min-w-0 flex-[35] flex-col gap-4">
-            <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-              <BarcodeScanner
-                onScan={handleBarcodeScan}
-                isActive={true}
-                desktopMode={true}
-                barcodeInputRef={barcodeInputRef}
-              >
-                {savedProducts.length > 0 && (
-                  <div className="grid grid-cols-2 gap-2">
-                    {savedProducts.map((product) => (
-                      <button
-                        key={product.id}
-                        type="button"
-                        onClick={() => handleProductAdd(product)}
-                        className="tap flex min-h-[76px] flex-col items-center justify-center gap-1.5 rounded-2xl border bg-background px-3 py-2 text-center hover:bg-muted/50"
-                      >
-                        <span className="break-words text-sm font-semibold leading-tight">
-                          {product.name}
-                        </span>
-                        {/* Every button shows both currencies in the same order —
-                            USD on top, LL underneath — regardless of which one the
-                            product is priced in, so the grid reads consistently.
-                            Whichever side is derived goes through the helpers:
-                            USD→LL at the sell rate (the customer is paying) rounded
-                            to a payable 5,000 multiple, LL→USD at the return rate to
-                            match what the cart actually charges. */}
-                        <span className="text-xs text-muted-foreground tnum">
-                          {product.currency === "USD"
-                            ? formatUSD(product.selling_price)
-                            : formatUSD(convertLlToUsdForReturn(product.selling_price))}
-                        </span>
-                        <span className="text-[11px] leading-none text-muted-foreground/70 tnum">
-                          {product.currency === "USD"
-                            ? formatLL(convertUsdToLl(product.selling_price))
-                            : formatLL(product.selling_price)}
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </BarcodeScanner>
-            </div>
-          </div>
-        </div>
-      </div>
-
+    <>
+      <ProPOSLayout
+        products={products}
+        savedProducts={savedProducts}
+        storeId={user?.storeId || ""}
+        onProductAdd={handleProductAdd}
+        resolveBarcode={resolveBarcode}
+        onProductUpserted={handleProductUpserted}
+        highlightedItemId={highlightedItemId}
+        onCheckout={() => router.push("/checkout")}
+      />
       {dialogs}
-    </div>
+    </>
   );
 }

@@ -21,6 +21,7 @@ import {
 import type { QueuedTransaction, PendingWrite } from "@/lib/db/localDB";
 import { syncFavoritesFromSupabase, processPendingFavoriteWrites } from "@/lib/frequentlyUsed";
 import { connectivity } from "@/lib/connectivity";
+import { buildAuthHeaders } from "@/lib/auth/requestHeaders";
 
 type SyncStatus = "idle" | "syncing" | "error" | "offline";
 type SyncListener = (status: SyncStatus, pendingCount?: number) => void;
@@ -117,6 +118,10 @@ class SyncHttpError extends Error {
   constructor(message: string, public readonly response: Response) {
     super(message);
     this.name = "SyncHttpError";
+  }
+  /** Convenience for the retry classification. */
+  get status(): number {
+    return this.response.status;
   }
 }
 
@@ -519,6 +524,81 @@ class SyncEngine {
   }
 
   /**
+   * Push a product create/update raised at the till.
+   *
+   * The row carries a client-generated id and the route is an UPSERT on it, so
+   * a write that arrives twice (a lost response, two tabs flushing the same
+   * IndexedDB) converges rather than duplicating the product.
+   */
+  private async processProductUpsertWrite(write: PendingWrite): Promise<void> {
+    const payload = write.payload as { product?: any } | undefined;
+    const product = payload?.product;
+    if (!product?.id) {
+      // Nothing recoverable here — a payload with no product cannot be retried
+      // into existence. Throwing lets the caller count it against the cap.
+      throw new Error("product_upsert payload has no product");
+    }
+
+    const response = await fetch("/api/products", {
+      method: "POST",
+      headers: buildAuthHeaders(),
+      body: JSON.stringify(product),
+    });
+    if (!response.ok) {
+      // Carry the server's own message. "product_upsert failed (400)" with no
+      // reason is undiagnosable from a shop floor, and this is the one class of
+      // failure where the reason is the whole story.
+      let reason = "";
+      try {
+        const body = await response.json();
+        reason = body?.error ? `: ${body.error}` : "";
+      } catch {
+        /* not JSON; the status is all we have */
+      }
+      throw new SyncHttpError(
+        `product_upsert failed (${response.status})${reason}`,
+        response
+      );
+    }
+  }
+
+  /**
+   * Retire a catalogue write that cannot succeed.
+   *
+   * It is marked, NOT deleted. Deleting it lost two things at once: the record
+   * that anything went wrong, and the reconcile guard that keeps the product
+   * the cashier created from being wiped out of the local cache on the next
+   * sync — so the product would quietly disappear from the till as well as
+   * never reaching the server.
+   */
+  private async markCatalogueWriteFailed(
+    write: PendingWrite,
+    reason: string,
+    result: { failed: number; errors: string[] }
+  ): Promise<void> {
+    const productName =
+      (write.payload as { product?: { name?: string } } | undefined)?.product?.name ??
+      "unknown product";
+
+    console.error(
+      `[Sync] ${write.type} for "${productName}" will not be retried — ${reason}. ` +
+        `It stays on this device and has NOT reached the server.`
+    );
+    result.failed++;
+    result.errors.push(`${write.type} ("${productName}"): ${reason}`);
+
+    try {
+      const { localDB } = await import("@/lib/db/localDB");
+      await localDB.pending_writes.where("id").equals(write.id).modify((w: any) => {
+        w.failed_permanently = true;
+        w.last_error = reason;
+      });
+    } catch (e) {
+      console.warn("[Sync] Could not mark the write as failed:", e);
+    }
+  }
+
+  /**
    * Process pending stock decrements from the pending_writes table.
    * Each stock decrement is processed via the Supabase RPC.
    * If a decrement fails, it is retried on the next sync cycle.
@@ -540,12 +620,71 @@ class SyncEngine {
     const cashWrites = pendingWrites.filter(
       (w) => w.type === "cash_shift_open" || w.type === "cash_shift_close" || w.type === "cash_adjustment"
     );
+    // Products named at the till during an outage.
+    const catalogueWrites = pendingWrites.filter((w) => w.type === "product_upsert");
 
-    if (stockDecrements.length === 0 && cashWrites.length === 0) {
+    if (
+      stockDecrements.length === 0 &&
+      cashWrites.length === 0 &&
+      catalogueWrites.length === 0
+    ) {
       return result;
     }
 
-    console.log(`[Sync] Processing ${stockDecrements.length} stock decrements + ${cashWrites.length} cash ops...`);
+    console.log(
+      `[Sync] Processing ${stockDecrements.length} stock decrements + ` +
+        `${cashWrites.length} cash ops + ${catalogueWrites.length} catalogue writes...`
+    );
+
+    // Catalogue writes first: a product created at the till is what a queued
+    // sale's line items may refer to, so getting it to the server before the
+    // sale is pushed keeps that reference resolvable.
+    for (const write of catalogueWrites) {
+      // Already judged unfixable — see the permanent branch below. Left in the
+      // table on purpose rather than deleted.
+      if (write.failed_permanently) continue;
+
+      // Cap checked BEFORE the attempt, so a write that keeps failing for a
+      // transient reason stops burning a request every 30 seconds forever.
+      if ((write.retry_count ?? 0) >= MAX_PENDING_WRITE_RETRIES) {
+        await this.markCatalogueWriteFailed(
+          write,
+          `gave up after ${write.retry_count} attempts (${write.last_error})`,
+          result
+        );
+        continue;
+      }
+
+      try {
+        await this.processProductUpsertWrite(write);
+        await removePendingWrite(write.id);
+        result.processed++;
+      } catch (error: any) {
+        // A 4xx means the server LOOKED at this payload and refused it. Sending
+        // the identical bytes again cannot change that answer, so retrying it
+        // five times and then deleting it — which is what used to happen — just
+        // delayed a silent data loss by two and a half minutes.
+        // 408 and 429 are the exceptions: those are "not now", not "not ever".
+        const status = error instanceof SyncHttpError ? error.status : 0;
+        const permanent = status >= 400 && status < 500 && status !== 408 && status !== 429;
+
+        if (permanent) {
+          await this.markCatalogueWriteFailed(write, error.message, result);
+          continue;
+        }
+
+        console.warn(`[Sync] ${write.type} failed, will retry:`, error.message);
+        result.failed++;
+        result.errors.push(`${write.type}: ${error.message}`);
+        try {
+          const { localDB } = await import("@/lib/db/localDB");
+          await localDB.pending_writes.where("id").equals(write.id).modify((w: any) => {
+            w.retry_count = (w.retry_count ?? 0) + 1;
+            w.last_error = error.message;
+          });
+        } catch {}
+      }
+    }
 
     const supabase = createClient();
 

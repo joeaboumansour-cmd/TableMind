@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { useCartStore } from "@/lib/stores/cartStore";
+import { useCartStore, hasAnyLaneItems } from "@/lib/stores/cartStore";
 import { isReloadHeld, subscribeReloadGuard } from "@/lib/pwa/reloadGuard";
 
 /**
@@ -67,7 +67,9 @@ export default function PWAUpdateListener() {
     const applyUpdateIfIdle = () => {
       if (reloadedRef.current) return;
       if (!updatePendingRef.current) return;
-      if (useCartStore.getState().items.length > 0) return; // sale in progress
+      // EVERY lane, not just the active one: a parked lane holds a customer's
+      // shopping just as much as the one on screen does.
+      if (hasAnyLaneItems(useCartStore.getState())) return; // sale in progress
       if (isReloadHeld()) return; // a screen is mid-task
       reloadedRef.current = true;
       window.location.reload();
@@ -81,7 +83,7 @@ export default function PWAUpdateListener() {
     const watchForIdle = () => {
       if (unsubscribeCart || unsubscribeGuard) return;
       unsubscribeCart = useCartStore.subscribe((state) => {
-        if (state.items.length === 0) applyUpdateIfIdle();
+        if (!hasAnyLaneItems(state)) applyUpdateIfIdle();
       });
       unsubscribeGuard = subscribeReloadGuard(applyUpdateIfIdle);
     };

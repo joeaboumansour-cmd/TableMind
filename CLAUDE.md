@@ -93,7 +93,7 @@ The app must keep selling with no internet. This shapes almost every design deci
 | `products_cache` | Mirror of Supabase products, so POS works offline |
 | `transactions_cache` | Read-only history cache for the transactions page |
 | `offline_queue` | **Completed sales** waiting to be pushed. The money-critical queue. |
-| `pending_writes` | Generic non-sale writes (favourites, cash shifts, adjustments) |
+| `pending_writes` | Generic non-sale writes (favourites, cash shifts, adjustments, **product creates/updates**) |
 
 Schema is at `version(3)`. Dexie versions are **append-only** — add a new `db.version(n).stores({...})` block, never edit an existing one. Compound indexes in use: `[store_id+barcode]` (barcode lookups must be store-scoped — barcodes are not unique across tenants), `[store_id+created_at]`, `[store_id+name]`.
 
@@ -113,6 +113,31 @@ Stock decrements are **server-side only** now. Do not re-add client-side stock q
 
 Follow `.claude/skills/offline-write/SKILL.md` rather than improvising.
 
+### Product writes are offline-capable now
+
+Products used to be written **straight from the browser** with the Supabase
+client, so a create or a reprice simply failed with no internet. The till needs
+to name an unknown barcode during an outage, so those writes go through
+**`src/lib/products/write.ts`**:
+
+1. The id is generated **client-side**, which makes the server call an
+   idempotent upsert rather than an insert that could run twice.
+2. `products_cache` is written first and awaited — the product is sellable at
+   once, offline included.
+3. `POST /api/products` is attempted; on **any** failure it is queued as a
+   `product_upsert` pending write.
+
+> **`reconcileProductsCache()` must never delete a product with a queued
+> `product_upsert`.** The server's ID set cannot contain something it has never
+> been told about, so without that guard a reconcile would wipe the product the
+> cashier just created. The guard lives inside `reconcileProductsCache()` so
+> every caller gets it, and it **skips the whole pass** when the queue cannot be
+> read — deletion requires positive proof, same rule as `evaluateReconcile()`.
+
+**`src/app/(shell)/pos/products/page.tsx` still writes products directly via
+Supabase** (its own create/edit form). That path remains online-only; moving it
+onto `products/write.ts` is an open task.
+
 ---
 
 ## 5. Auth — how it really works (and why it's being replaced)
@@ -128,6 +153,15 @@ Follow `.claude/skills/offline-write/SKILL.md` rather than improvising.
 ### Permissions vs roles — don't mix them up
 
 - ✅ **`src/lib/auth/permissions.ts`** is the real system. Five `SECTIONS`: `pos`, `inventory`, `transactions`, `receipts`, `cash_register`. Guard with `PermissionGuard` from `src/lib/auth/guards.tsx`.
+> **`inventory` is the pricing permission.** Everything on the desktop till that
+> decides what a customer is charged — retyping a cart line's price or name,
+> naming an unknown barcode, adding a product — is gated on it, in one place
+> (`canEditInventory` in `ProPOSLayout`). Without it a cashier can scan, change
+> quantities, remove lines and take payment, and an unknown barcode tells them
+> to fetch someone rather than offering fields. There is deliberately **no
+> "request it anyway" queue**: a till that lets an unauthorised price through
+> "just this once" is how undercharging happens.
+
 - ❌ **`src/lib/auth/roles.ts`** is **dead TableMind scaffolding** (waiter/host/manager hierarchy, `/reservations`, `/floor-plan`). Nothing imports it. Do not extend it.
 
 ---
@@ -138,12 +172,42 @@ There are more mechanisms than there should be. Know which is authoritative:
 
 | Concern | Authoritative source |
 |---|---|
-| Cart | Zustand `src/lib/stores/cartStore.ts` (persisted to localStorage) |
+| Cart | Zustand `src/lib/stores/cartStore.ts` (persisted to localStorage, `version: 1`). Holds **lanes** — see §6a. |
 | Auth / current user | React Context `src/lib/auth/AuthContext.tsx` — **use `useAuth()`**, don't read localStorage directly |
 | Feature flags | `src/hooks/useFeatureFlags.ts` (localStorage-first, then background DB sync) |
 | Products / transactions offline | Dexie via `src/lib/db/localDB.ts` |
 | Pulling products from Supabase | `refreshProductsIntoCache()` in `src/lib/products/refresh.ts` — the only place that fetches products. Delta against an `updated_at` watermark, full pull when the cache is short, guarded reconcile for deletions, and one in-flight run per store. |
 | Connectivity + sync status | `connectivity` and `syncEngine` singletons |
+
+### 6a. Lanes and one-off lines
+
+The desktop till runs **lanes**: parallel carts, so a cashier can park a customer
+and serve the next without clearing anything. `MAX_LANES` is 9 (ALT+1..9).
+
+`items` is still a top-level field on the store and still means *the active
+lane's items*, so `/checkout`, `LogoutButton` and `PWAUpdateListener` never had
+to learn about lanes. `lanes` is the record of truth and `items` is a **mirror**
+of the active entry:
+
+- Every mutation funnels through one private `commitItems()` — one writer, no drift.
+- `onRehydrateStorage` re-derives `items` from `lanes[activeLaneId]` on load.
+- **Anything asking "is a sale in progress" must use `hasAnyLaneItems(state)`**,
+  not `items.length` — a parked lane holds a customer's shopping too. The
+  service-worker reload guard in `PWAUpdateListener` depends on this.
+
+A **one-off line** (`line_kind: 'one_off'`) is something sold once with no
+catalogue row behind it — an unknown barcode priced at the till. Its
+`product_id` is a synthetic `oneoff:<uuid>` key so the cart can address it, and
+that key is mapped to `null` in exactly one place, **`src/lib/pos/lineItems.ts`**
+(`buildTransactionItems` / `buildStockDecrements`). Both the server payload and
+the offline-queue payload go through it, so the online and offline paths cannot
+disagree. `transaction_items.product_id` is nullable and `POST /api/transactions`
+already skips the stock decrement when it is absent.
+
+**Editing a cart line's price** (`updateLine`) clears the discount and sets
+`original_unit_price` to the new value — an overridden price *is* the price, and
+leaving the old original behind would report a discount nobody gave. The
+pre-edit catalogue price is kept in `catalog_unit_price` for display only.
 
 **TanStack Query is not installed at all.** It was mounted in `src/app/providers.tsx` and never used, and was removed in the Aug 2026 cleanup — it is no longer in `package.json`. Data fetching is plain `fetch`/Supabase calls in `useEffect`. (`@tanstack/react-virtual` *is* installed and is used by the inventory list — different package.)
 
@@ -200,12 +264,32 @@ git checkout 744ad0d -- tests src/tests playwright.config.ts vitest.config.ts
 ## 9. Conventions and gotchas
 
 - **Every route is a client component.** There are no server components or server actions; data is fetched in `useEffect`. There are now `error.tsx` and `global-error.tsx` at the app root, but still no `loading.tsx` anywhere.
+- **`/pos` has two layouts.** Mobile is camera-first and lives in the page. Desktop
+  is the **Pro till** in `src/components/pos/pro/` (`ProPOSLayout` composes
+  `LaneTabs`, `SmartScanInput`, `ProCartRow` + `CartLineEditor`, `ProTotalsPanel`,
+  `QuickGrid`). The page keeps the data — catalogue load, barcode index, sync —
+  and hands the layout an `onProductAdd` / `resolveBarcode` pair. Which one
+  renders is still `isDesktop() && isEnabled("desktop_shortcuts")`.
+- **The desktop till no longer loads ZXing.** It used to render
+  `<BarcodeScanner desktopMode>` — a ~420KB dynamic chunk — just to get a text
+  input. `SmartScanInput` replaces it and keeps the wedge behaviours (Enter
+  submits, refocus after every scan, no dedup).
+- **There is no "Done" button.** The quick-sale path that completed a sale
+  without calculating change is gone from both layouts; `/checkout` is the only
+  way a sale ends, and it now plays `playCompleteSound()` with its QR summary.
 - **`src/app/(shell)/` is a route group** holding `/pos`, `/pos/products`, `/pos/cash` and `/transactions`. The parenthesised folder name is **not** part of the URL — those paths are unchanged. Its `layout.tsx` renders the persistent `BottomTabBar`. `/checkout` is deliberately outside the shell so no tab bar tempts a cashier away mid-payment.
 - **Code splitting:** `@zxing/library` (via `BarcodeScanner`) and `recharts` (via `TransactionAnalytics`) are heavy and must stay behind `next/dynamic`. Import the scan beep from `@/lib/feedback`, **never** from `@/components/BarcodeScanner` — the latter drags ZXing back into the POS bundle. Run `npm run analyze` before adding a dependency to a hot route.
 - **Dark mode is forced** in three redundant places. The `:root` light palette in `globals.css` is dead. Don't use light-mode utilities (`bg-red-50`, `bg-yellow-200`) — they render as near-white blocks.
 - **Prefer theme tokens** (`bg-primary`, `text-destructive`) over hardcoded `bg-amber-500`. The codebase does the latter ~40 times; that's debt, not a convention.
 - Money display always goes through `formatLL()` / `formatUSD()`.
-- Migrations are append-only and manually numbered. **`008` is already duplicated** — check the highest number before adding.
+- **`products.profit_percentage` is computed by a database trigger**, not by the
+  client: `((selling_price - cost_price) / cost_price) * 100`, or 0 when cost is
+  0 (migrations 005/009). Verified live — all 3,336 costed rows match the formula
+  exactly. Whatever a client sends is overwritten, so **never validate or reject
+  a write on it**; it is a markup, not a 0-100 percentage, and it is routinely
+  over 100 (up to 489% in one store) and sometimes negative. `discount_percentage`
+  IS a real 0-100 percentage.
+- Migrations are append-only and manually numbered; the highest is **`025`**. **`008` is already duplicated** — check the highest number before adding.
 - `.env.local` is correctly gitignored. Required vars are in `.env.example`.
 - Path alias: `@/*` → `./src/*`.
 - Careful: `src/lib/utils.ts` (file) and `src/lib/utils/` (directory) both exist. `@/lib/utils` resolves to the **file**; formatting helpers are at `@/lib/utils/format`.

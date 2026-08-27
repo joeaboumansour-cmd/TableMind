@@ -105,7 +105,14 @@ export interface QueuedTransaction {
 }
 
 export interface QueuedTransactionItem {
-  product_id: string;
+  /**
+   * NULL for a one-off line — something sold once that has no catalogue row
+   * behind it. transaction_items.product_id is a nullable FK, and the
+   * transactions API already skips the stock decrement when it is absent.
+   * The mapping from the cart's synthetic key to null happens in exactly one
+   * place: src/lib/pos/lineItems.ts.
+   */
+  product_id: string | null;
   product_name: string;
   quantity: number;
   unit_price: number;
@@ -117,13 +124,20 @@ export interface QueuedTransactionItem {
 
 export interface PendingWrite {
   id: string;
-  type: "transaction" | "stock_decrement" | "favorite_add" | "favorite_remove" | "cash_shift_open" | "cash_shift_close" | "cash_adjustment";
+  type: "transaction" | "stock_decrement" | "favorite_add" | "favorite_remove" | "cash_shift_open" | "cash_shift_close" | "cash_adjustment" | "product_upsert";
   payload: unknown;
   created_at: string;
   retry_count: number;
   last_error: string | null;
   /** See QueuedTransaction.next_attempt_at. */
   next_attempt_at?: string;
+  /**
+   * Set when the server rejected this write in a way retrying cannot fix (a
+   * 4xx). The row is KEPT, not deleted: it is the only record that the local
+   * data and the server disagree, and it is what stops
+   * reconcileProductsCache() from wiping the product it refers to.
+   */
+  failed_permanently?: boolean;
 }
 
 // ---- Database ----
@@ -363,8 +377,25 @@ export async function reconcileProductsCache(
     .equals(storeId)
     .toArray();
 
+  // A product created at the till during an outage exists locally and nowhere
+  // else, so the server's ID set cannot possibly contain it — reconcile would
+  // read that as "deleted" and wipe the thing the cashier just made, mid-shift.
+  // The guard lives HERE rather than at the call sites so every caller gets it.
+  //
+  // null means the queue could not be read, i.e. we cannot prove which local
+  // products are unpushed. Deleting anyway would be exactly the "delete on
+  // partial evidence" mistake the reconcile guards exist to prevent, so skip
+  // this pass entirely and let the next one do it.
+  const pendingIds = await getPendingProductUpsertIds();
+  if (pendingIds === null) {
+    console.warn(
+      "[LocalDB] Reconcile skipped: cannot confirm which local products are unpushed"
+    );
+    return 0;
+  }
+
   const staleIds = cached
-    .filter((p) => !liveSet.has(p.id))
+    .filter((p) => !liveSet.has(p.id) && !pendingIds.has(p.id))
     .map((p) => p.id);
 
   if (staleIds.length > 0) {
@@ -930,6 +961,104 @@ export async function queueCashAdjustment(payload: CashAdjustmentPayload): Promi
   };
   await db.pending_writes.add(pendingWrite);
   console.log(`[LocalDB] Queued cash adjustment for shift ${payload.shift_id}`);
+}
+
+// ---- Product writes (offline-capable) ----
+
+/**
+ * A product create/update waiting to reach the server.
+ *
+ * The row is written to `products_cache` FIRST and carries a client-generated
+ * id, so the product is sellable the instant the cashier names it — offline
+ * included — and the eventual server call is an idempotent upsert on that id
+ * rather than an insert that could run twice.
+ */
+export interface ProductUpsertPayload {
+  product: CachedProduct;
+  /** Informational: the server upserts either way. */
+  mode: "create" | "update";
+}
+
+/** Queue a product create/update for the sync engine. */
+export async function queueProductUpsert(payload: ProductUpsertPayload): Promise<void> {
+  const pendingWrite: PendingWrite = {
+    id: crypto.randomUUID(),
+    type: "product_upsert",
+    payload,
+    created_at: new Date().toISOString(),
+    retry_count: 0,
+    last_error: null,
+  };
+  await db.pending_writes.add(pendingWrite);
+  console.log(`[LocalDB] Queued product upsert for ${payload.product.id}`);
+}
+
+/**
+ * Catalogue writes the server refused outright.
+ *
+ * These are the products that exist on this device and nowhere else. Nothing
+ * will retry them, so somebody has to be told — see the notice on the POS.
+ */
+export async function getFailedProductWrites(): Promise<PendingWrite[]> {
+  try {
+    const writes = await db.pending_writes.where("type").equals("product_upsert").toArray();
+    return writes.filter((w) => w.failed_permanently === true);
+  } catch (e) {
+    console.warn("[LocalDB] Could not read failed product writes:", e);
+    return [];
+  }
+}
+
+/** Forget a failed catalogue write once a human has dealt with it. */
+export async function dismissFailedProductWrite(id: string): Promise<void> {
+  await db.pending_writes.delete(id);
+}
+
+/**
+ * Put a permanently-failed write back in the queue.
+ *
+ * "Permanent" means the server refused this payload, not that it will refuse
+ * it forever — a deploy that fixes the validation makes every stranded write
+ * viable again. Nothing detects that automatically, so this is the human's
+ * way of saying "try it now".
+ */
+export async function retryFailedProductWrites(): Promise<number> {
+  const failed = await getFailedProductWrites();
+  for (const w of failed) {
+    await db.pending_writes.where("id").equals(w.id).modify((row) => {
+      row.failed_permanently = false;
+      row.retry_count = 0;
+      row.last_error = null;
+    });
+  }
+  return failed.length;
+}
+
+/**
+ * Product ids that exist locally but have not been confirmed by the server.
+ *
+ * Returns NULL when the queue could not be read. That is not the same as "no
+ * products are pending", and the caller must not treat it as such — deletion
+ * requires positive proof, the same rule evaluateReconcile() applies to the
+ * server ID set. Skipping a reconcile is always safe; deleting on partial
+ * evidence is not.
+ */
+export async function getPendingProductUpsertIds(): Promise<Set<string> | null> {
+  try {
+    const ids = new Set<string>();
+    // Includes writes marked failed_permanently. Those products exist ONLY on
+    // this device, so they are precisely the ones a reconcile must not delete.
+    const writes = await db.pending_writes.where("type").equals("product_upsert").toArray();
+    for (const write of writes) {
+      const payload = write.payload as ProductUpsertPayload | undefined;
+      const id = payload && payload.product ? payload.product.id : undefined;
+      if (id) ids.add(id);
+    }
+    return ids;
+  } catch (e) {
+    console.warn("[LocalDB] Could not read pending product upserts:", e);
+    return null;
+  }
 }
 
 export { db as localDB };

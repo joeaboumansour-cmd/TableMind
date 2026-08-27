@@ -11,15 +11,15 @@
 //   mid   — the default, a few rows of cart visible
 //   tall  — reviewing a long basket
 //
-// Height (not transform) is animated because the totals and the Done /
-// Checkout buttons are pinned to the bottom of the sheet and must stay on
+// Height (not transform) is animated because the totals and the Checkout
+// button are pinned to the bottom of the sheet and must stay on
 // screen at every snap point. During a drag the height is written straight to
 // the DOM node — a React state update per pointermove would re-render the
 // whole cart list at 60fps.
 // =============================================
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Check, CreditCard, Minus, Plus, ScanLine } from "lucide-react";
+import { CreditCard, Minus, Plus, ScanLine } from "lucide-react";
 import type { CartItem } from "@/lib/types/cart";
 import { formatLL, formatLLParts, formatUSD } from "@/lib/utils/format";
 import { vibrate } from "@/lib/feedback";
@@ -53,7 +53,6 @@ interface CartSheetProps {
   onIncrement: (productId: string) => void;
   onDecrement: (productId: string) => void;
   onClear: () => void;
-  onDone: () => void;
   onCheckout: () => void;
 }
 
@@ -73,7 +72,6 @@ export default function CartSheet({
   onIncrement,
   onDecrement,
   onClear,
-  onDone,
   onCheckout,
 }: CartSheetProps) {
   const isEmpty = items.length === 0;
@@ -365,19 +363,15 @@ export default function CartSheet({
             </p>
           </div>
 
-          <div className="mt-3 grid grid-cols-2 gap-3">
-            <button
-              type="button"
-              onClick={onDone}
-              className="tap flex h-14 items-center justify-center gap-2 rounded-2xl bg-secondary text-base font-bold text-secondary-foreground"
-            >
-              <Check className="h-5 w-5 text-emerald-400" />
-              Done
-            </button>
+          {/* One way to finish a sale, not two. "Done" used to sit here and
+              complete the sale in place with no change calculated, which meant
+              a second payment path to keep correct for no benefit the cashier
+              could name. Checkout is the whole width now. */}
+          <div className="mt-3">
             <button
               type="button"
               onClick={onCheckout}
-              className="tap flex h-14 items-center justify-center gap-2 rounded-2xl bg-primary text-base font-bold text-primary-foreground"
+              className="tap flex h-14 w-full items-center justify-center gap-2 rounded-2xl bg-primary text-base font-bold text-primary-foreground"
             >
               <CreditCard className="h-5 w-5" />
               Checkout

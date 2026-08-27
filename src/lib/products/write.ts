@@ -1,0 +1,282 @@
+"use client";
+
+/**
+ * Product writes that survive no internet.
+ *
+ * The catalogue used to be written straight from the browser with the Supabase
+ * client, so creating or repricing a product simply failed during an outage.
+ * That is fine for a back-office screen and useless at a till, where the whole
+ * point of the unknown-barcode flow is that it works when the line is down.
+ *
+ * The order here is deliberate:
+ *
+ *   1. The id is generated ON THE CLIENT. That is what makes the eventual
+ *      server call an idempotent upsert rather than an insert that could run
+ *      twice, and it means the cart can reference a real product id
+ *      immediately.
+ *   2. `products_cache` is written FIRST and awaited. The product is sellable
+ *      from that moment — the next scan finds it, offline included.
+ *   3. The server call is attempted. On ANY failure (not just a known-offline
+ *      state — a request can fail after the check) the write is queued for the
+ *      sync engine, which retries it on reconnect, tab focus and its 30s tick.
+ *
+ * Note the reconcile guard this depends on: `reconcileProductsCache()` will not
+ * delete a cached product that still has a `product_upsert` queued, because
+ * the server's ID set cannot contain something it has never been told about.
+ */
+
+import type { CachedProduct } from "@/lib/db/localDB";
+import { buildAuthHeaders } from "@/lib/auth/requestHeaders";
+import { convertUsdToLl, convertLlToUsdForReturn } from "@/lib/utils/format";
+
+export interface ProductWriteInput {
+  store_id: string;
+  name: string;
+  barcode?: string | null;
+  /** Price in the product's own currency. LL unless `currency` says otherwise. */
+  selling_price: number;
+  currency?: "LL" | "USD";
+  cost_price?: number;
+  profit_percentage?: number;
+  discount_percentage?: number;
+  stock_quantity?: number;
+  min_stock_threshold?: number;
+}
+
+export interface ProductWriteResult {
+  product: CachedProduct;
+  /** False when the write is sitting in `pending_writes` awaiting sync. */
+  syncedNow: boolean;
+}
+
+function toCachedProduct(id: string, input: ProductWriteInput): CachedProduct {
+  return {
+    id,
+    store_id: input.store_id,
+    name: input.name,
+    barcode: input.barcode === undefined ? null : input.barcode,
+    cost_price: input.cost_price ?? 0,
+    selling_price: input.selling_price,
+    currency: input.currency || "LL",
+    profit_percentage: input.profit_percentage ?? 0,
+    discount_percentage: input.discount_percentage ?? 0,
+    stock_quantity: input.stock_quantity ?? 0,
+    min_stock_threshold: input.min_stock_threshold ?? 0,
+    parent_id: null,
+    variant_name: null,
+    updated_at: new Date().toISOString(),
+  };
+}
+
+/**
+ * Push a product row to the server, or queue it if that fails.
+ * Never throws — the local cache write has already happened by this point and
+ * a queued row is a complete outcome, not a failure.
+ */
+async function pushOrQueue(
+  product: CachedProduct,
+  mode: "create" | "update"
+): Promise<boolean> {
+  try {
+    const response = await fetch("/api/products", {
+      method: "POST",
+      headers: buildAuthHeaders(),
+      body: JSON.stringify(product),
+    });
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(`API error ${response.status}: ${body}`);
+    }
+    return true;
+  } catch (error) {
+    console.warn(`[Products] ${mode} not pushed; queued for sync:`, error);
+    try {
+      const { queueProductUpsert } = await import("@/lib/db/localDB");
+      await queueProductUpsert({ product, mode });
+    } catch (queueError) {
+      // Both paths failed. The product still exists locally and is sellable,
+      // but nothing will carry it to the server, so say so loudly rather than
+      // letting it look saved.
+      console.error("[Products] Could not queue the write either:", queueError);
+      throw queueError;
+    }
+    return false;
+  }
+}
+
+/**
+ * Create a product and make it immediately sellable.
+ *
+ * @throws only if the local cache write fails, or the write could neither be
+ *         pushed nor queued — i.e. cases where the product would silently not
+ *         exist anywhere.
+ */
+export async function createProduct(
+  input: ProductWriteInput
+): Promise<ProductWriteResult> {
+  const product = toCachedProduct(crypto.randomUUID(), input);
+
+  const { upsertSingleProduct } = await import("@/lib/db/localDB");
+  await upsertSingleProduct(product);
+
+  const syncedNow = await pushOrQueue(product, "create");
+  return { product, syncedNow };
+}
+
+/**
+ * Update an existing product. The caller supplies the full row it wants
+ * stored, because the server call is an upsert on the id — a partial patch
+ * would blank the fields it omitted.
+ */
+export async function updateProduct(
+  id: string,
+  input: ProductWriteInput
+): Promise<ProductWriteResult> {
+  const product = toCachedProduct(id, input);
+
+  const { upsertSingleProduct } = await import("@/lib/db/localDB");
+  await upsertSingleProduct(product);
+
+  const syncedNow = await pushOrQueue(product, "update");
+  return { product, syncedNow };
+}
+
+/**
+ * What repricing an existing product from the till will do, worked out BEFORE
+ * anything is written so the editor can show it.
+ *
+ * The cart and the catalogue do not speak the same language, and conflating
+ * them is how a shop loses its USD pricing without noticing:
+ *
+ *   - a cart LINE is always charged in LL (that is what the drawer takes)
+ *   - a catalogue PRODUCT has its own currency, and a USD-priced product is
+ *     meant to track the exchange rate rather than sit at a fixed LL number
+ *
+ * So the catalogue price is edited in the PRODUCT's currency, and this returns
+ * the consequences: the derived counter-currency, the recomputed profit, and
+ * what a customer will actually pay once any existing discount is applied.
+ */
+export interface RepricePreview {
+  currency: "LL" | "USD";
+  /** The new catalogue price, in `currency`. */
+  sellingPrice: number;
+  /** The same price expressed in the other currency, for display. */
+  counterpartLl: number;
+  counterpartUsd: number;
+  /** Recomputed from cost. Zero when there is no cost recorded. */
+  profitPercentage: number;
+  /** Carried over untouched — repricing is not a reason to drop a discount. */
+  discountPercentage: number;
+  /** What the customer pays per unit in LL, discount included. */
+  effectiveUnitLl: number;
+  /** True when the product's currency is being changed by this edit. */
+  currencyChanged: boolean;
+  previousCurrency: "LL" | "USD";
+  previousSellingPrice: number;
+}
+
+/**
+ * Profit relative to cost, matching the formula the Inventory form uses so the
+ * two cannot disagree. Without this the product keeps the profit % it had
+ * against its OLD price, and the next visit to the Inventory form recomputes
+ * the selling price from that stale figure and silently undoes the correction.
+ */
+/** DECIMAL(10,2) after migration 025. */
+const MAX_PROFIT_PCT = 99_999_999.99;
+
+function profitFromCost(cost: number, selling: number): number {
+  if (!cost || cost <= 0) return 0;
+  const pct = ((selling - cost) / cost) * 100;
+  if (!Number.isFinite(pct)) return 0;
+  // A cost of 0.01 against an LL price produces a number no column can hold.
+  // The database recomputes this field anyway; the clamp just keeps the value
+  // we send storable so it can never be the reason a save is refused.
+  return Math.max(-MAX_PROFIT_PCT, Math.min(MAX_PROFIT_PCT, pct));
+}
+
+/** Work out the consequences of a reprice without performing it. */
+export function previewReprice(opts: {
+  product: CachedProduct;
+  currency: "LL" | "USD";
+  sellingPrice: number;
+}): RepricePreview {
+  const { product, currency, sellingPrice } = opts;
+  const previousCurrency: "LL" | "USD" = product.currency === "USD" ? "USD" : "LL";
+
+  // Whichever side is derived goes through the named helpers. USD -> LL uses
+  // the SELL rate (the customer is paying); LL -> USD uses the RETURN rate, to
+  // match what the cart actually charges.
+  const counterpartLl =
+    currency === "USD" ? convertUsdToLl(sellingPrice) : sellingPrice;
+  const counterpartUsd =
+    currency === "USD" ? sellingPrice : convertLlToUsdForReturn(sellingPrice);
+
+  const discountPercentage = product.discount_percentage || 0;
+
+  return {
+    currency,
+    sellingPrice,
+    counterpartLl,
+    counterpartUsd,
+    profitPercentage: profitFromCost(product.cost_price, sellingPrice),
+    discountPercentage,
+    effectiveUnitLl: counterpartLl * (1 - discountPercentage / 100),
+    currencyChanged: currency !== previousCurrency,
+    previousCurrency,
+    previousSellingPrice: product.selling_price,
+  };
+}
+
+/**
+ * Reprice an existing product, keeping every other field as the cache has it.
+ *
+ * This is the cart-line "Inventory" edit. Reading the current row first is what
+ * makes "everything else stays put" true, given that the server call is an
+ * upsert on the id and a partial patch would blank what it omitted.
+ *
+ * Three things it deliberately does NOT do, each of which it used to:
+ *   - it does not force the product to LL. A USD-priced product edited in USD
+ *     stays USD and keeps tracking the rate.
+ *   - it does not zero the discount. A wrong shelf price is not a reason to
+ *     cancel a promotion.
+ *   - it does not leave `profit_percentage` pointing at the old price.
+ */
+export async function repriceProduct(opts: {
+  productId: string;
+  storeId: string;
+  name?: string;
+  /** The new catalogue price, expressed in `currency`. */
+  sellingPrice: number;
+  /** Defaults to whatever the product is already priced in. */
+  currency?: "LL" | "USD";
+}): Promise<ProductWriteResult & { preview: RepricePreview }> {
+  const { getCachedProductById } = await import("@/lib/db/localDB");
+  const existing = await getCachedProductById(opts.productId);
+  if (!existing) {
+    throw new Error("That product is no longer in the local catalogue");
+  }
+  if (existing.store_id !== opts.storeId) {
+    // Should be impossible — the cache is store-scoped — but a device that has
+    // served two stores has both sets of rows in it.
+    throw new Error("That product belongs to a different store");
+  }
+
+  const currency: "LL" | "USD" =
+    opts.currency || (existing.currency === "USD" ? "USD" : "LL");
+  const preview = previewReprice({ product: existing, currency, sellingPrice: opts.sellingPrice });
+
+  const result = await updateProduct(opts.productId, {
+    store_id: existing.store_id,
+    name: opts.name === undefined ? existing.name : opts.name,
+    barcode: existing.barcode,
+    selling_price: opts.sellingPrice,
+    currency,
+    cost_price: existing.cost_price,
+    profit_percentage: preview.profitPercentage,
+    discount_percentage: preview.discountPercentage,
+    stock_quantity: existing.stock_quantity,
+    min_stock_threshold: existing.min_stock_threshold,
+  });
+
+  return { ...result, preview };
+}

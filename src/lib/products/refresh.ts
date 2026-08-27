@@ -25,6 +25,7 @@ import {
   writeWithQuotaRescue,
 } from "@/lib/db/localDB";
 import type { CachedProduct } from "@/lib/db/localDB";
+import type { Product } from "@/lib/types/product";
 
 type SupabaseBrowserClient = ReturnType<typeof createBrowserClient>;
 
@@ -96,6 +97,32 @@ export function mapToCachedProduct(p: ProductRow): CachedProduct {
     parent_id: p.parent_id || null,
     variant_name: p.variant_name || null,
     updated_at: p.updated_at || new Date().toISOString(),
+  };
+}
+
+/**
+ * CachedProduct -> Product, the shape the POS and cart work in.
+ *
+ * The inverse of mapToCachedProduct. It was written out by hand in three
+ * places (twice inside the POS page's load effect alone), which is how the
+ * `currency` narrowing and the `discount_percentage || 0` default came to be
+ * repeated verbatim each time.
+ */
+export function cachedToProduct(p: CachedProduct): Product {
+  return {
+    id: p.id,
+    store_id: p.store_id,
+    name: p.name,
+    barcode: p.barcode,
+    cost_price: p.cost_price,
+    selling_price: p.selling_price,
+    currency: p.currency === "USD" ? "USD" : "LL",
+    profit_percentage: p.profit_percentage,
+    discount_percentage: p.discount_percentage || 0,
+    stock_quantity: p.stock_quantity,
+    min_stock_threshold: p.min_stock_threshold,
+    parent_id: p.parent_id || undefined,
+    variant_name: p.variant_name || undefined,
   };
 }
 

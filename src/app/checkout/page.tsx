@@ -36,6 +36,7 @@ import {
   Share2,
 } from "lucide-react";
 import { useCartStore } from "@/lib/stores/cartStore";
+import { buildTransactionItems, buildStockDecrements } from "@/lib/pos/lineItems";
 import { useReloadGuard } from "@/lib/pwa/useReloadGuard";
 import { toast } from "@/lib/toast";
 import {
@@ -46,7 +47,7 @@ import {
   RETURN_RATE,
   convertUsdToLlForReturn,
 } from "@/lib/utils/format";
-import { vibrate } from "@/lib/feedback";
+import { vibrate, playCompleteSound } from "@/lib/feedback";
 import { usePrimedReceipt } from "@/lib/pos/usePrimedReceipt";
 import {
   warmLocalDB,
@@ -354,16 +355,11 @@ function CheckoutContent() {
         }
       }
 
-      const lineItems = items.map((item) => ({
-        product_id: item.product_id,
-        product_name: item.product_name,
-        quantity: item.quantity,
-        unit_price: item.unit_price,
-        total_price: item.total_price,
-        currency: item.currency,
-        unit_price_usd: item.unit_price_usd,
-        total_price_usd: item.total_price_usd,
-      }));
+      // One-off lines (an unknown barcode priced at the till) carry a
+      // synthetic cart key, which is NOT a product_id. buildTransactionItems
+      // maps those to null — the single place that rule lives, so the server
+      // payload and the offline queue payload below cannot disagree about it.
+      const lineItems = buildTransactionItems(items);
 
       // Payload for POST /api/transactions (server field names).
       const transactionData: any = {
@@ -421,6 +417,11 @@ function CheckoutContent() {
       setPaidAmount(effectiveTotalPaid);
       setChangeGiven(calculatedChangeGiven);
       setChangeUsd(calcChangeUsd);
+      // The sale-finished chime. It used to belong to the POS "Done" button,
+      // which no longer exists — checkout is the only way a sale ends now, so
+      // the sound follows it here. Cashiers work by ear at a busy counter and
+      // ending a sale in silence reads as "did that go through?".
+      playCompleteSound();
       setTransactionComplete(true);
       toast.success("Payment processed successfully!");
       if (wasOffline) {
@@ -439,10 +440,8 @@ function CheckoutContent() {
       pushSaleInBackground({
         queuedId,
         payload: transactionData,
-        stockDecrements: items.map((item) => ({
-          product_id: item.product_id,
-          quantity: item.quantity,
-        })),
+        // One-off lines have no catalogue row, so no stock to move.
+        stockDecrements: buildStockDecrements(items),
       });
     } catch (error) {
       console.error("Error processing payment:", error);
