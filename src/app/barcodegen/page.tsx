@@ -813,7 +813,7 @@ ${labels
         )}
       </div>
 
-      {/* ---- Destructive confirms (5s cooldown) ---- */}
+      {/* ---- Destructive confirms (3s cooldown) ---- */}
       {confirmDialog}
     </div>
   );

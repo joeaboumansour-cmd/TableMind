@@ -10,7 +10,7 @@
 // all one careless tap from happening.
 //
 // So: a real dialog, and the confirm button stays DISABLED for a few seconds
-// with a visible timer. The delay is the point — it costs five seconds on an
+// with a visible timer. The delay is the point — it costs three seconds on an
 // action that should be rare, and it breaks the muscle memory that makes
 // accidental deletes possible in the first place.
 //
@@ -43,7 +43,7 @@ import {
 } from "@/components/ui/dialog";
 
 /** Cooldown applied to every destructive confirm unless a caller overrides it. */
-export const CONFIRM_COUNTDOWN_SECONDS = 5;
+export const CONFIRM_COUNTDOWN_SECONDS = 3;
 
 /** How often the countdown recomputes. Fine enough for a smooth progress bar. */
 const TICK_MS = 100;

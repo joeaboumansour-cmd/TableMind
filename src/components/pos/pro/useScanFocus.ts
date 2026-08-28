@@ -15,6 +15,13 @@
 
 import { useEffect } from "react";
 
+/**
+ * How often to check that focus has not been left nowhere. Frequent enough
+ * that a cashier never out-types it, cheap enough to be irrelevant: it reads
+ * one property and returns.
+ */
+const FOCUS_SWEEP_MS = 300;
+
 /** Somewhere the user could be deliberately typing. */
 function isTextEntry(el: Element | null): boolean {
   if (!el) return false;
@@ -84,12 +91,28 @@ export function useScanFocus(
     // Coming back from another window or another tab.
     window.addEventListener("focus", schedule);
 
+    // Safety net for the paths that fire NO event at all. React unmounting the
+    // element that currently has focus — a cart row removed, an editor closing,
+    // a lane tab disappearing — drops focus onto <body> without a reliable
+    // focusout, and the till would then silently swallow the next scan.
+    //
+    // Deliberately narrow: it only acts when focus is nowhere (body/html/null),
+    // so it can never pull the caret out of a field someone is typing in. That
+    // is why it is safe to run on a timer rather than trying to enumerate every
+    // way focus can be lost.
+    const sweep = window.setInterval(() => {
+      const active = document.activeElement;
+      if (active && active !== document.body && active !== document.documentElement) return;
+      restore();
+    }, FOCUS_SWEEP_MS);
+
     // And once now, so re-enabling after an editor closes lands focus back
     // here without every call site having to remember to do it.
     schedule();
 
     return () => {
       cancelAnimationFrame(frame);
+      window.clearInterval(sweep);
       document.removeEventListener("focusout", schedule);
       document.removeEventListener("pointerup", schedule);
       window.removeEventListener("focus", schedule);

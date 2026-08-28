@@ -1197,7 +1197,7 @@ export default function AdminPage() {
         </DialogContent>
       </Dialog>
 
-      {/* ---- Destructive confirms (5s cooldown) ---- */}
+      {/* ---- Destructive confirms (3s cooldown) ---- */}
       {confirmDialog}
     </div>
   );
