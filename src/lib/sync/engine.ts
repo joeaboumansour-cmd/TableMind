@@ -373,13 +373,6 @@ class SyncEngine {
           ...(txn.user_id && {
             user_id: txn.user_id,
           }),
-          // The drawer this sale was rung into. The API resolves it to a
-          // shift by matching created_at above against that register's shift
-          // windows, so a sale queued during one shift and synced during the
-          // next is still attributed to the one it actually happened in.
-          ...(txn.register_id && {
-            register_id: txn.register_id,
-          }),
           items: txn.items.map((item) => ({
             product_id: item.product_id,
             product_name: item.product_name,
@@ -531,7 +524,7 @@ class SyncEngine {
     const h = { "Content-Type": "application/json", "x-auth-data": JSON.stringify(headerPayload) };
     const p = write.payload as any;
     const body = JSON.stringify({
-      ...(write.type === "cash_shift_open" ? { action: "open", register_id: p.register_id, label: p.label, business_date: p.business_date, opening_ll: p.opening_ll, opening_usd: p.opening_usd, user_id: p.user_id, user_name: p.user_name } : {}),
+      ...(write.type === "cash_shift_open" ? { action: "open", register_id: p.register_id, assigned_user_id: p.assigned_user_id, label: p.label, business_date: p.business_date, opening_ll: p.opening_ll, opening_usd: p.opening_usd, user_id: p.user_id, user_name: p.user_name } : {}),
       ...(write.type === "cash_shift_close" ? { action: "close", shift_id: p.shift_id, closing_ll: p.closing_ll, closing_usd: p.closing_usd, notes: p.notes, user_id: p.user_id, user_name: p.user_name } : {}),
       ...(write.type === "cash_adjustment" ? { shift_id: p.shift_id, adjustment_type: p.adjustment_type, amount_ll: p.amount_ll, amount_usd: p.amount_usd, reason: p.reason, user_id: p.user_id, user_name: p.user_name } : {}),
     });

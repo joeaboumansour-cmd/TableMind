@@ -52,9 +52,41 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_cash_registers_unique_name
 ALTER TABLE cash_shifts ADD COLUMN IF NOT EXISTS register_id UUID
   REFERENCES cash_registers(id) ON DELETE RESTRICT;
 
--- Optional free-text note for one shift, e.g. "Morning — Ali". The durable
+-- Optional free-text note for one shift, e.g. "Morning rush". The durable
 -- name lives on the register; this is per-occurrence colour only.
 ALTER TABLE cash_shifts ADD COLUMN IF NOT EXISTS label TEXT;
+
+-- ---------------------------------------------------------------------------
+-- WHO IS ON THIS DRAWER
+-- ---------------------------------------------------------------------------
+-- The supervisor opens a shift on a register and names the cashier working it.
+-- Everything that cashier then sells is attributed to this shift, and through
+-- it to this register.
+--
+-- This is what makes a multi-register shop workable. The alternative — each
+-- till remembering which drawer it is — cannot be administered: the setting
+-- would live in each till's own browser storage, so a supervisor could not set
+-- it from their own machine, and a cashier with POS-only permission cannot
+-- reach the cash page to set it themselves.
+--
+-- Assignment is expressed with TWO columns, not one nullable id, because a
+-- single nullable column would have to mean both "the owner is on this drawer"
+-- and "nobody is on it yet" — and those must be told apart. The supervisor
+-- legitimately opens several drawers before naming anyone on them.
+--
+--   assigned_user_id set        -> that employee
+--   assigned_to_owner = true    -> the store owner (who has no store_users row,
+--                                  so their id cannot live in an FK column)
+--   neither                     -> not yet assigned; sales stay unassigned
+ALTER TABLE cash_shifts ADD COLUMN IF NOT EXISTS assigned_user_id UUID
+  REFERENCES store_users(id) ON DELETE SET NULL;
+
+ALTER TABLE cash_shifts ADD COLUMN IF NOT EXISTS assigned_to_owner BOOLEAN
+  NOT NULL DEFAULT false;
+
+-- Denormalised so a shift still reads correctly after an employee is deleted.
+-- The counted history of a drawer must not lose the name of who was on it.
+ALTER TABLE cash_shifts ADD COLUMN IF NOT EXISTS assigned_user_name TEXT;
 
 -- ---------------------------------------------------------------------------
 -- Backfill: give every store that already has shifts a "Main Register", and
@@ -155,6 +187,27 @@ $dropuniq$;
 -- at most one open shift, no matter how long ago it was opened.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_cash_shifts_one_open_per_register
   ON cash_shifts(register_id) WHERE status = 'open';
+
+-- A cashier may be on at most one drawer at a time. Without this a sale could
+-- match two open shifts and attribution would be a coin toss.
+--
+-- Two indexes rather than one, and both carry IS NOT NULL / = true in the
+-- predicate. A unique index treats NULLs as distinct, so a single index over a
+-- nullable column would silently permit exactly the duplicates it looks like it
+-- prevents, while still allowing the several genuinely-unassigned open shifts a
+-- supervisor creates before naming anyone.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_cash_shifts_one_open_per_user
+  ON cash_shifts(assigned_user_id)
+  WHERE status = 'open' AND assigned_user_id IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_cash_shifts_one_open_for_owner
+  ON cash_shifts(store_id)
+  WHERE status = 'open' AND assigned_to_owner;
+
+-- Resolving a sale means "which shift was this cashier on when they rang it",
+-- so that lookup rides on assigned_user_id + the time window.
+CREATE INDEX IF NOT EXISTS idx_cash_shifts_assigned_open
+  ON cash_shifts(store_id, assigned_user_id, opened_at DESC);
 
 
 -- ============================================================================

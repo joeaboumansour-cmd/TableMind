@@ -263,6 +263,9 @@ export interface Database {
           store_id: string;
           register_id: string;
           label: string | null;
+          assigned_user_id: string | null;
+          assigned_to_owner: boolean;
+          assigned_user_name: string | null;
           business_date: string;
           status: string;
           opened_by: string | null;
@@ -284,6 +287,9 @@ export interface Database {
           store_id: string;
           register_id: string;
           label?: string | null;
+          assigned_user_id?: string | null;
+          assigned_to_owner?: boolean;
+          assigned_user_name?: string | null;
           business_date: string;
           status?: string;
           opened_by?: string | null;
@@ -305,6 +311,9 @@ export interface Database {
           store_id?: string;
           register_id?: string;
           label?: string | null;
+          assigned_user_id?: string | null;
+          assigned_to_owner?: boolean;
+          assigned_user_name?: string | null;
           business_date?: string;
           status?: string;
           opened_by?: string | null;

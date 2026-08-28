@@ -197,41 +197,57 @@ export async function POST(request: Request) {
 
     // ── Which cash drawer did this sale go into? ────────────────────────────
     //
-    // The device sends the register it is standing at (device-local, see
-    // lib/cash/activeRegister.ts). The SHIFT is resolved here rather than on the
-    // client, by matching the sale's own timestamp against that register's
-    // shift windows.
+    // Resolved from WHO rang the sale, not from the device it was rung on.
     //
-    // Resolving by time rather than by "what is open right now" is what keeps
-    // offline sales honest: a sale rung during shift A and synced after shift B
-    // opened still lands on A. Resolving on the client could not do this — the
-    // client may have been offline for days and has no view of the shift table.
+    // The supervisor opens a shift on a register and assigns a cashier to it;
+    // everything that cashier sells while it is open belongs to that shift, and
+    // through it to that register. Nothing has to be configured on the till —
+    // which matters because a POS-only cashier cannot reach the cash page, and
+    // a per-device setting could not be administered from the supervisor's own
+    // machine anyway.
     //
-    // Everything here is best-effort. A sale is NEVER failed because the cash
-    // register is misconfigured; an unresolved sale simply carries a null
-    // shift_id and appears in the Unassigned bucket on the cash page.
-    const registerId = typeof body.register_id === "string" && body.register_id ? body.register_id : null;
+    // The match is on the sale's OWN timestamp, not on "what is open right
+    // now". That is what keeps offline sales honest: a sale rung during Ali's
+    // morning shift and synced after it closed still lands on the morning
+    // shift rather than on whoever is at that drawer by then.
+    //
+    // Best-effort throughout. A sale is NEVER failed or delayed because of
+    // cash-register state — an unresolved sale simply carries a null shift_id
+    // and appears in the Unassigned bucket on the cash page for the supervisor
+    // to notice.
     let resolvedShiftId: string | null = null;
+    let resolvedRegisterId: string | null = null;
 
-    if (registerId) {
-      try {
-        const at = saleTime || new Date().toISOString();
-        const { data: matchingShift } = await supabase
-          .from("cash_shifts")
-          .select("id")
-          .eq("store_id", store_id)          // tenancy: never resolve into another store's shift
-          .eq("register_id", registerId)
-          .lte("opened_at", at)
-          .or(`closed_at.is.null,closed_at.gte.${at}`)
-          .order("opened_at", { ascending: false })
-          .limit(1)
-          .maybeSingle();
+    try {
+      const at = saleTime || new Date().toISOString();
+      const operatorId = typeof body.user_id === "string" && body.user_id ? body.user_id : null;
 
-        resolvedShiftId = matchingShift?.id || null;
-      } catch (shiftErr: any) {
-        // Log and carry on — see the note above about never failing a sale.
-        console.error("[API] Shift resolution failed, recording sale unassigned:", shiftErr?.message || shiftErr);
+      let shiftQuery = supabase
+        .from("cash_shifts")
+        .select("id, register_id")
+        .eq("store_id", store_id)          // tenancy: never resolve into another store's shift
+        .lte("opened_at", at)
+        .or(`closed_at.is.null,closed_at.gte.${at}`)
+        .order("opened_at", { ascending: false })
+        .limit(1);
+
+      // An employee matches their own assignment; the store owner has no
+      // store_users row, so they are represented by the assigned_to_owner flag.
+      shiftQuery = operatorId
+        ? shiftQuery.eq("assigned_user_id", operatorId)
+        : shiftQuery.eq("assigned_to_owner", true);
+
+      const { data: matchingShift } = await shiftQuery.maybeSingle();
+
+      if (matchingShift) {
+        resolvedShiftId = matchingShift.id;
+        resolvedRegisterId = matchingShift.register_id;
       }
+    } catch (shiftErr) {
+      console.error(
+        "[API] Shift resolution failed, recording sale unassigned:",
+        shiftErr instanceof Error ? shiftErr.message : shiftErr
+      );
     }
 
     // Check if a transaction with this transaction_number already exists for this store
@@ -308,11 +324,11 @@ export async function POST(request: Request) {
         ...(body.user_id && {
           user_id: body.user_id,
         }),
-        // Cash drawer attribution. Both nullable: register_id records what the
-        // device claimed even when no shift matched, which is what makes a
-        // misconfigured till diagnosable instead of invisible.
-        ...(registerId && { register_id: registerId }),
+        // Cash drawer attribution. Both nullable and both derived from the
+        // resolved shift — a sale with no shift has no register either, and
+        // lands in the Unassigned bucket.
         ...(resolvedShiftId && { shift_id: resolvedShiftId }),
+        ...(resolvedRegisterId && { register_id: resolvedRegisterId }),
       })
       .select()
       .single();

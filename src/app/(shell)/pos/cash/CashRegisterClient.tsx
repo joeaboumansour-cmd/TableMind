@@ -46,11 +46,6 @@ import { connectivity } from "@/lib/connectivity";
 import { useReloadGuard } from "@/lib/pwa/useReloadGuard";
 import { logActivity } from "@/lib/activity/logger";
 import { buildAuthHeaders } from "@/lib/auth/apiHeaders";
-import {
-  getActiveRegister,
-  setActiveRegister,
-  reconcileActiveRegister,
-} from "@/lib/cash/activeRegister";
 import { isOverdue } from "@/lib/cash/types";
 import type {
   CashRegister,
@@ -58,6 +53,7 @@ import type {
   CashAdjustment,
   RegisterState,
   RegisterRequest,
+  StoreEmployee,
 } from "@/lib/cash/types";
 import { RegisterCard } from "@/components/cash/RegisterCard";
 import {
@@ -98,6 +94,7 @@ interface ShiftTotalsRow {
 const EMPTY_OPEN: OpenShiftValues = {
   registerId: "",
   newRegisterName: "",
+  assignedUserId: "",
   label: "",
   openingLl: "",
   openingUsd: "",
@@ -127,7 +124,7 @@ export function CashRegisterPage() {
   const [unassigned, setUnassigned] = useState<{ count: number; total: number } | null>(null);
 
   const [requests, setRequests] = useState<RegisterRequest[]>([]);
-  const [activeRegisterId, setActiveRegisterId] = useState<string | null>(null);
+  const [employees, setEmployees] = useState<StoreEmployee[]>([]);
 
   const [performance, setPerformance] = useState<{
     registers: RegisterPerformanceRow[];
@@ -210,6 +207,21 @@ export function CashRegisterPage() {
   const openStates = registerStates.filter((s) => s.shift?.status === "open");
   const totalExpected = openStates.reduce((sum, s) => sum + (s.summary?.expectedTotal || 0), 0);
 
+  /** One person, one drawer: who is already on an open shift somewhere. */
+  const busyUserIds = useMemo(
+    () =>
+      new Set(
+        openStates
+          .map((s) => s.shift?.assigned_user_id)
+          .filter((id): id is string => !!id)
+      ),
+    [openStates]
+  );
+  const ownerBusy = useMemo(
+    () => openStates.some((s) => s.shift?.assigned_to_owner === true),
+    [openStates]
+  );
+
   /** Registers that cannot take a new shift because one is already open. */
   const blockedRegisterIds = useMemo(
     () => new Set(openStates.map((s) => s.register.id)),
@@ -242,16 +254,12 @@ export function CashRegisterPage() {
         const data = await res.json();
 
         setRegisters(data.registers || []);
+        setEmployees(data.employees || []);
         setShifts(data.shifts || []);
         setTotals(data.totals || {});
         setAdjustments(data.adjustments || {});
         setPendingByRegister(data.pendingByRegister || {});
         setUnassigned(data.unassigned || null);
-
-        // Keep this device's selection honest, and auto-select when the store
-        // has exactly one register so single-drawer shops never see a picker.
-        const selected = reconcileActiveRegister(data.registers || []);
-        setActiveRegisterId(selected?.id ?? null);
       } catch (error) {
         console.error("Cash register load error:", error);
         if (!opts?.silent) toast.error(errorMessage(error, "Failed to load cash registers"));
@@ -302,7 +310,6 @@ export function CashRegisterPage() {
 
   useEffect(() => {
     if (user?.storeId) {
-      setActiveRegisterId(getActiveRegister()?.id ?? null);
       loadData();
       loadPerformance();
       loadRequests();
@@ -421,12 +428,21 @@ export function CashRegisterPage() {
         target: registerId,
         details: { opening_ll: ll, opening_usd: usd, online: connectivity.isOnline },
       });
+      // Who was put on the drawer is the fact an audit actually needs — it is
+      // what links every subsequent sale to this register.
+      if (openValues.assignedUserId) {
+        logActivity("cash.shift_assign", {
+          target: registerId,
+          details: { assigned_user_id: openValues.assignedUserId },
+        });
+      }
 
       if (!connectivity.isOnline) {
         const { queueCashShiftOpen } = await import("@/lib/db/localDB");
         await queueCashShiftOpen({
           store_id: user!.storeId,
           register_id: registerId!,
+          assigned_user_id: openValues.assignedUserId || undefined,
           label: openValues.label.trim() || undefined,
           business_date: new Date().toISOString().slice(0, 10),
           opening_ll: ll,
@@ -442,6 +458,7 @@ export function CashRegisterPage() {
           body: JSON.stringify({
             action: "open",
             register_id: registerId,
+            assigned_user_id: openValues.assignedUserId || undefined,
             label: openValues.label.trim() || undefined,
             opening_ll: ll,
             opening_usd: usd,
@@ -636,13 +653,6 @@ export function CashRegisterPage() {
     }
   };
 
-  const handleUseOnThisDevice = (register: CashRegister) => {
-    setActiveRegister({ id: register.id, name: register.name });
-    setActiveRegisterId(register.id);
-    logActivity("cash.register_select", { target: register.name });
-    toast.success(`This device now rings into ${register.name}`);
-  };
-
   // ── Render ─────────────────────────────────────────────────────────────────
 
   if (authLoading || isLoading) {
@@ -696,7 +706,7 @@ export function CashRegisterPage() {
                 <Button
                   size="sm"
                   onClick={() => {
-                    setOpenValues({ ...EMPTY_OPEN, registerId: activeRegisterId || "" });
+                    setOpenValues(EMPTY_OPEN);
                     setOpenDialog(true);
                   }}
                 >
@@ -800,7 +810,6 @@ export function CashRegisterPage() {
               <RegisterCard
                 key={state.register.id}
                 state={state}
-                isThisDevice={state.register.id === activeRegisterId}
                 canEdit={canEdit}
                 isOwner={!!user?.isOwner}
                 onOpenShift={() => {
@@ -815,7 +824,6 @@ export function CashRegisterPage() {
                   setAdjValues(EMPTY_ADJ);
                   setAdjShiftId(state.shift?.id ?? null);
                 }}
-                onUseOnThisDevice={() => handleUseOnThisDevice(state.register)}
                 onViewRequests={() => {
                   const first = requests.find((r) => r.register_id === state.register.id);
                   if (first) setDecidingRequest(first);
@@ -855,6 +863,9 @@ export function CashRegisterPage() {
         }}
         registers={registers}
         blockedRegisterIds={blockedRegisterIds}
+        employees={employees}
+        busyUserIds={busyUserIds}
+        ownerBusy={ownerBusy}
         values={openValues}
         onChange={setOpenValues}
         onSubmit={handleOpenShift}

@@ -24,7 +24,7 @@ import {
   Check,
   Clock,
   Lock,
-  Monitor,
+  User,
   TrendingDown,
   TrendingUp,
   AlertTriangle,
@@ -36,25 +36,21 @@ import type { RegisterState } from "@/lib/cash/types";
 
 interface RegisterCardProps {
   state: RegisterState;
-  isThisDevice: boolean;
   canEdit: boolean;
   isOwner: boolean;
   onOpenShift: () => void;
   onCloseShift: () => void;
   onAddAdjustment: () => void;
-  onUseOnThisDevice: () => void;
   onViewRequests: () => void;
 }
 
 export function RegisterCard({
   state,
-  isThisDevice,
   canEdit,
   isOwner,
   onOpenShift,
   onCloseShift,
   onAddAdjustment,
-  onUseOnThisDevice,
   onViewRequests,
 }: RegisterCardProps) {
   const { register, shift, summary, adjustments, pendingRequestCount } = state;
@@ -82,10 +78,10 @@ export function RegisterCard({
                 <Badge variant="secondary">Closed</Badge>
               )}
 
-              {isThisDevice && (
+              {isOpen && shift?.assigned_user_name && (
                 <Badge variant="outline" className="gap-1">
-                  <Monitor className="h-3 w-3" />
-                  This device
+                  <User className="h-3 w-3" />
+                  {shift.assigned_user_name}
                 </Badge>
               )}
             </div>
@@ -123,6 +119,19 @@ export function RegisterCard({
                 close the shift before opening a new one here.
               </p>
             </div>
+          </div>
+        )}
+
+        {/* An open drawer with nobody on it collects no sales — nothing links a
+            cashier to it, so their takings land in the Unassigned bucket. Said
+            here rather than left to be discovered at counting time. */}
+        {isOpen && !shift?.assigned_user_name && (
+          <div className="flex gap-2 rounded-lg bg-muted/60 p-3">
+            <User className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+            <p className="text-xs text-muted-foreground">
+              Nobody is assigned to this register. Sales will not be attributed to it until you
+              close this shift and reopen it with a cashier named.
+            </p>
           </div>
         )}
 
@@ -301,13 +310,6 @@ export function RegisterCard({
               <Lock className="h-3.5 w-3.5" />
               You do not have permission to open or close shifts.
             </p>
-          )}
-
-          {!isThisDevice && (
-            <Button size="sm" variant="ghost" onClick={onUseOnThisDevice}>
-              <Monitor className="mr-1.5 h-4 w-4" />
-              Use on this device
-            </Button>
           )}
         </div>
       </CardContent>

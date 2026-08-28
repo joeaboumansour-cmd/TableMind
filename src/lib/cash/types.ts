@@ -52,6 +52,18 @@ export interface CashShift {
   opened_by: string | null;
   opened_by_name: string;
   opened_at: string;
+  /**
+   * Who is working this drawer. Assignment is what links a cashier's sales to
+   * a register: everything they sell while this shift is open lands here.
+   *
+   * Three states, which is why it takes two fields — see migration 027:
+   *   assigned_user_id set     -> that employee
+   *   assigned_to_owner true   -> the store owner
+   *   neither                  -> nobody yet; their sales stay unassigned
+   */
+  assigned_user_id: string | null;
+  assigned_to_owner: boolean;
+  assigned_user_name: string | null;
   opening_ll: number;
   opening_usd: number;
   closed_by: string | null;
@@ -61,6 +73,14 @@ export interface CashShift {
   closing_usd: number | null;
   verified: boolean;
   notes: string | null;
+}
+
+/** A person a shift can be assigned to. */
+export interface StoreEmployee {
+  id: string;
+  username: string;
+  display_name: string | null;
+  permissions: Record<string, boolean> | string | null;
 }
 
 export interface CashAdjustment {

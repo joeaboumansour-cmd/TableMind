@@ -25,7 +25,7 @@ import {
 import { Loader2, TrendingDown, TrendingUp, Plus } from "lucide-react";
 import { formatLL } from "@/lib/utils/format";
 import { combineCurrencyTotals } from "@/lib/cashShift";
-import type { CashRegister, ShiftSummary } from "@/lib/cash/types";
+import type { CashRegister, ShiftSummary, StoreEmployee } from "@/lib/cash/types";
 
 const num = (v: string) => parseFloat(v) || 0;
 
@@ -34,6 +34,8 @@ const num = (v: string) => parseFloat(v) || 0;
 export interface OpenShiftValues {
   registerId: string;
   newRegisterName: string;
+  /** "" = leave unassigned, "owner" = the store owner, else a store_users id. */
+  assignedUserId: string;
   label: string;
   openingLl: string;
   openingUsd: string;
@@ -44,6 +46,9 @@ export function OpenShiftDialog({
   onOpenChange,
   registers,
   blockedRegisterIds,
+  employees,
+  busyUserIds,
+  ownerBusy,
   values,
   onChange,
   onSubmit,
@@ -55,6 +60,10 @@ export function OpenShiftDialog({
   registers: CashRegister[];
   /** Registers with an uncounted shift — cannot take a new one. */
   blockedRegisterIds: Set<string>;
+  employees: StoreEmployee[];
+  /** Cashiers already on another drawer — one person, one drawer. */
+  busyUserIds: Set<string>;
+  ownerBusy: boolean;
   values: OpenShiftValues;
   onChange: (v: OpenShiftValues) => void;
   onSubmit: () => void;
@@ -177,13 +186,80 @@ export function OpenShiftDialog({
             </div>
           </div>
 
+          {/* ── Who is on this drawer ───────────────────────────────────── */}
+          <div className="space-y-2">
+            <Label>Cashier on this register</Label>
+            <div className="grid gap-1.5">
+              <button
+                type="button"
+                data-log="assign-owner"
+                onClick={() => set({ assignedUserId: "owner" })}
+                disabled={ownerBusy && values.assignedUserId !== "owner"}
+                className={`rounded-lg border px-3 py-2 text-left text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+                  values.assignedUserId === "owner"
+                    ? "border-primary bg-primary/10 font-medium"
+                    : "border-border hover:bg-muted/50"
+                }`}
+              >
+                Me (store owner)
+                {ownerBusy && values.assignedUserId !== "owner" && (
+                  <span className="ml-1 text-xs text-muted-foreground">
+                    — already on another register
+                  </span>
+                )}
+              </button>
+
+              {employees.map((e) => {
+                const busy = busyUserIds.has(e.id);
+                return (
+                  <button
+                    key={e.id}
+                    type="button"
+                    data-log="assign-employee"
+                    onClick={() => set({ assignedUserId: e.id })}
+                    disabled={busy && values.assignedUserId !== e.id}
+                    className={`rounded-lg border px-3 py-2 text-left text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+                      values.assignedUserId === e.id
+                        ? "border-primary bg-primary/10 font-medium"
+                        : "border-border hover:bg-muted/50"
+                    }`}
+                  >
+                    {e.display_name || e.username}
+                    {busy && values.assignedUserId !== e.id && (
+                      <span className="ml-1 text-xs text-muted-foreground">
+                        — already on another register
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+
+              <button
+                type="button"
+                onClick={() => set({ assignedUserId: "" })}
+                className={`rounded-lg border px-3 py-2 text-left text-sm transition-colors ${
+                  values.assignedUserId === ""
+                    ? "border-primary bg-primary/10 font-medium"
+                    : "border-border hover:bg-muted/50"
+                }`}
+              >
+                Leave unassigned for now
+              </button>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Everything the assigned cashier sells goes into this drawer — they do not have to
+              set anything up on their till. Until someone is assigned, sales made here are
+              recorded but not attributed to this register.
+            </p>
+          </div>
+
           <div className="space-y-2">
             <Label htmlFor="shift-label">Shift note (optional)</Label>
             <Input
               id="shift-label"
               value={values.label}
               onChange={(e) => set({ label: e.target.value })}
-              placeholder="e.g. Morning — Ali"
+              placeholder="e.g. Morning rush"
               maxLength={60}
             />
           </div>

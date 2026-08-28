@@ -290,7 +290,7 @@ git checkout 744ad0d -- tests src/tests playwright.config.ts vitest.config.ts
   a write on it**; it is a markup, not a 0-100 percentage, and it is routinely
   over 100 (up to 489% in one store) and sometimes negative. `discount_percentage`
   IS a real 0-100 percentage.
-- Migrations are append-only and manually numbered; the highest is **`026`**. **`008` is already duplicated** — check the highest number before adding.
+- Migrations are append-only and manually numbered; the highest is **`027`**. **`008` is already duplicated** — check the highest number before adding.
 - `.env.local` is correctly gitignored. Required vars are in `.env.example`.
 - Path alias: `@/*` → `./src/*`.
 - Careful: `src/lib/utils.ts` (file) and `src/lib/utils/` (directory) both exist. `@/lib/utils` resolves to the **file**; formatting helpers are at `@/lib/utils/format`.
@@ -318,6 +318,106 @@ git checkout 744ad0d -- tests src/tests playwright.config.ts vitest.config.ts
 - **Never** weaken a store-scoping filter, an auth check, or a rounding rule to make something work.
 - When touching money, offline sync, or auth, say what you verified — not just what you changed.
 - The audit doc is the shared backlog. When you fix something in it, mark it resolved there in the same change.
+
+---
+
+## 11a. Cash registers and shifts
+
+Migration **`027`** replaced "one drawer per store per day" with named registers.
+
+### The model
+
+```
+cash_registers (durable, named)  1 ──< N  cash_shifts (opened_at → closed_at)
+```
+
+- A **register** is a physical drawer. It is named once ("Front Counter") and
+  keeps that name across days. Retiring one is a soft delete — `cash_shifts`
+  FKs to it `ON DELETE RESTRICT` so a counted history cannot be erased by
+  tidying the register list.
+- A **shift** is one accountable period on one register. Its life is
+  `opened_at → closed_at`. **`business_date` is a label, not the identity or the
+  boundary** — the old `UNIQUE (store_id, business_date)` is what made a shift
+  and a calendar day the same object, and it is gone.
+- **One open shift per register**, enforced by a partial unique index rather
+  than by the API. The old guard checked `business_date - 1`, so a shift left
+  open across a two-day closure was invisible to it.
+
+### Sales are attributed by WHO, not by which device
+
+The supervisor opens a shift on a register and **assigns a cashier**. Everything
+that cashier sells while it is open is stamped with that `shift_id` (and its
+`register_id`) by `POST /api/transactions`.
+
+Resolution happens **server-side, by matching the sale's own `created_at`** to
+the assigned shift's window — never "what is open right now". That is what keeps
+offline sales correct: a sale rung in Ali's morning shift and synced after it
+closed still lands on the morning shift.
+
+> **Do not move this onto a per-device setting.** It was built that way first
+> and is unworkable: the setting lives in each till's `localStorage`, so a
+> supervisor cannot administer it from their own machine, and a POS-only cashier
+> cannot reach `/pos/cash` to set it themselves.
+
+Assignment takes **two columns**, because one nullable id would have to mean
+both "the owner is on this drawer" and "nobody is yet":
+
+| State | Columns |
+|---|---|
+| An employee | `assigned_user_id` set |
+| The store owner | `assigned_to_owner = true` (they have no `store_users` row) |
+| Nobody yet | neither |
+
+A cashier may be on **at most one drawer at a time** — two partial unique
+indexes, both carrying `IS NOT NULL` / `= true` in the predicate, because a
+unique index treats NULLs as distinct and a single index over the nullable
+column would permit exactly the duplicates it looks like it prevents.
+
+### Nothing ever auto-closes
+
+An unclosed shift **stays open** and is flagged overdue (`isOverdue()` in
+`src/lib/cash/types.ts` — open and opened before today began). It blocks
+reopening *that* register only. A closing figure is a physical count; a machine
+inventing one destroys the variance it exists to catch. An approval **request**
+may expire on its own — that withholds a permission, which is the safe
+direction.
+
+### Drawer maths
+
+**`summariseShift()` in `src/lib/cashShift.ts` is the only place.** Cash into
+the drawer is `SUM(amount_paid) − SUM(change_given)` and nothing else:
+
+- `amount_paid` is **gross tender**, not net takings. The old page summed it
+  alone, annotated "change is already netted into amount_paid" — it is not, and
+  a 100,000 sale paid with a 200,000 note was counted as 200,000.
+- **Never add `usd_amount_paid`** into the LL total. Those dollars are already
+  inside `amount_paid` at `RETURN_RATE`. That was audit P1-2.
+
+Aggregation is done by **RPC, never by summing a `select` in JS** —
+`get_shift_totals` and `get_register_performance`. PostgREST silently caps an
+unbounded select at 1000 rows, which would under-report exactly the busiest
+shift. Both return raw LL/USD components so the exchange rate keeps its single
+definition in `format.ts`.
+
+### A sale is never blocked by cash-register state
+
+No register, no shift, no assignment, a failed lookup — the sale completes and
+is recorded with a null `shift_id`, surfacing in the **Unassigned** bucket on
+the cash page. This is a live till; a refused sale costs a real customer.
+
+### Pieces
+
+| Path | Role |
+|---|---|
+| `src/lib/cash/types.ts` | Domain types, `isOverdue()`, request vocabulary |
+| `src/lib/cashShift.ts` | `summariseShift()` and the drawer helpers |
+| `src/lib/auth/apiCaller.ts` | `resolveCaller()` — fixes the P0-3 half of the auth hole |
+| `src/lib/auth/apiHeaders.ts` | `buildAuthHeaders()` — the owner now sends an explicit `user_id` |
+| `GET\|POST /api/cash-shifts` | Every register with its current shift; open/close |
+| `/api/cash-registers` + `/analytics` | Register CRUD; per-register performance |
+| `/api/my-shift` | A cashier's own assignment. No amounts, no other people. |
+| `/api/register-requests` | Approval flow (schema + panel live; till-side raise is the next feature) |
+| `src/components/cash/**` | Cards, dialogs, requests panel, performance chart |
 
 ---
 

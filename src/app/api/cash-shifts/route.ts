@@ -196,8 +196,21 @@ export async function GET(request: Request) {
       truncated: (unassignedRows || []).length >= 1000,
     };
 
+    // The people a shift can be assigned to. Sent with the page rather than
+    // from a second endpoint because the Open Shift dialog always needs it and
+    // a store's employee list is a handful of rows.
+    //
+    // password_hash is NOT selected. It must never leave the database.
+    const { data: employees } = await supabase
+      .from("store_users")
+      .select("id, username, display_name, permissions")
+      .eq("store_id", storeId)
+      .eq("is_active", true)
+      .order("display_name", { ascending: true });
+
     return NextResponse.json({
       registers: registerList,
+      employees: employees || [],
       shifts,
       totals,
       adjustments,
@@ -286,6 +299,70 @@ export async function POST(request: Request) {
           ? body.label.trim().slice(0, 60)
           : null;
 
+      // ── Who is working this drawer ────────────────────────────────────────
+      // "owner" | <store_users.id> | omitted (leave unassigned for now).
+      //
+      // Until someone is assigned, that register's sales cannot be attributed —
+      // nobody is linked to it — so they land in the Unassigned bucket. That is
+      // a deliberate, visible state rather than a blocked one: a supervisor
+      // mid-setup must not stop the shop selling.
+      const assignee = body.assigned_user_id;
+      let assignedUserId: string | null = null;
+      let assignedToOwner = false;
+      let assignedUserName: string | null = null;
+
+      if (assignee === "owner") {
+        assignedToOwner = true;
+        assignedUserName = caller.isOwner ? caller.name : "Store Owner";
+      } else if (typeof assignee === "string" && assignee) {
+        // Scoped by store_id: a supervisor cannot put another tenant's employee
+        // on their drawer.
+        const { data: emp } = await supabase
+          .from("store_users")
+          .select("id, username, display_name, is_active")
+          .eq("id", assignee)
+          .eq("store_id", storeId)
+          .maybeSingle();
+
+        if (!emp || !emp.is_active) {
+          return NextResponse.json(
+            { error: "That user is not an active member of this store" },
+            { status: 400 }
+          );
+        }
+        assignedUserId = emp.id;
+        assignedUserName = emp.display_name || emp.username;
+      }
+
+      // A cashier can only be on one drawer at a time. Checked here so the
+      // supervisor gets a sentence naming the clash, rather than a raw 23505
+      // from the unique index behind it.
+      if (assignedUserId || assignedToOwner) {
+        let clashQuery = supabase
+          .from("cash_shifts")
+          .select("id, register_id")
+          .eq("store_id", storeId)
+          .eq("status", "open");
+        clashQuery = assignedUserId
+          ? clashQuery.eq("assigned_user_id", assignedUserId)
+          : clashQuery.eq("assigned_to_owner", true);
+
+        const { data: clash } = await clashQuery.maybeSingle();
+        if (clash) {
+          const { data: clashRegister } = await supabase
+            .from("cash_registers")
+            .select("name")
+            .eq("id", clash.register_id)
+            .maybeSingle();
+          return NextResponse.json(
+            {
+              error: `${assignedUserName} is already on ${clashRegister?.name || "another register"}. Close that shift first.`,
+            },
+            { status: 409 }
+          );
+        }
+      }
+
       const { data: shift, error } = await supabase
         .from("cash_shifts")
         .insert({
@@ -299,6 +376,9 @@ export async function POST(request: Request) {
           opened_by_name: caller.name,
           opening_ll: openingLl,
           opening_usd: openingUsd,
+          assigned_user_id: assignedUserId,
+          assigned_to_owner: assignedToOwner,
+          assigned_user_name: assignedUserName,
           status: "open",
           verified: caller.isOwner,
         })
