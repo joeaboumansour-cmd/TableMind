@@ -28,7 +28,11 @@ import {
 } from "lucide-react";
 import { toast } from "@/lib/toast";
 import { formatDateTime } from "@/lib/utils/format";
-import { ACTIVITY_CATEGORIES, type ActivityCategory } from "@/lib/activity/types";
+import {
+  ACTIVITY_CATEGORIES,
+  ACTIVITY_RETENTION_DAYS,
+  type ActivityCategory,
+} from "@/lib/activity/types";
 
 /**
  * The activity trail.
@@ -69,16 +73,21 @@ interface EmployeeOption {
 /**
  * Quick ranges.
  *
- * Deliberately finer than the DATE_FILTERS on the transactions page: only seven
- * days are retained here, so "90 days" would be meaningless and "last hour"
- * earns its place.
+ * Deliberately finer than the DATE_FILTERS on the transactions page. Only
+ * ACTIVITY_RETENTION_DAYS of data exists, so a range wider than that would
+ * return the same rows as the widest real one while implying there is more —
+ * "All 48h" is the honest ceiling. Derived from the constant rather than
+ * hardcoded, so changing retention cannot leave a dead option here.
  */
 const QUICK_RANGES = [
   { key: "1h", label: "Last hour", ms: 60 * 60 * 1000 },
   { key: "6h", label: "Last 6h", ms: 6 * 60 * 60 * 1000 },
   { key: "24h", label: "Last 24h", ms: 24 * 60 * 60 * 1000 },
-  { key: "3d", label: "Last 3 days", ms: 3 * 24 * 60 * 60 * 1000 },
-  { key: "7d", label: "All 7 days", ms: 7 * 24 * 60 * 60 * 1000 },
+  {
+    key: "all",
+    label: `All ${ACTIVITY_RETENTION_DAYS * 24}h`,
+    ms: ACTIVITY_RETENTION_DAYS * 24 * 60 * 60 * 1000,
+  },
 ] as const;
 
 const CATEGORY_TONE: Record<string, string> = {
@@ -327,7 +336,9 @@ export default function AdminActivityPage() {
             </div>
             <div className="min-w-0">
               <h1 className="font-bold text-lg truncate">Activity</h1>
-              <p className="text-xs text-muted-foreground">Last 7 days across all stores</p>
+              <p className="text-xs text-muted-foreground">
+                Last {ACTIVITY_RETENTION_DAYS * 24} hours across all stores
+              </p>
             </div>
           </div>
 

@@ -74,7 +74,12 @@ export const ACTIVITY_ACTIONS = [
   // --- Navigation
   "nav.route",
 
-  // --- UI interaction trail
+  // --- UI
+  // ui.click and ui.field_commit come from the passive trail in domTracker.ts,
+  // which is currently switched OFF (see UI_TRAIL there) — they were ~60-70% of
+  // all rows. They stay in the vocabulary so flipping that switch back on needs
+  // no server or admin-UI change. Everything below them is emitted explicitly
+  // and is still live.
   "ui.click",
   "ui.field_commit",
   "ui.shortcut",
@@ -147,8 +152,19 @@ export interface ActivityEvent {
   occurred_at: string;
 }
 
-/** Retention window. Must match maintain_activity_log_partitions()'s default. */
-export const ACTIVITY_RETENTION_DAYS = 7;
+/**
+ * Retention window, in whole UTC days including today.
+ *
+ * This constant is the ONE place retention is decided: POST /api/activity
+ * passes it to maintain_activity_log_partitions() explicitly on every call, so
+ * the SQL default only ever applies to a manual invocation.
+ *
+ * Consequence worth knowing before lowering it further: a device that has been
+ * offline for longer than this window has its buffered events DROPPED at
+ * ingest, because there is no partition for them to land in. At 3 days a till
+ * that is offline over a long weekend still loses the earliest of it.
+ */
+export const ACTIVITY_RETENTION_DAYS = 3;
 
 /** Caps, shared by the client (before buffering) and the server (before insert). */
 export const ACTIVITY_LIMITS = {

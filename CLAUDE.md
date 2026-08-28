@@ -323,13 +323,15 @@ git checkout 744ad0d -- tests src/tests playwright.config.ts vitest.config.ts
 
 ## 12. Activity logging (admin trail)
 
-Every action and UI interaction in a store is recorded to `activity_logs` and read only by the admin console at `/admin/activity`. Retention is **exactly 7 days**.
+Every meaningful action in a store is recorded to `activity_logs` and read only by the admin console at `/admin/activity`. Retention is **3 days** — set by `ACTIVITY_RETENTION_DAYS` in `src/lib/activity/types.ts`, which is the single source of truth: the ingest route passes it to the SQL function on every call, and the admin UI derives its date ranges from it.
 
 ### What is and is not captured
 
-**Actions** come from explicit `logActivity()` calls; **interactions** (clicks, field commits, named shortcuts, navigation) come from a global passive listener, `src/lib/activity/domTracker.ts`.
+**Actions** come from explicit `logActivity()` calls: every cart mutation, price edit, catalogue write, sale, cash movement, login, permission refusal, sync failure and connectivity change.
 
-**Individual keypresses are deliberately NOT recorded.** A scan is one event carrying the whole code; a text field is one event on blur carrying its final value. Per-key logging would be hundreds of thousands of rows a day per store, would capture passwords character by character, and would fill the offline buffer that shares a disk with queued sales. Do not "improve" this by adding a keydown logger.
+**The passive UI trail is switched OFF** — `UI_TRAIL` in `src/lib/activity/domTracker.ts` is `false`. Clicks and field commits were ~60–70% of all rows (a single checkout is ~15 clicks, because every keypad digit is a button), and they buy little the explicit events do not already say. Uncaught errors are still captured — that listener is not governed by the switch. Flip `UI_TRAIL` to `true` to get the trail back; nothing else changes, because `ui.click` / `ui.field_commit` stay in the vocabulary and the admin filters already list them.
+
+**Individual keypresses are never recorded, trail on or off.** A scan is one event carrying the whole code. Per-key logging would be hundreds of thousands of rows a day per store, would capture passwords character by character, and would fill the offline buffer that shares a disk with queued sales. Do not "improve" this by adding a keydown logger.
 
 Values of password fields, anything inside `data-log="redact"`, and any `details` key matching `/pass|secret|token|credential|pin|otp/` are never recorded. Give a control a `data-log="…"` attribute to name it in the trail.
 
@@ -340,7 +342,7 @@ Values of password fields, anything inside `data-log="redact"`, and any `details
 | `src/lib/activity/types.ts` | The closed vocabulary. Every event name lives here; the server rejects anything not in it. |
 | `src/lib/activity/logger.ts` | `logActivity(action, opts)` — synchronous, never throws, never returns a promise. In-memory ring, flushed at 50 events / 5s / pagehide. |
 | `src/lib/activity/flush.ts` | Posts to `/api/activity`; buffers to Dexie on any failure; drains on reconnect. |
-| `src/lib/activity/domTracker.ts` | The passive UI trail. |
+| `src/lib/activity/domTracker.ts` | The passive UI trail (**off** — see `UI_TRAIL`) plus uncaught-error capture (always on). |
 | `src/components/ActivityTracker.tsx` | Mounted in `providers.tsx`. No-ops on `/admin` and when the flag is off. |
 | `POST /api/activity` | Ingest. Validates, clamps `occurred_at`, rate-limits, and runs partition maintenance at most hourly. |
 | `GET /api/admin/activity` | Read + `?format=csv`. Gated on `requireAdmin()`. |
@@ -357,7 +359,15 @@ Values of password fields, anything inside `data-log="redact"`, and any `details
 
 ### Retention
 
-`activity_logs` is **range-partitioned by day**. `maintain_activity_log_partitions(7)` creates the partitions for the retained window plus tomorrow, and **drops** anything older — the "new day deletes the oldest day" rule is a partition drop, not a `DELETE`.
+`activity_logs` is **range-partitioned by day**. `maintain_activity_log_partitions(n)` creates the partitions for the retained window plus tomorrow, and **drops** anything older — the "new day deletes the oldest day" rule is a partition drop, not a `DELETE`, so the disk comes back immediately and there is no bloat to vacuum.
+
+**Changing retention is a one-line edit to `ACTIVITY_RETENTION_DAYS`** — no migration, because the function takes the window as an argument. Lowering it has one non-obvious consequence: a device offline for longer than the window has its buffered events **dropped** at ingest, since there is no partition for them.
+
+### The three volume levers, in order of how little they cost
+
+1. **`activity_logging` feature flag**, per store, from the existing admin dialog. No deploy. Full stop for that store.
+2. **`ACTIVITY_RETENTION_DAYS`** — currently 3.
+3. **`UI_TRAIL`** in `domTracker.ts` — currently `false`, which is where most of the saving came from.
 
 There is **no DEFAULT partition**, because one would block creating the next day's partition. Instead `POST /api/activity` drops events older than the window and clamps future timestamps to `now`. If an insert ever does miss a partition, the route runs maintenance and retries once.
 

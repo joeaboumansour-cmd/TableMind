@@ -83,7 +83,7 @@ export const FEATURES: Record<string, FeatureDefinition> = {
   activity_logging: {
     key: "activity_logging",
     label: "Activity Logging",
-    description: "Record every action and UI interaction to the admin activity trail (kept 7 days)",
+    description: "Record store actions to the admin activity trail (kept 3 days)",
     category: "core",
     default: true,
   },

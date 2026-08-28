@@ -5,6 +5,8 @@
  * what the person actually touched — every click, every field they changed,
  * every shortcut — without needing a call site for each one.
  *
+ * ⚠️ THE TRAIL IS CURRENTLY OFF. See UI_TRAIL below.
+ *
  * What it deliberately does not do:
  *  - record individual keypresses. Only named shortcuts (ALT+n, F-keys,
  *    Ctrl/Cmd combos) are logged; a barcode wedge alone would otherwise
@@ -25,6 +27,28 @@ const ACTIONABLE_SELECTOR =
   "[data-log],button,a,input,select,textarea,[role='button'],[role='tab'],[role='menuitem'],[role='option'],[role='switch'],label";
 
 const SENSITIVE_FIELD = /pass|secret|token|credential|pin|otp|cvv|card/i;
+
+/**
+ * Whether to record the passive interaction trail: clicks, field commits, and
+ * generic shortcuts.
+ *
+ * **Currently `false`, deliberately.** These three listeners were roughly
+ * 60–70% of all rows — a single checkout was ~15 `ui.click` events because
+ * every keypad digit is a button, and the scan input's refocus cycle produced
+ * a `ui.field_commit` on nearly every scan. Turning them off keeps every sale,
+ * price change, catalogue edit, login, permission refusal, sync failure and
+ * outage, and drops the noise around them.
+ *
+ * Flip to `true` to get the full trail back — nothing else needs to change.
+ * The event names stay in the vocabulary either way, so a re-enabled trail is
+ * accepted by the server immediately and the admin filters already list them.
+ *
+ * Error capture below is NOT governed by this: it is a handful of rows a day
+ * and it is the most useful thing in the table when something breaks.
+ */
+// Annotated as `boolean` rather than inferred: a literal `false` would narrow
+// the type and make everything past the guard read as unreachable code.
+const UI_TRAIL: boolean = false;
 
 let started = false;
 
@@ -213,22 +237,31 @@ export function startDomTracking(): void {
   if (started || typeof window === "undefined") return;
   started = true;
 
+  // Always on: a handful of rows a day, and the ones you actually want when a
+  // till misbehaves.
+  window.addEventListener("error", onError);
+  window.addEventListener("unhandledrejection", onRejection);
+
+  if (!UI_TRAIL) return;
+
   document.addEventListener("click", onClick, { capture: true, passive: true });
   document.addEventListener("focusin", onFocusIn, { capture: true, passive: true });
   document.addEventListener("focusout", onFocusOut, { capture: true, passive: true });
   document.addEventListener("keydown", onKeyDown, { capture: true, passive: true });
-  window.addEventListener("error", onError);
-  window.addEventListener("unhandledrejection", onRejection);
 }
 
 export function stopDomTracking(): void {
   if (!started || typeof window === "undefined") return;
   started = false;
 
+  window.removeEventListener("error", onError);
+  window.removeEventListener("unhandledrejection", onRejection);
+
+  // Safe to call unconditionally — removing a listener that was never added is
+  // a no-op, and doing it this way means flipping UI_TRAIL at runtime during
+  // debugging cannot strand a listener.
   document.removeEventListener("click", onClick, true);
   document.removeEventListener("focusin", onFocusIn, true);
   document.removeEventListener("focusout", onFocusOut, true);
   document.removeEventListener("keydown", onKeyDown, true);
-  window.removeEventListener("error", onError);
-  window.removeEventListener("unhandledrejection", onRejection);
 }

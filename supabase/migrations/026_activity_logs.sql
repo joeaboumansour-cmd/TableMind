@@ -4,17 +4,24 @@
 -- A fleet-wide trail of every action and UI interaction performed in a store,
 -- read only by the admin console.
 --
--- Retention is exactly 7 days, and it is implemented with DAILY RANGE
+-- Retention is exactly 3 days, and it is implemented with DAILY RANGE
 -- PARTITIONS rather than a DELETE. The requirement — "every new day of logs
--- deletes the first day logged before 7 days" — is literally a partition drop:
+-- deletes the oldest day" — is literally a partition drop:
 -- DROP TABLE activity_logs_20260821 is instant and leaves no bloat, whereas
--- deleting ~300k rows a day would churn autovacuum on a live database forever.
+-- deleting a day's worth of rows every day would churn autovacuum on a live
+-- database forever, and would not return the disk.
 --
 -- There is deliberately NO DEFAULT partition. A default partition blocks the
 -- creation of any new partition that would overlap rows already sitting in it,
 -- which would break the daily maintenance run. Instead, POST /api/activity
 -- clamps every occurred_at into the retained window before inserting, and
 -- re-runs maintenance + retries once if an insert ever does miss a partition.
+--
+-- The window is deliberately short, and the passive UI trail is switched off
+-- (src/lib/activity/domTracker.ts), which together hold this table to a small
+-- fraction of what full-fidelity logging would cost. Changing the window is a
+-- one-line edit to ACTIVITY_RETENTION_DAYS; the function takes it as an
+-- argument precisely so it never needs another migration.
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS activity_logs (
@@ -49,7 +56,7 @@ CREATE TABLE IF NOT EXISTS activity_logs (
   is_offline      BOOLEAN     NOT NULL DEFAULT FALSE,
 
   -- Client-generated id, for tracing one event back to one device. There is
-  -- deliberately NO unique index on it: a unique btree over ~2M rows a week
+  -- deliberately NO unique index on it: a unique btree over this insert rate
   -- costs more than the problem it solves, and a duplicate LOG row is harmless
   -- — unlike a duplicate sale, which is what the idempotency rule in the
   -- offline-write skill exists to protect.
@@ -68,7 +75,7 @@ CREATE TABLE IF NOT EXISTS activity_logs (
   PRIMARY KEY (id, occurred_at)
 ) PARTITION BY RANGE (occurred_at);
 
-COMMENT ON TABLE  activity_logs IS 'Admin-only activity trail. Daily partitions, 7-day retention via maintain_activity_log_partitions().';
+COMMENT ON TABLE  activity_logs IS 'Admin-only activity trail. Daily partitions, 3-day retention via maintain_activity_log_partitions(). The window is set by ACTIVITY_RETENTION_DAYS in src/lib/activity/types.ts, which the ingest route passes explicitly.';
 COMMENT ON COLUMN activity_logs.occurred_at IS 'Client time of the action. Set by the device, NOT the server — the gap to received_at is the offline duration.';
 COMMENT ON COLUMN activity_logs.user_id     IS 'store_users.id. NULL means the store owner.';
 
@@ -126,7 +133,7 @@ GRANT SELECT, INSERT, DELETE ON activity_logs TO service_role;
 -- rather than an error. Called opportunistically from POST /api/activity at
 -- most once an hour; also grantable to pg_cron later if that is ever wanted.
 
-CREATE OR REPLACE FUNCTION maintain_activity_log_partitions(p_retention_days INT DEFAULT 7)
+CREATE OR REPLACE FUNCTION maintain_activity_log_partitions(p_retention_days INT DEFAULT 3)
 RETURNS TABLE(action TEXT, partition_name TEXT)
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -140,13 +147,15 @@ DECLARE
   v_child     RECORD;
   v_child_day DATE;
 BEGIN
-  -- Never let a bad argument widen retention or wipe everything.
+  -- Never let a bad argument widen retention or wipe everything. Must match
+  -- ACTIVITY_RETENTION_DAYS in src/lib/activity/types.ts.
   IF p_retention_days IS NULL OR p_retention_days < 1 THEN
-    p_retention_days := 7;
+    p_retention_days := 3;
   END IF;
 
   v_today     := (NOW() AT TIME ZONE 'UTC')::DATE;
-  -- 7 days retained means today plus the six before it.
+  -- N days retained means today plus the N-1 before it. At the current
+  -- setting of 3 that is today and the two days before it.
   v_keep_from := v_today - (p_retention_days - 1);
 
   -- --- Create ---------------------------------------------------------------
@@ -185,7 +194,7 @@ BEGIN
 
   -- --- Drop -----------------------------------------------------------------
   -- Anything whose day has fallen out of the retained window. This is the
-  -- "every new day deletes the first day before 7 days" rule.
+  -- "every new day deletes the oldest day" rule.
   FOR v_child IN
     SELECT c.relname AS name
     FROM pg_inherits i
@@ -217,4 +226,4 @@ REVOKE ALL ON FUNCTION maintain_activity_log_partitions(INT) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION maintain_activity_log_partitions(INT) TO service_role;
 
 -- Seed the partitions so the very first insert has somewhere to go.
-SELECT * FROM maintain_activity_log_partitions(7);
+SELECT * FROM maintain_activity_log_partitions(3);

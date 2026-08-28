@@ -258,7 +258,7 @@ export interface Database {
           created_at?: string;
         };
       };
-      // Migration 026. Daily range partitions on occurred_at, 7-day retention.
+      // Migration 026. Daily range partitions on occurred_at, 3-day retention.
       // `id` is GENERATED ALWAYS AS IDENTITY, so it is absent from Insert.
       activity_logs: {
         Row: {
