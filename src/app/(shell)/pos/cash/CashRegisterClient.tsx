@@ -1,202 +1,355 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+// =============================================
+// Cash register page
+//
+// Rewritten for multi-register (migration 027). Previously this file held the
+// whole feature in 797 lines and modelled exactly one drawer per store per day,
+// keyed on the calendar date. That key is what produced the midnight bug: the
+// page asked for today's shift, got nothing back at 00:00, and displayed
+// "No Shift Open" over a shift that was still open in the database with
+// uncounted cash sitting in the drawer.
+//
+// Now the page asks "what is every register doing", the server answers with
+// shift-scoped figures, and an uncounted shift becomes the loudest thing on the
+// screen instead of disappearing. Nothing here closes a shift automatically —
+// a closing figure is a physical count, and inventing one destroys the variance
+// it exists to catch.
+//
+// This file is orchestration and data loading. The rendering lives in
+// src/components/cash/.
+// =============================================
+
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useRouter } from "next/navigation";
+import dynamic from "next/dynamic";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Separator } from "@/components/ui/separator";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import {
   ArrowLeft,
   Banknote,
-  Check,
   Loader2,
   Lock,
-  TrendingDown,
-  TrendingUp,
-  Scale,
-  CalendarDays,
-  Users,
+  Plus,
+  RefreshCw,
+  AlertTriangle,
+  WifiOff,
 } from "lucide-react";
 import { toast } from "@/lib/toast";
+import { errorMessage } from "@/lib/errors";
 import { useAuth } from "@/lib/auth/AuthContext";
 import { useFeatureFlags } from "@/hooks/useFeatureFlags";
-import { formatLL, formatUSD, formatDateTime } from "@/lib/utils/format";
-import { combineCurrencyTotals, computeExpectedDrawer, computeVariance } from "@/lib/cashShift";
+import { formatLL } from "@/lib/utils/format";
+import { summariseShift } from "@/lib/cashShift";
 import { connectivity } from "@/lib/connectivity";
 import { useReloadGuard } from "@/lib/pwa/useReloadGuard";
 import { logActivity } from "@/lib/activity/logger";
+import { buildAuthHeaders } from "@/lib/auth/apiHeaders";
+import {
+  getActiveRegister,
+  setActiveRegister,
+  reconcileActiveRegister,
+} from "@/lib/cash/activeRegister";
+import { isOverdue } from "@/lib/cash/types";
+import type {
+  CashRegister,
+  CashShift,
+  CashAdjustment,
+  RegisterState,
+  RegisterRequest,
+} from "@/lib/cash/types";
+import { RegisterCard } from "@/components/cash/RegisterCard";
+import {
+  OpenShiftDialog,
+  CloseShiftDialog,
+  AdjustmentDialog,
+  type OpenShiftValues,
+  type CloseShiftValues,
+  type AdjustmentValues,
+} from "@/components/cash/ShiftDialogs";
+import { RequestsPanel, RequestDecisionDialog } from "@/components/cash/RequestsPanel";
+import type { RegisterPerformanceRow } from "@/components/cash/RegisterPerformance";
 
-// ── Types ────────────────────────────────────────────────────────────────────
-interface CashShift {
-  id: string;
-  store_id: string;
-  business_date: string;
-  status: "open" | "closed";
-  opened_by: string | null;
-  opened_by_name: string;
-  opened_at: string;
-  opening_ll: number;
-  opening_usd: number;
-  closed_by: string | null;
-  closed_by_name: string | null;
-  closed_at: string | null;
-  closing_ll: number | null;
-  closing_usd: number | null;
-  verified: boolean;
-  notes: string | null;
+// recharts is ~90KB. Kept out of the initial chunk — this page is reachable
+// from the till and must not drag a charting library into that path.
+const RegisterPerformance = dynamic(() => import("@/components/cash/RegisterPerformance"), {
+  ssr: false,
+  loading: () => (
+    <Card>
+      <CardContent className="flex h-40 items-center justify-center">
+        <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+      </CardContent>
+    </Card>
+  ),
+});
+
+/** How often the approval-request poll runs while online and visible. */
+const REQUEST_POLL_MS = 10_000;
+
+/** Per-shift sales totals as returned by GET /api/cash-shifts, keyed by shift id. */
+interface ShiftTotalsRow {
+  amount_paid: number;
+  change_given: number;
+  usd_amount_paid: number;
+  txn_count: number;
 }
 
-interface CashAdjustment {
-  id: string;
-  shift_id: string;
-  adjustment_type: "cash_in" | "cash_out";
-  amount_ll: number;
-  amount_usd: number;
-  reason: string;
-  created_by_name: string;
-  created_at: string;
-}
+const EMPTY_OPEN: OpenShiftValues = {
+  registerId: "",
+  newRegisterName: "",
+  label: "",
+  openingLl: "",
+  openingUsd: "",
+};
+const EMPTY_CLOSE: CloseShiftValues = { closingLl: "", closingUsd: "", notes: "" };
+const EMPTY_ADJ: AdjustmentValues = {
+  type: "cash_in",
+  amountLl: "",
+  amountUsd: "",
+  reason: "",
+};
 
-interface PerUserSummary {
-  name: string;
-  count: number;
-  total: number;
-}
-
-// ── Helpers ──────────────────────────────────────────────────────────────────
-function toDateString(d: Date): string {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
-}
-
-// Build auth header payload with user info for API calls
-function buildAuthHeaders(currentUser: any): Record<string, string> {
-  const authData = localStorage.getItem("goldensquirrel_auth") || "{}";
-  let storeId = "";
-  try {
-    storeId = JSON.parse(authData)?.store_id || "";
-  } catch {}
-  if (currentUser?.storeId) storeId = currentUser.storeId;
-
-  const headerPayload: any = { store_id: storeId };
-  if (currentUser?.id && !currentUser?.isOwner) headerPayload.user_id = currentUser.id;
-
-  return {
-    "Content-Type": "application/json",
-    "x-auth-data": JSON.stringify(headerPayload),
-  };
-}
-
-// ── Page component ──────────────────────────────────────────────────────────
 export function CashRegisterPage() {
   const router = useRouter();
   const { user, isLoading: authLoading, canAccess } = useAuth();
   const { isEnabled, isLoading: flagsLoading } = useFeatureFlags();
 
   const [isLoading, setIsLoading] = useState(true);
-  const [shift, setShift] = useState<CashShift | null>(null);
-  const [adjustments, setAdjustments] = useState<CashAdjustment[]>([]);
-  const [perUser, setPerUser] = useState<PerUserSummary[]>([]);
-  const [businessDate, setBusinessDate] = useState(() => toDateString(new Date()));
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isOnline, setIsOnline] = useState(true);
 
-  // Open shift dialog state
-  const [isOpenDialogOpen, setIsOpenDialogOpen] = useState(false);
-  const [openingLl, setOpeningLl] = useState("");
-  const [openingUsd, setOpeningUsd] = useState("");
+  const [registers, setRegisters] = useState<CashRegister[]>([]);
+  const [shifts, setShifts] = useState<CashShift[]>([]);
+  const [totals, setTotals] = useState<Record<string, ShiftTotalsRow>>({});
+  const [adjustments, setAdjustments] = useState<Record<string, CashAdjustment[]>>({});
+  const [pendingByRegister, setPendingByRegister] = useState<Record<string, number>>({});
+  const [unassigned, setUnassigned] = useState<{ count: number; total: number } | null>(null);
+
+  const [requests, setRequests] = useState<RegisterRequest[]>([]);
+  const [activeRegisterId, setActiveRegisterId] = useState<string | null>(null);
+
+  const [performance, setPerformance] = useState<{
+    registers: RegisterPerformanceRow[];
+    storeRevenue: number;
+    busiestRegisterId: string | null;
+  } | null>(null);
+
+  // ── Dialog state ───────────────────────────────────────────────────────────
+  const [openDialog, setOpenDialog] = useState(false);
+  const [openValues, setOpenValues] = useState<OpenShiftValues>(EMPTY_OPEN);
   const [isOpening, setIsOpening] = useState(false);
 
-  // Close shift dialog state
-  const [isCloseDialogOpen, setIsCloseDialogOpen] = useState(false);
-  const [closingLl, setClosingLl] = useState("");
-  const [closingUsd, setClosingUsd] = useState("");
-  const [closingNotes, setClosingNotes] = useState("");
+  const [closeShiftId, setCloseShiftId] = useState<string | null>(null);
+  const [closeValues, setCloseValues] = useState<CloseShiftValues>(EMPTY_CLOSE);
   const [isClosing, setIsClosing] = useState(false);
 
-  // Adjustment dialog state
-  const [isAdjDialogOpen, setIsAdjDialogOpen] = useState(false);
-  const [adjType, setAdjType] = useState<"cash_in" | "cash_out">("cash_in");
-  const [adjLl, setAdjLl] = useState("");
-  const [adjUsd, setAdjUsd] = useState("");
-  const [adjReason, setAdjReason] = useState("");
-  const [isAddingAdj, setIsAddingAdj] = useState(false);
+  const [adjShiftId, setAdjShiftId] = useState<string | null>(null);
+  const [adjValues, setAdjValues] = useState<AdjustmentValues>(EMPTY_ADJ);
+  const [isAdjusting, setIsAdjusting] = useState(false);
 
-  // Counted-cash figures are typed in by hand and exist nowhere else until the
-  // dialog is submitted — a reload here loses a physical count.
+  const [decidingRequest, setDecidingRequest] = useState<RegisterRequest | null>(null);
+  const [decisionNote, setDecisionNote] = useState("");
+  const [isDeciding, setIsDeciding] = useState(false);
+
+  // Every counted figure on this screen is typed by hand and exists nowhere
+  // else until submitted. A service-worker reload mid-count throws away a
+  // physical count of a drawer, so hold the update until the form is done.
   useReloadGuard(
-    isOpenDialogOpen ||
-      isCloseDialogOpen ||
-      isAdjDialogOpen ||
+    openDialog ||
+      closeShiftId !== null ||
+      adjShiftId !== null ||
+      decidingRequest !== null ||
       isOpening ||
       isClosing ||
-      isAddingAdj,
+      isAdjusting ||
+      isDeciding,
     "cash-register-busy"
   );
 
-  // Compute expected totals
-  const openingTotal = combineCurrencyTotals(shift?.opening_ll || 0, shift?.opening_usd || 0);
-  const closingTotal = shift?.closing_ll != null ? combineCurrencyTotals(shift.closing_ll, shift.closing_usd || 0) : null;
-  const adjInTotal = combineCurrencyTotals(
-    adjustments.filter(a => a.adjustment_type === "cash_in").reduce((s, a) => s + a.amount_ll, 0),
-    adjustments.filter(a => a.adjustment_type === "cash_in").reduce((s, a) => s + a.amount_usd, 0)
-  );
-  const adjOutTotal = combineCurrencyTotals(
-    adjustments.filter(a => a.adjustment_type === "cash_out").reduce((s, a) => s + a.amount_ll, 0),
-    adjustments.filter(a => a.adjustment_type === "cash_out").reduce((s, a) => s + a.amount_usd, 0)
-  );
+  // ── Derived state ──────────────────────────────────────────────────────────
 
-  // Daily cash received from sales — perUser totals are already in LL-equivalent
-  // (Σ of each transaction's amount_paid, which itself blends LL + USD).
-  const cashReceived = perUser.reduce((s, u) => s + u.total, 0);
-  const changeOut = 0; // change is already netted into amount_paid per transaction
-
-  // ── Load data ──────────────────────────────────────────────────────────────
-  const loadData = useCallback(async () => {
-    if (!user?.storeId) return;
-    if (!connectivity.isOnline) {
-      setIsLoading(false);
-      toast.info("Offline mode — shift data may be stale");
-      return;
+  const shiftByRegister = useMemo(() => {
+    const map = new Map<string, CashShift>();
+    for (const s of shifts) {
+      const existing = map.get(s.register_id);
+      // An open shift always wins over a closed one for the same register.
+      if (!existing || (s.status === "open" && existing.status !== "open")) {
+        map.set(s.register_id, s);
+      }
     }
+    return map;
+  }, [shifts]);
 
+  const registerStates: RegisterState[] = useMemo(
+    () =>
+      registers.map((register) => {
+        const shift = shiftByRegister.get(register.id) || null;
+        const shiftAdjustments = shift ? adjustments[shift.id] || [] : [];
+        const t = shift ? totals[shift.id] : null;
+
+        return {
+          register,
+          shift,
+          adjustments: shiftAdjustments,
+          pendingRequestCount: pendingByRegister[register.id] || 0,
+          summary: shift
+            ? summariseShift(shift, shiftAdjustments, {
+                amountPaid: Number(t?.amount_paid) || 0,
+                changeGiven: Number(t?.change_given) || 0,
+                usdAmountPaid: Number(t?.usd_amount_paid) || 0,
+                count: Number(t?.txn_count) || 0,
+              })
+            : null,
+        };
+      }),
+    [registers, shiftByRegister, adjustments, totals, pendingByRegister]
+  );
+
+  const overdueStates = registerStates.filter((s) => isOverdue(s.shift));
+  const openStates = registerStates.filter((s) => s.shift?.status === "open");
+  const totalExpected = openStates.reduce((sum, s) => sum + (s.summary?.expectedTotal || 0), 0);
+
+  /** Registers that cannot take a new shift because one is already open. */
+  const blockedRegisterIds = useMemo(
+    () => new Set(openStates.map((s) => s.register.id)),
+    [openStates]
+  );
+
+  const canEdit = !!(user?.isOwner || user?.permissions?.cash_register === true);
+
+  // ── Load ───────────────────────────────────────────────────────────────────
+
+  const loadData = useCallback(
+    async (opts?: { silent?: boolean }) => {
+      if (!user?.storeId) return;
+
+      if (!connectivity.isOnline) {
+        setIsOnline(false);
+        setIsLoading(false);
+        return;
+      }
+      setIsOnline(true);
+
+      if (!opts?.silent) setIsRefreshing(true);
+      try {
+        const headers = buildAuthHeaders(user);
+        const res = await fetch("/api/cash-shifts", { headers });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.error || "Failed to load");
+        }
+        const data = await res.json();
+
+        setRegisters(data.registers || []);
+        setShifts(data.shifts || []);
+        setTotals(data.totals || {});
+        setAdjustments(data.adjustments || {});
+        setPendingByRegister(data.pendingByRegister || {});
+        setUnassigned(data.unassigned || null);
+
+        // Keep this device's selection honest, and auto-select when the store
+        // has exactly one register so single-drawer shops never see a picker.
+        const selected = reconcileActiveRegister(data.registers || []);
+        setActiveRegisterId(selected?.id ?? null);
+      } catch (error) {
+        console.error("Cash register load error:", error);
+        if (!opts?.silent) toast.error(errorMessage(error, "Failed to load cash registers"));
+      } finally {
+        setIsLoading(false);
+        setIsRefreshing(false);
+      }
+    },
+    [user]
+  );
+
+  const loadPerformance = useCallback(async () => {
+    if (!user?.storeId || !connectivity.isOnline) return;
     try {
       const headers = buildAuthHeaders(user);
-      const res = await fetch(`/api/cash-shifts?date=${businessDate}`, { headers });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.error || "Failed to load");
-      }
+      // Last 30 days: enough to see a pattern, well inside the route's cap.
+      const to = new Date();
+      const from = new Date(to.getTime() - 29 * 86_400_000);
+      const iso = (d: Date) => d.toISOString().slice(0, 10);
+      const res = await fetch(
+        `/api/cash-registers/analytics?from=${iso(from)}&to=${iso(to)}`,
+        { headers }
+      );
+      if (!res.ok) return; // performance is supplementary — never block the page
       const data = await res.json();
-      setShift(data.shift);
-      setAdjustments(data.adjustments || []);
-      setPerUser(data.perUser || []);
-    } catch (error: any) {
-      console.error("Cash register load error:", error);
-      toast.error(error.message || "Failed to load cash register data");
-    } finally {
-      setIsLoading(false);
+      setPerformance({
+        registers: data.registers || [],
+        storeRevenue: data.storeRevenue || 0,
+        busiestRegisterId: data.busiestRegisterId ?? null,
+      });
+    } catch {
+      // Silent: a missing chart must not obscure the drawer figures.
     }
-  }, [user, businessDate]);
+  }, [user]);
+
+  const loadRequests = useCallback(async () => {
+    if (!user?.storeId || !connectivity.isOnline) return;
+    try {
+      const headers = buildAuthHeaders(user);
+      const res = await fetch("/api/register-requests?status=pending", { headers });
+      if (!res.ok) return;
+      const data = await res.json();
+      setRequests(data.requests || []);
+    } catch {
+      // Silent: the poll retries on its own interval.
+    }
+  }, [user]);
 
   useEffect(() => {
-    if (user?.storeId) loadData();
-  }, [user, loadData]);
+    if (user?.storeId) {
+      setActiveRegisterId(getActiveRegister()?.id ?? null);
+      loadData();
+      loadPerformance();
+      loadRequests();
+    }
+  }, [user, loadData, loadPerformance, loadRequests]);
 
-  // Feature flag + permission guard
-  // Only redirect after both auth AND feature flags have finished loading.
-  // Otherwise isEnabled() returns false during initial load and causes a false redirect.
+  // ── Approval-request poll ──────────────────────────────────────────────────
+  // Plain polling. There is no Supabase realtime anywhere in this app and this
+  // is not the place to introduce it. Paused while the tab is hidden so a
+  // backgrounded till does not keep hitting the API.
+  const requestsRef = useRef(loadRequests);
+  requestsRef.current = loadRequests;
+
+  useEffect(() => {
+    let timer: ReturnType<typeof setInterval> | null = null;
+
+    const start = () => {
+      if (timer) return;
+      timer = setInterval(() => {
+        if (document.visibilityState === "visible" && connectivity.isOnline) {
+          requestsRef.current();
+        }
+      }, REQUEST_POLL_MS);
+    };
+    const stop = () => {
+      if (timer) clearInterval(timer);
+      timer = null;
+    };
+
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") {
+        requestsRef.current();
+        start();
+      } else {
+        stop();
+      }
+    };
+
+    start();
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      stop();
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, []);
+
+  // ── Guards ─────────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!authLoading && user && !flagsLoading) {
       if (!isEnabled("cash_register")) {
@@ -207,34 +360,75 @@ export function CashRegisterPage() {
       if (!canAccess("cash_register")) {
         toast.error("You don't have access to the Cash Register");
         router.replace("/pos");
-        return;
       }
     }
   }, [authLoading, user, flagsLoading, isEnabled, canAccess, router]);
 
-  const canEdit = user?.isOwner || (user?.permissions.cash_register === true);
+  // Record that somebody was shown the "this drawer still needs counting"
+  // state, so the admin trail can tell an unnoticed overdue shift from an
+  // ignored one. Fires once per register per page load.
+  const seenOverdue = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    for (const s of overdueStates) {
+      if (seenOverdue.current.has(s.register.id)) continue;
+      seenOverdue.current.add(s.register.id);
+      logActivity("cash.shift_overdue_seen", {
+        target: s.register.name,
+        details: { shift_id: s.shift!.id, business_date: s.shift!.business_date },
+      });
+    }
+  }, [overdueStates]);
 
-  // ── Open shift ─────────────────────────────────────────────────────────────
+  // ── Actions ────────────────────────────────────────────────────────────────
+
   const handleOpenShift = async () => {
-    const ll = parseFloat(openingLl) || 0;
-    const usd = parseFloat(openingUsd) || 0;
+    const ll = parseFloat(openValues.openingLl) || 0;
+    const usd = parseFloat(openValues.openingUsd) || 0;
+
+    if (!openValues.registerId && !openValues.newRegisterName.trim()) {
+      toast.error("Choose a register, or name a new one");
+      return;
+    }
     if (ll <= 0 && usd <= 0) {
-      toast.error("Enter the opening float amount");
+      toast.error("Enter the opening float");
+      return;
+    }
+    if (!connectivity.isOnline && !openValues.registerId) {
+      toast.error("Creating a register needs a connection. Pick an existing one.");
       return;
     }
 
     setIsOpening(true);
-    logActivity("cash.shift_open", {
-      target: businessDate,
-      details: { opening_ll: ll, opening_usd: usd, online: connectivity.isOnline },
-    });
     try {
       const headers = buildAuthHeaders(user);
+      let registerId = openValues.registerId;
+
+      // A brand-new register is created first, online only: two offline devices
+      // both inventing "Front Counter" would produce two drawers to merge later.
+      if (!registerId) {
+        const res = await fetch("/api/cash-registers", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ name: openValues.newRegisterName.trim() }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || "Failed to create register");
+        registerId = data.register.id;
+        logActivity("cash.register_create", { target: data.register.name });
+      }
+
+      logActivity("cash.shift_open", {
+        target: registerId,
+        details: { opening_ll: ll, opening_usd: usd, online: connectivity.isOnline },
+      });
+
       if (!connectivity.isOnline) {
         const { queueCashShiftOpen } = await import("@/lib/db/localDB");
         await queueCashShiftOpen({
           store_id: user!.storeId,
-          business_date: businessDate,
+          register_id: registerId!,
+          label: openValues.label.trim() || undefined,
+          business_date: new Date().toISOString().slice(0, 10),
           opening_ll: ll,
           opening_usd: usd,
           user_id: user!.isOwner ? undefined : user!.id,
@@ -247,45 +441,43 @@ export function CashRegisterPage() {
           headers,
           body: JSON.stringify({
             action: "open",
-            business_date: businessDate,
+            register_id: registerId,
+            label: openValues.label.trim() || undefined,
             opening_ll: ll,
             opening_usd: usd,
           }),
         });
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({}));
-          throw new Error(err.error || "Failed to open shift");
-        }
-        toast.success("Shift opened successfully!");
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || "Failed to open shift");
+        toast.success("Shift opened");
       }
-      setIsOpenDialogOpen(false);
-      setOpeningLl("");
-      setOpeningUsd("");
+
+      setOpenDialog(false);
+      setOpenValues(EMPTY_OPEN);
       loadData();
-    } catch (error: any) {
-      toast.error(error.message || "Failed to open shift");
+    } catch (error) {
+      toast.error(errorMessage(error, "Failed to open shift"));
     } finally {
       setIsOpening(false);
     }
   };
 
-  // ── Close shift ────────────────────────────────────────────────────────────
   const handleCloseShift = async () => {
-    const ll = parseFloat(closingLl) || 0;
-    const usd = parseFloat(closingUsd) || 0;
+    const ll = parseFloat(closeValues.closingLl) || 0;
+    const usd = parseFloat(closeValues.closingUsd) || 0;
     if (ll <= 0 && usd <= 0) {
-      toast.error("Enter the counted closing amount");
+      toast.error("Enter the counted amount");
       return;
     }
-    if (!shift?.id) return;
+    if (!closeShiftId) return;
 
     setIsClosing(true);
     logActivity("cash.shift_close", {
-      target: shift.id,
+      target: closeShiftId,
       details: {
         closing_ll: ll,
         closing_usd: usd,
-        has_notes: closingNotes.trim().length > 0,
+        has_notes: closeValues.notes.trim().length > 0,
         online: connectivity.isOnline,
       },
     });
@@ -294,11 +486,11 @@ export function CashRegisterPage() {
       if (!connectivity.isOnline) {
         const { queueCashShiftClose } = await import("@/lib/db/localDB");
         await queueCashShiftClose({
-          shift_id: shift.id,
+          shift_id: closeShiftId,
           store_id: user!.storeId,
           closing_ll: ll,
           closing_usd: usd,
-          notes: closingNotes || undefined,
+          notes: closeValues.notes || undefined,
           user_id: user!.isOwner ? undefined : user!.id,
           user_name: user!.displayName || user!.username,
         });
@@ -309,39 +501,35 @@ export function CashRegisterPage() {
           headers,
           body: JSON.stringify({
             action: "close",
-            shift_id: shift.id,
+            shift_id: closeShiftId,
             closing_ll: ll,
             closing_usd: usd,
-            notes: closingNotes || undefined,
+            notes: closeValues.notes || undefined,
           }),
         });
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({}));
-          throw new Error(err.error || "Failed to close shift");
-        }
-        toast.success("Shift closed successfully!");
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || "Failed to close shift");
+        toast.success("Shift closed");
       }
-      setIsCloseDialogOpen(false);
-      setClosingLl("");
-      setClosingUsd("");
-      setClosingNotes("");
+      setCloseShiftId(null);
+      setCloseValues(EMPTY_CLOSE);
       loadData();
-    } catch (error: any) {
-      toast.error(error.message || "Failed to close shift");
+      loadPerformance();
+    } catch (error) {
+      toast.error(errorMessage(error, "Failed to close shift"));
     } finally {
       setIsClosing(false);
     }
   };
 
-  // ── Adjustment ─────────────────────────────────────────────────────────────
   const handleAddAdjustment = async () => {
-    const ll = parseFloat(adjLl) || 0;
-    const usd = parseFloat(adjUsd) || 0;
+    const ll = parseFloat(adjValues.amountLl) || 0;
+    const usd = parseFloat(adjValues.amountUsd) || 0;
     if (ll <= 0 && usd <= 0) {
       toast.error("Enter an amount");
       return;
     }
-    if (!adjReason.trim()) {
+    if (!adjValues.reason.trim()) {
       toast.error("A reason is required");
       return;
     }
@@ -353,16 +541,16 @@ export function CashRegisterPage() {
       });
       return;
     }
-    if (!shift?.id) return;
+    if (!adjShiftId) return;
 
-    setIsAddingAdj(true);
+    setIsAdjusting(true);
     logActivity("cash.adjustment", {
-      target: adjType,
+      target: adjValues.type,
       details: {
-        shift_id: shift.id,
+        shift_id: adjShiftId,
         amount_ll: ll,
         amount_usd: usd,
-        reason: adjReason.trim(),
+        reason: adjValues.reason.trim(),
         online: connectivity.isOnline,
       },
     });
@@ -372,11 +560,11 @@ export function CashRegisterPage() {
         const { queueCashAdjustment } = await import("@/lib/db/localDB");
         await queueCashAdjustment({
           store_id: user.storeId,
-          shift_id: shift.id,
-          adjustment_type: adjType,
+          shift_id: adjShiftId,
+          adjustment_type: adjValues.type,
           amount_ll: ll,
           amount_usd: usd,
-          reason: adjReason.trim(),
+          reason: adjValues.reason.trim(),
         });
         toast.info("Adjustment queued — will sync when online");
       } else {
@@ -384,39 +572,78 @@ export function CashRegisterPage() {
           method: "POST",
           headers,
           body: JSON.stringify({
-            shift_id: shift.id,
-            adjustment_type: adjType,
+            shift_id: adjShiftId,
+            adjustment_type: adjValues.type,
             amount_ll: ll,
             amount_usd: usd,
-            reason: adjReason.trim(),
+            reason: adjValues.reason.trim(),
           }),
         });
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({}));
-          throw new Error(err.error || "Failed to add adjustment");
-        }
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || "Failed to add adjustment");
         toast.success("Adjustment recorded");
       }
-      setIsAdjDialogOpen(false);
-      setAdjLl("");
-      setAdjUsd("");
-      setAdjReason("");
+      setAdjShiftId(null);
+      setAdjValues(EMPTY_ADJ);
       loadData();
-    } catch (error: any) {
-      toast.error(error.message || "Failed to add adjustment");
+    } catch (error) {
+      toast.error(errorMessage(error, "Failed to add adjustment"));
     } finally {
-      setIsAddingAdj(false);
+      setIsAdjusting(false);
     }
   };
 
-  // ── Derived values ─────────────────────────────────────────────────────────
-  const expectedTotal = computeExpectedDrawer({
-    openingTotal,
-    cashInTotal: cashReceived,
-    changeOutTotal: changeOut,
-    adjustmentsIn: adjInTotal,
-    adjustmentsOut: adjOutTotal,
-  });
+  const handleDecide = async (decision: "approved" | "rejected") => {
+    if (!decidingRequest) return;
+    if (!connectivity.isOnline) {
+      toast.error("Deciding a request needs a connection");
+      return;
+    }
+
+    setIsDeciding(true);
+    try {
+      const headers = buildAuthHeaders(user);
+      const res = await fetch("/api/register-requests", {
+        method: "PATCH",
+        headers,
+        body: JSON.stringify({
+          request_id: decidingRequest.id,
+          decision,
+          note: decisionNote.trim() || undefined,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Failed to record the decision");
+
+      logActivity(decision === "approved" ? "cash.request_approve" : "cash.request_reject", {
+        target: decidingRequest.kind,
+        details: {
+          request_id: decidingRequest.id,
+          register_id: decidingRequest.register_id,
+          requested_by: decidingRequest.requested_by_name,
+        },
+      });
+
+      toast.success(decision === "approved" ? "Approved" : "Rejected");
+      setDecidingRequest(null);
+      setDecisionNote("");
+      loadRequests();
+      loadData();
+    } catch (error) {
+      toast.error(errorMessage(error, "Failed to record the decision"));
+    } finally {
+      setIsDeciding(false);
+    }
+  };
+
+  const handleUseOnThisDevice = (register: CashRegister) => {
+    setActiveRegister({ id: register.id, name: register.name });
+    setActiveRegisterId(register.id);
+    logActivity("cash.register_select", { target: register.name });
+    toast.success(`This device now rings into ${register.name}`);
+  };
+
+  // ── Render ─────────────────────────────────────────────────────────────────
 
   if (authLoading || isLoading) {
     return (
@@ -426,373 +653,263 @@ export function CashRegisterPage() {
     );
   }
 
-  const variance = computeVariance(closingTotal, expectedTotal);
-
   return (
-    // h-full + an internal scroller, not min-h-dvh: this screen sits inside the
-    // app shell, which is exactly the viewport minus the tab bar and clips its
-    // child. A min-h-dvh child was taller than that box and simply had its
-    // bottom cut off with no way to reach it.
     <div className="flex h-full flex-col overflow-hidden bg-background">
       <header className="safe-top flex-shrink-0 border-b bg-background">
         <div className="container mx-auto px-4 py-3">
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-3">
             <Button variant="ghost" size="icon" onClick={() => router.push("/pos")}>
               <ArrowLeft className="h-5 w-5" />
             </Button>
             <div className="flex items-center gap-2">
-              <Banknote className="h-5 w-5 text-amber-500" />
-              <h1 className="font-bold text-lg">Cash Register</h1>
+              <Banknote className="h-5 w-5 text-primary" />
+              <h1 className="text-lg font-bold">Cash Registers</h1>
             </div>
-            {shift && (
-              <Badge variant={shift.status === "open" ? "default" : "secondary"} className={shift.status === "open" ? "bg-green-500" : ""}>
-                {shift.status === "open" ? "Open" : "Closed"}
+
+            {overdueStates.length > 0 && (
+              <Badge variant="destructive" className="gap-1">
+                <AlertTriangle className="h-3 w-3" />
+                {overdueStates.length} to count
               </Badge>
             )}
-            {shift && !shift.verified && (
-              <Badge variant="destructive">Requires Owner Verification</Badge>
+            {!canEdit && (
+              <Badge variant="outline" className="gap-1">
+                <Lock className="h-3 w-3" /> Read only
+              </Badge>
             )}
-            {!canEdit && <Badge variant="outline"><Lock className="h-3 w-3 mr-1" /> Read Only</Badge>}
+
+            <div className="ml-auto flex items-center gap-2">
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => {
+                  loadData();
+                  loadPerformance();
+                  loadRequests();
+                }}
+                disabled={isRefreshing}
+                aria-label="Refresh"
+              >
+                <RefreshCw className={`h-4 w-4 ${isRefreshing ? "animate-spin" : ""}`} />
+              </Button>
+              {canEdit && (
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    setOpenValues({ ...EMPTY_OPEN, registerId: activeRegisterId || "" });
+                    setOpenDialog(true);
+                  }}
+                >
+                  <Plus className="mr-1.5 h-4 w-4" />
+                  Open shift
+                </Button>
+              )}
+            </div>
           </div>
         </div>
       </header>
 
-      <div className="no-scrollbar container mx-auto min-h-0 flex-1 max-w-3xl space-y-4 overflow-y-auto px-4 py-6">
-        {/* Date display */}
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <CalendarDays className="h-4 w-4" />
-          Business date: <span className="font-medium">{businessDate}</span>
-        </div>
+      <div className="no-scrollbar container mx-auto min-h-0 max-w-5xl flex-1 space-y-4 overflow-y-auto px-4 py-6">
+        {!isOnline && (
+          <div className="flex items-center gap-2 rounded-lg bg-muted/50 p-3 text-sm text-muted-foreground">
+            <WifiOff className="h-4 w-4 shrink-0" />
+            Offline — register figures below may be stale. Opening and closing shifts still
+            works and will sync when the connection returns.
+          </div>
+        )}
 
-        {!shift ? (
-          /* ── No shift yet / need to open ── */
+        {/* ── Store-level strip ────────────────────────────────────────── */}
+        {registers.length > 0 && (
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <div className="rounded-lg bg-muted/50 p-3">
+              <p className="text-xs text-muted-foreground">Registers open</p>
+              <p className="tnum mt-1 text-lg font-semibold">
+                {openStates.length}
+                <span className="text-sm text-muted-foreground">/{registers.length}</span>
+              </p>
+            </div>
+            <div className="rounded-lg bg-muted/50 p-3">
+              <p className="text-xs text-muted-foreground">Expected in drawers</p>
+              <p className="tnum mt-1 text-lg font-semibold">{formatLL(totalExpected)}</p>
+            </div>
+            <div className="rounded-lg bg-muted/50 p-3">
+              <p className="text-xs text-muted-foreground">Awaiting count</p>
+              <p
+                className={`tnum mt-1 text-lg font-semibold ${
+                  overdueStates.length > 0 ? "text-destructive" : ""
+                }`}
+              >
+                {overdueStates.length}
+              </p>
+            </div>
+            <div className="rounded-lg bg-muted/50 p-3">
+              <p className="text-xs text-muted-foreground">Requests waiting</p>
+              <p className="tnum mt-1 text-lg font-semibold">{requests.length}</p>
+            </div>
+          </div>
+        )}
+
+        {/* Sales that reached no drawer. Shown only when non-zero, because a
+            non-zero figure means a till is misconfigured — not that money is
+            missing. */}
+        {unassigned && unassigned.count > 0 && (
+          <div className="flex gap-2 rounded-lg bg-destructive/10 p-3">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
+            <div className="text-sm">
+              <p className="font-semibold text-destructive">
+                {unassigned.count} sale{unassigned.count !== 1 ? "s" : ""} today reached no
+                register · {formatLL(unassigned.total)}
+              </p>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                A till has no register selected, or was selling while its register had no shift
+                open. The money is recorded — it just is not attributed to a drawer. Use
+                &ldquo;Use on this device&rdquo; on the till in question.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* ── Registers ────────────────────────────────────────────────── */}
+        {registers.length === 0 ? (
           <Card>
-            <CardHeader>
-              <CardTitle>No Shift Open</CardTitle>
-              <CardDescription>
-                Open today's cash register to record the starting float.
-              </CardDescription>
-            </CardHeader>
-            {canEdit ? (
-              <CardContent>
-                <Button onClick={() => setIsOpenDialogOpen(true)}>
-                  <Banknote className="h-4 w-4 mr-2" />
-                  Open Shift
-                </Button>
-              </CardContent>
-            ) : (
-              <CardContent>
-                <p className="text-sm text-muted-foreground flex items-center gap-2">
-                  <Lock className="h-4 w-4" />
-                  Only the store owner or a user with Cash Register permission can open a shift.
+            <CardContent className="space-y-3 py-8 text-center">
+              <Banknote className="mx-auto h-8 w-8 text-muted-foreground" />
+              <div>
+                <p className="font-medium">No registers yet</p>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Add a register for each physical drawer. The name stays with it, so you only
+                  type it once.
                 </p>
-              </CardContent>
-            )}
+              </div>
+              {canEdit && (
+                <Button
+                  onClick={() => {
+                    setOpenValues(EMPTY_OPEN);
+                    setOpenDialog(true);
+                  }}
+                >
+                  <Plus className="mr-1.5 h-4 w-4" />
+                  Add the first register
+                </Button>
+              )}
+            </CardContent>
           </Card>
         ) : (
-          <>
-            {/* ── Shift summary ── */}
-            <Card>
-              <CardHeader className="pb-3">
-                <CardTitle className="text-sm font-medium">Shift Summary</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-3">
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="p-3 bg-muted/50 rounded-lg">
-                    <p className="text-xs text-muted-foreground">Opened By</p>
-                    <p className="font-semibold">{shift.opened_by_name || "Store Owner"}</p>
-                    <p className="text-xs text-muted-foreground mt-0.5">{shift.opened_at ? formatDateTime(shift.opened_at) : ""}</p>
-                  </div>
-                  <div className="p-3 bg-muted/50 rounded-lg">
-                    <p className="text-xs text-muted-foreground">Opening Float (Total)</p>
-                    <p className="font-semibold text-lg">
-                      {formatLL(openingTotal)}
-                      {(shift.opening_usd > 0 || shift.opening_ll > 0) && (
-                        <span className="text-xs text-muted-foreground block">
-                          {shift.opening_ll > 0 ? `${formatLL(shift.opening_ll)} + ` : ""}
-                          {shift.opening_usd > 0 ? `${formatUSD(shift.opening_usd)}` : "0"}
-                        </span>
-                      )}
-                    </p>
-                  </div>
-                </div>
+          <div className="grid gap-4 lg:grid-cols-2">
+            {registerStates.map((state) => (
+              <RegisterCard
+                key={state.register.id}
+                state={state}
+                isThisDevice={state.register.id === activeRegisterId}
+                canEdit={canEdit}
+                isOwner={!!user?.isOwner}
+                onOpenShift={() => {
+                  setOpenValues({ ...EMPTY_OPEN, registerId: state.register.id });
+                  setOpenDialog(true);
+                }}
+                onCloseShift={() => {
+                  setCloseValues(EMPTY_CLOSE);
+                  setCloseShiftId(state.shift?.id ?? null);
+                }}
+                onAddAdjustment={() => {
+                  setAdjValues(EMPTY_ADJ);
+                  setAdjShiftId(state.shift?.id ?? null);
+                }}
+                onUseOnThisDevice={() => handleUseOnThisDevice(state.register)}
+                onViewRequests={() => {
+                  const first = requests.find((r) => r.register_id === state.register.id);
+                  if (first) setDecidingRequest(first);
+                }}
+              />
+            ))}
+          </div>
+        )}
 
-                <Separator />
+        {/* ── Requests ─────────────────────────────────────────────────── */}
+        <RequestsPanel
+          requests={requests}
+          canDecide={canEdit}
+          onSelect={(r) => {
+            setDecisionNote("");
+            setDecidingRequest(r);
+          }}
+        />
 
-                {/* Per-user transaction summary */}
-                <div>
-                  <p className="text-sm font-medium flex items-center gap-2 mb-2">
-                    <Users className="h-4 w-4" />
-                    Today's Sales by User
-                  </p>
-                  {perUser.length === 0 ? (
-                    <p className="text-sm text-muted-foreground">No transactions yet today.</p>
-                  ) : (
-                    <div className="space-y-1.5">
-                      {perUser.map((u) => (
-                        <div key={u.name} className="flex justify-between text-sm">
-                          <span>{u.name}</span>
-                          <span className="font-medium">
-                            {u.count} sale{u.count !== 1 ? "s" : ""} · {formatLL(u.total)}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </CardContent>
-            </Card>
-
-            {/* ── Expected drawer ── */}
-            <Card>
-              <CardHeader className="pb-3">
-                <CardTitle className="text-sm font-medium flex items-center gap-2">
-                  <Scale className="h-4 w-4" />
-                  Expected Drawer
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-2">
-                <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">Opening Float</span>
-                  <span>{formatLL(openingTotal)}</span>
-                </div>
-                <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">Cash Received (sales)</span>
-                  <span>{formatLL(cashReceived)}</span>
-                </div>
-                <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">Adjustments In</span>
-                  <span className="text-green-600">+{formatLL(adjInTotal)}</span>
-                </div>
-                <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">Adjustments Out</span>
-                  <span className="text-red-500">-{formatLL(adjOutTotal)}</span>
-                </div>
-                <Separator />
-                <div className="flex justify-between font-bold">
-                  <span>Expected End-of-Day Total</span>
-                  <span className="text-lg">{formatLL(expectedTotal)}</span>
-                </div>
-
-                {variance !== null && (
-                  <>
-                    <Separator />
-                    <div className={`p-3 rounded-lg ${variance >= 0 ? "bg-green-500/10" : "bg-red-500/10"}`}>
-                      <div className="flex justify-between items-center">
-                        <div>
-                          <p className={`font-semibold ${variance >= 0 ? "text-green-600" : "text-red-600"}`}>
-                            {variance >= 0 ? "Overage" : "Shortage"}
-                          </p>
-                          <p className="text-sm text-muted-foreground">
-                            Counted: {formatLL(closingTotal || 0)} vs Expected: {formatLL(expectedTotal)}
-                          </p>
-                        </div>
-                        <span className={`text-xl font-bold ${variance >= 0 ? "text-green-600" : "text-red-600"}`}>
-                          {variance >= 0 ? "+" : ""}{formatLL(variance)}
-                        </span>
-                      </div>
-                    </div>
-                  </>
-                )}
-              </CardContent>
-            </Card>
-
-            {/* ── Adjustments list ── */}
-            <Card>
-              <CardHeader className="pb-3">
-                <div className="flex items-center justify-between">
-                  <CardTitle className="text-sm font-medium">Adjustments</CardTitle>
-                  {user?.isOwner && shift.status === "open" && (
-                    <Button variant="outline" size="sm" onClick={() => setIsAdjDialogOpen(true)}>
-                      <Banknote className="h-4 w-4 mr-1" />
-                      Add
-                    </Button>
-                  )}
-                </div>
-              </CardHeader>
-              <CardContent>
-                {adjustments.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">No adjustments recorded for this shift.</p>
-                ) : (
-                  <div className="space-y-2">
-                    {adjustments.map((a) => (
-                      <div key={a.id} className="flex justify-between items-center text-sm p-2 bg-muted/50 rounded-lg">
-                        <div className="flex items-center gap-2">
-                          {a.adjustment_type === "cash_in" ? (
-                            <TrendingUp className="h-4 w-4 text-green-500" />
-                          ) : (
-                            <TrendingDown className="h-4 w-4 text-red-500" />
-                          )}
-                          <div>
-                            <p className="font-medium">
-                              {a.adjustment_type === "cash_in" ? "Cash In" : "Cash Out"}: 
-                              {" "}{formatLL(combineCurrencyTotals(a.amount_ll, a.amount_usd))}
-                            </p>
-                            <p className="text-xs text-muted-foreground">{a.reason} — {a.created_by_name}</p>
-                          </div>
-                        </div>
-                        <span className="text-xs text-muted-foreground">{formatDateTime(a.created_at)}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-
-            {/* ── Close shift button ── */}
-            {shift.status === "open" && canEdit && (
-              <Button
-                variant="default"
-                className="w-full h-12"
-                onClick={() => setIsCloseDialogOpen(true)}
-              >
-                <Check className="h-5 w-5 mr-2" />
-                Close Shift
-              </Button>
-            )}
-            {shift.status === "closed" && (
-              <div className="text-center text-sm text-muted-foreground">
-                Shift closed by {shift.closed_by_name || "Store Owner"} on{" "}
-                {shift.closed_at ? formatDateTime(shift.closed_at) : ""}
-              </div>
-            )}
-          </>
+        {/* ── Performance ──────────────────────────────────────────────── */}
+        {performance && registers.length > 0 && (
+          <RegisterPerformance
+            registers={performance.registers}
+            storeRevenue={performance.storeRevenue}
+            busiestRegisterId={performance.busiestRegisterId}
+            rangeLabel="over the last 30 days"
+          />
         )}
       </div>
 
-      {/* ── Open Shift Dialog ── */}
-      <Dialog open={isOpenDialogOpen} onOpenChange={setIsOpenDialogOpen}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>Open Cash Register</DialogTitle>
-            <DialogDescription>
-              Enter the starting float for {businessDate}.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4 py-2">
-            <div className="space-y-2">
-              <Label>Opening Float (LL)</Label>
-              <Input type="number" inputMode="numeric" value={openingLl} onChange={(e) => setOpeningLl(e.target.value)} placeholder="0" />
-            </div>
-            <div className="space-y-2">
-              <Label>Opening Float (USD)</Label>
-              <Input type="number" inputMode="numeric" value={openingUsd} onChange={(e) => setOpeningUsd(e.target.value)} placeholder="0" />
-            </div>
-            {(parseFloat(openingLl) > 0 || parseFloat(openingUsd) > 0) && (
-              <div className="flex justify-between text-sm p-2 bg-muted/50 rounded-lg">
-                <span>Total</span>
-                <span className="font-bold">{formatLL(combineCurrencyTotals(parseFloat(openingLl) || 0, parseFloat(openingUsd) || 0))}</span>
-              </div>
-            )}
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setIsOpenDialogOpen(false)}>Cancel</Button>
-            <Button onClick={handleOpenShift} disabled={isOpening}>
-              {isOpening ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : null}
-              Open Shift
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {/* ── Dialogs ────────────────────────────────────────────────────── */}
+      <OpenShiftDialog
+        open={openDialog}
+        onOpenChange={(v) => {
+          setOpenDialog(v);
+          if (!v) setOpenValues(EMPTY_OPEN);
+        }}
+        registers={registers}
+        blockedRegisterIds={blockedRegisterIds}
+        values={openValues}
+        onChange={setOpenValues}
+        onSubmit={handleOpenShift}
+        isSubmitting={isOpening}
+        canCreateRegister={canEdit && isOnline}
+      />
 
-      {/* ── Close Shift Dialog ── */}
-      <Dialog open={isCloseDialogOpen} onOpenChange={setIsCloseDialogOpen}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>Close Cash Register</DialogTitle>
-            <DialogDescription>
-              Count the physical money in the drawer and enter the totals below.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4 py-2">
-            {(expectedTotal > 0) && (
-              <div className="p-3 bg-muted/50 rounded-lg">
-                <p className="text-sm font-medium">Expected total: {formatLL(expectedTotal)}</p>
-                <p className="text-xs text-muted-foreground mt-1">
-                  Opening {formatLL(openingTotal)} + Cash received {formatLL(cashReceived)} 
-                  {" "}+ In {formatLL(adjInTotal)} - Out {formatLL(adjOutTotal)}
-                </p>
-              </div>
-            )}
-            <div className="space-y-2">
-              <Label>Counted Amount (LL)</Label>
-              <Input type="number" inputMode="numeric" value={closingLl} onChange={(e) => setClosingLl(e.target.value)} placeholder="0" />
-            </div>
-            <div className="space-y-2">
-              <Label>Counted Amount (USD)</Label>
-              <Input type="number" inputMode="numeric" value={closingUsd} onChange={(e) => setClosingUsd(e.target.value)} placeholder="0" />
-            </div>
-            <div className="space-y-2">
-              <Label>Notes (optional)</Label>
-              <Input value={closingNotes} onChange={(e) => setClosingNotes(e.target.value)} placeholder="e.g., drawer was short $1" />
-            </div>
-            {(parseFloat(closingLl) > 0 || parseFloat(closingUsd) > 0) && (
-              <div className="flex justify-between text-sm p-2 bg-muted/50 rounded-lg">
-                <span>Counted Total</span>
-                <span className="font-bold">{formatLL(combineCurrencyTotals(parseFloat(closingLl) || 0, parseFloat(closingUsd) || 0))}</span>
-              </div>
-            )}
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setIsCloseDialogOpen(false)}>Cancel</Button>
-            <Button onClick={handleCloseShift} disabled={isClosing}>
-              {isClosing ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : null}
-              Close Shift
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <CloseShiftDialog
+        open={closeShiftId !== null}
+        onOpenChange={(v) => {
+          if (!v) {
+            setCloseShiftId(null);
+            setCloseValues(EMPTY_CLOSE);
+          }
+        }}
+        registerName={
+          registerStates.find((s) => s.shift?.id === closeShiftId)?.register.name || "register"
+        }
+        summary={registerStates.find((s) => s.shift?.id === closeShiftId)?.summary ?? null}
+        values={closeValues}
+        onChange={setCloseValues}
+        onSubmit={handleCloseShift}
+        isSubmitting={isClosing}
+      />
 
-      {/* ── Adjustment Dialog ── */}
-      <Dialog open={isAdjDialogOpen} onOpenChange={setIsAdjDialogOpen}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>Record Cash Adjustment</DialogTitle>
-            <DialogDescription>
-              Record money added to or removed from the drawer.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4 py-2">
-            <div className="flex gap-2">
-              <Button
-                variant={adjType === "cash_in" ? "default" : "outline"}
-                className="flex-1"
-                onClick={() => setAdjType("cash_in")}
-              >
-                <TrendingUp className="h-4 w-4 mr-1" /> Cash In
-              </Button>
-              <Button
-                variant={adjType === "cash_out" ? "default" : "outline"}
-                className="flex-1"
-                onClick={() => setAdjType("cash_out")}
-              >
-                <TrendingDown className="h-4 w-4 mr-1" /> Cash Out
-              </Button>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-2">
-                <Label>Amount (LL)</Label>
-                <Input type="number" inputMode="numeric" value={adjLl} onChange={(e) => setAdjLl(e.target.value)} placeholder="0" />
-              </div>
-              <div className="space-y-2">
-                <Label>Amount (USD)</Label>
-                <Input type="number" inputMode="numeric" value={adjUsd} onChange={(e) => setAdjUsd(e.target.value)} placeholder="0" />
-              </div>
-            </div>
-            <div className="space-y-2">
-              <Label>Reason (required)</Label>
-              <Input value={adjReason} onChange={(e) => setAdjReason(e.target.value)} placeholder="e.g., supplies purchase, cash top-up" />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setIsAdjDialogOpen(false)}>Cancel</Button>
-            <Button onClick={handleAddAdjustment} disabled={isAddingAdj} variant={adjType === "cash_in" ? "default" : "destructive"}>
-              {isAddingAdj ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : null}
-              Save Adjustment
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <AdjustmentDialog
+        open={adjShiftId !== null}
+        onOpenChange={(v) => {
+          if (!v) {
+            setAdjShiftId(null);
+            setAdjValues(EMPTY_ADJ);
+          }
+        }}
+        registerName={
+          registerStates.find((s) => s.shift?.id === adjShiftId)?.register.name || "register"
+        }
+        values={adjValues}
+        onChange={setAdjValues}
+        onSubmit={handleAddAdjustment}
+        isSubmitting={isAdjusting}
+      />
+
+      <RequestDecisionDialog
+        request={decidingRequest}
+        onOpenChange={(v) => {
+          if (!v) {
+            setDecidingRequest(null);
+            setDecisionNote("");
+          }
+        }}
+        note={decisionNote}
+        onNoteChange={setDecisionNote}
+        onDecide={handleDecide}
+        isSubmitting={isDeciding}
+      />
     </div>
   );
 }

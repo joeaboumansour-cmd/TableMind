@@ -64,6 +64,15 @@ export const ACTIVITY_ACTIONS = [
   "cash.shift_open",
   "cash.shift_close",
   "cash.adjustment",
+  "cash.register_create",
+  "cash.register_rename",
+  "cash.register_deactivate",
+  "cash.register_select",
+  // Emitted once per page load when a register is showing an overdue shift, so
+  // the trail records that somebody was told the drawer still needs counting.
+  "cash.shift_overdue_seen",
+  "cash.request_approve",
+  "cash.request_reject",
 
   // --- Auth
   "auth.login",

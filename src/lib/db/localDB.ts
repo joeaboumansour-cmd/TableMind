@@ -74,6 +74,13 @@ export interface QueuedTransaction {
   change_given_usd: number;
   user_id?: string;
   user_name?: string;
+  /**
+   * The drawer this till was assigned to when the sale was rung.
+   * Forwarded to the server, which resolves it into a shift_id by matching
+   * created_at against that register's shift windows — so a sale queued during
+   * one shift and synced during the next still lands on the right one.
+   */
+  register_id?: string;
   items: QueuedTransactionItem[];
   created_at: string;
   /** Sync attempts so far. Absent on rows queued before this field existed. */
@@ -942,6 +949,10 @@ export async function queueStockDecrementsForTransaction(
 
 export interface CashShiftOpenPayload {
   store_id: string;
+  /** Which drawer is being opened. Required since migration 027. */
+  register_id: string;
+  /** Optional per-shift note, e.g. "Morning — Ali". */
+  label?: string;
   business_date: string;
   opening_ll: number;
   opening_usd: number;

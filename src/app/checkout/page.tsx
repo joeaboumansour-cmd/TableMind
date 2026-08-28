@@ -37,6 +37,7 @@ import {
 } from "lucide-react";
 import { useCartStore } from "@/lib/stores/cartStore";
 import { buildTransactionItems, buildStockDecrements } from "@/lib/pos/lineItems";
+import { getActiveRegisterId } from "@/lib/cash/activeRegister";
 import { useReloadGuard } from "@/lib/pwa/useReloadGuard";
 import { toast } from "@/lib/toast";
 import {
@@ -363,6 +364,13 @@ function CheckoutContent() {
       // payload and the offline queue payload below cannot disagree about it.
       const lineItems = buildTransactionItems(items);
 
+      // Which drawer this till rings into. Device-local; the SERVER turns it
+      // into a shift by matching the sale's timestamp against that register's
+      // shift windows. Undefined is fine and common — the sale is recorded
+      // unassigned and shows in the Unassigned bucket on the cash page. Cash
+      // register state must never block a sale.
+      const registerId = getActiveRegisterId();
+
       // Payload for POST /api/transactions (server field names).
       const transactionData: any = {
         transaction_number: txnNumber,
@@ -377,6 +385,7 @@ function CheckoutContent() {
         usd_amount_paid: effectivePaidUsd,
         usd_change_given: calcChangeUsd,
         items: lineItems,
+        ...(registerId && { register_id: registerId }),
         ...userInfo,
       };
 
@@ -399,6 +408,7 @@ function CheckoutContent() {
         change_given_usd: calcChangeUsd,
         items: lineItems,
         created_at: new Date().toISOString(),
+        ...(registerId && { register_id: registerId }),
         ...userInfo,
       };
 

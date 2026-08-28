@@ -195,6 +195,45 @@ export async function POST(request: Request) {
       return new Date(Math.min(parsed, Date.now())).toISOString();
     })();
 
+    // ── Which cash drawer did this sale go into? ────────────────────────────
+    //
+    // The device sends the register it is standing at (device-local, see
+    // lib/cash/activeRegister.ts). The SHIFT is resolved here rather than on the
+    // client, by matching the sale's own timestamp against that register's
+    // shift windows.
+    //
+    // Resolving by time rather than by "what is open right now" is what keeps
+    // offline sales honest: a sale rung during shift A and synced after shift B
+    // opened still lands on A. Resolving on the client could not do this — the
+    // client may have been offline for days and has no view of the shift table.
+    //
+    // Everything here is best-effort. A sale is NEVER failed because the cash
+    // register is misconfigured; an unresolved sale simply carries a null
+    // shift_id and appears in the Unassigned bucket on the cash page.
+    const registerId = typeof body.register_id === "string" && body.register_id ? body.register_id : null;
+    let resolvedShiftId: string | null = null;
+
+    if (registerId) {
+      try {
+        const at = saleTime || new Date().toISOString();
+        const { data: matchingShift } = await supabase
+          .from("cash_shifts")
+          .select("id")
+          .eq("store_id", store_id)          // tenancy: never resolve into another store's shift
+          .eq("register_id", registerId)
+          .lte("opened_at", at)
+          .or(`closed_at.is.null,closed_at.gte.${at}`)
+          .order("opened_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        resolvedShiftId = matchingShift?.id || null;
+      } catch (shiftErr: any) {
+        // Log and carry on — see the note above about never failing a sale.
+        console.error("[API] Shift resolution failed, recording sale unassigned:", shiftErr?.message || shiftErr);
+      }
+    }
+
     // Check if a transaction with this transaction_number already exists for this store
     // This prevents duplicate entries when the sync engine pushes the same queued transaction twice
     const { data: existingTxn } = await supabase
@@ -269,6 +308,11 @@ export async function POST(request: Request) {
         ...(body.user_id && {
           user_id: body.user_id,
         }),
+        // Cash drawer attribution. Both nullable: register_id records what the
+        // device claimed even when no shift matched, which is what makes a
+        // misconfigured till diagnosable instead of invisible.
+        ...(registerId && { register_id: registerId }),
+        ...(resolvedShiftId && { shift_id: resolvedShiftId }),
       })
       .select()
       .single();

@@ -93,6 +93,10 @@ export interface Database {
           usd_total_amount: number | null;
           usd_amount_paid: number | null;
           usd_change_given: number | null;
+          /** Which shift this sale was rung into. Null = Unassigned. */
+          shift_id: string | null;
+          /** Which drawer the till claimed. Recorded even when no shift matched. */
+          register_id: string | null;
           created_at: string;
         };
         Insert: {
@@ -108,6 +112,8 @@ export interface Database {
           usd_total_amount?: number | null;
           usd_amount_paid?: number | null;
           usd_change_given?: number | null;
+          shift_id?: string | null;
+          register_id?: string | null;
           created_at?: string;
         };
         Update: {
@@ -123,6 +129,8 @@ export interface Database {
           usd_total_amount?: number | null;
           usd_amount_paid?: number | null;
           usd_change_given?: number | null;
+          shift_id?: string | null;
+          register_id?: string | null;
           created_at?: string;
         };
       };
@@ -161,10 +169,100 @@ export interface Database {
           currency?: string;
         };
       };
+      cash_registers: {
+        Row: {
+          id: string;
+          store_id: string;
+          name: string;
+          is_active: boolean;
+          sort_order: number;
+          created_by: string | null;
+          created_by_name: string | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          store_id: string;
+          name: string;
+          is_active?: boolean;
+          sort_order?: number;
+          created_by?: string | null;
+          created_by_name?: string | null;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          store_id?: string;
+          name?: string;
+          is_active?: boolean;
+          sort_order?: number;
+          created_by?: string | null;
+          created_by_name?: string | null;
+          created_at?: string;
+        };
+      };
+      register_requests: {
+        Row: {
+          id: string;
+          store_id: string;
+          register_id: string;
+          shift_id: string | null;
+          kind: string;
+          status: string;
+          requested_by: string | null;
+          requested_by_name: string;
+          reason: string | null;
+          payload: Record<string, unknown>;
+          decided_by: string | null;
+          decided_by_name: string | null;
+          decided_at: string | null;
+          decision_note: string | null;
+          expires_at: string;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          store_id: string;
+          register_id: string;
+          shift_id?: string | null;
+          kind: string;
+          status?: string;
+          requested_by?: string | null;
+          requested_by_name?: string;
+          reason?: string | null;
+          payload?: Record<string, unknown>;
+          decided_by?: string | null;
+          decided_by_name?: string | null;
+          decided_at?: string | null;
+          decision_note?: string | null;
+          expires_at: string;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          store_id?: string;
+          register_id?: string;
+          shift_id?: string | null;
+          kind?: string;
+          status?: string;
+          requested_by?: string | null;
+          requested_by_name?: string;
+          reason?: string | null;
+          payload?: Record<string, unknown>;
+          decided_by?: string | null;
+          decided_by_name?: string | null;
+          decided_at?: string | null;
+          decision_note?: string | null;
+          expires_at?: string;
+          created_at?: string;
+        };
+      };
       cash_shifts: {
         Row: {
           id: string;
           store_id: string;
+          register_id: string;
+          label: string | null;
           business_date: string;
           status: string;
           opened_by: string | null;
@@ -184,6 +282,8 @@ export interface Database {
         Insert: {
           id?: string;
           store_id: string;
+          register_id: string;
+          label?: string | null;
           business_date: string;
           status?: string;
           opened_by?: string | null;
@@ -203,6 +303,8 @@ export interface Database {
         Update: {
           id?: string;
           store_id?: string;
+          register_id?: string;
+          label?: string | null;
           business_date?: string;
           status?: string;
           opened_by?: string | null;

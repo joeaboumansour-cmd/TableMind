@@ -40,6 +40,7 @@ import type { Product } from "@/lib/types/product";
 import type { CartItem } from "@/lib/types/cart";
 
 import LaneTabs from "./LaneTabs";
+import RegisterIndicator from "@/components/pos/RegisterIndicator";
 import SmartScanInput from "./SmartScanInput";
 import UnknownBarcodePrompt from "./UnknownBarcodePrompt";
 import ProCartRow from "./ProCartRow";
@@ -614,6 +615,10 @@ export default function ProPOSLayout({
                       {getItemCount()} unit{getItemCount() !== 1 ? "s" : ""}
                     </span>
                   </h2>
+                  {/* Which drawer this till rings into. Renders nothing at all
+                      unless the cash-register feature is on, so single-drawer
+                      stores see no new chrome. */}
+                  <RegisterIndicator />
                   <button
                     type="button"
                     onClick={() => setClearConfirmOpen(true)}
