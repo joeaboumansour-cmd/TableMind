@@ -19,6 +19,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Loader2, ScanBarcode, X } from "lucide-react";
 import { parseLlInput, type EditScope } from "./CartLineEditor";
+import { logActivity } from "@/lib/activity/logger";
 
 interface UnknownBarcodePromptProps {
   barcode: string;
@@ -39,6 +40,7 @@ export default function UnknownBarcodePrompt({
   const [name, setName] = useState("");
   const [price, setPrice] = useState("");
   const nameRef = useRef<HTMLInputElement | null>(null);
+  const submittedRef = useRef(false);
 
   // Focus on mount. A NEW barcode remounts this component rather than
   // resetting it — the parent keys it on the code — so there is nothing to
@@ -46,6 +48,23 @@ export default function UnknownBarcodePrompt({
   // form for it.
   useEffect(() => {
     nameRef.current?.focus();
+    logActivity("ui.modal_open", {
+      target: "unknown barcode",
+      details: { kind: "unknown_barcode", barcode },
+    });
+    // The prompt is keyed on the barcode, so it unmounts when the cashier moves
+    // on — whether they priced the item or walked away from it. Recording the
+    // discard here is what separates "did not sell it" from "sold it".
+    return () => {
+      if (!submittedRef.current) {
+        logActivity("ui.modal_discard", {
+          target: "unknown barcode",
+          details: { kind: "unknown_barcode", barcode },
+        });
+      }
+    };
+    // Mount/unmount only: a new barcode is a new component instance.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const parsedPrice = parseLlInput(price);
@@ -53,6 +72,11 @@ export default function UnknownBarcodePrompt({
 
   const submit = (scope: EditScope) => {
     if (!canSubmit || parsedPrice === null) return;
+    submittedRef.current = true;
+    logActivity("ui.modal_submit", {
+      target: "unknown barcode",
+      details: { kind: "unknown_barcode", barcode, scope, name: name.trim(), price_ll: parsedPrice },
+    });
     onSubmit({ name: name.trim(), unitPriceLl: parsedPrice }, scope);
   };
 

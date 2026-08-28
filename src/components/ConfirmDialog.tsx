@@ -41,6 +41,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { logActivity } from "@/lib/activity/logger";
 
 /** Cooldown applied to every destructive confirm unless a caller overrides it. */
 export const CONFIRM_COUNTDOWN_SECONDS = 3;
@@ -194,11 +195,22 @@ export function useConfirm() {
     resolve?.(value);
   }, []);
 
+  // Instrumenting the hook rather than each caller covers every confirmation in
+  // the app at once, and — the part that matters — records DISCARD separately
+  // from CONFIRM. A click on the backdrop and a click on the destructive button
+  // look identical from the outside; only the dialog knows which happened.
+  const titleRef = useRef<string>("");
+
   const confirm = useCallback(
     (options: ConfirmDialogOptions) => {
       settle(false); // a second request supersedes one still on screen
       idRef.current += 1;
       const id = idRef.current;
+      titleRef.current = options.title;
+      logActivity("ui.modal_open", {
+        target: options.title,
+        details: { kind: "confirm", confirm_label: options.confirmLabel },
+      });
       return new Promise<boolean>((resolve) => {
         resolveRef.current = resolve;
         setRequest({ id, open: true, options });
@@ -209,7 +221,13 @@ export function useConfirm() {
 
   const handleOpenChange = useCallback(
     (next: boolean) => {
-      if (!next) settle(false);
+      if (!next) {
+        settle(false);
+        logActivity("ui.modal_discard", {
+          target: titleRef.current,
+          details: { kind: "confirm" },
+        });
+      }
       // Kept mounted while closing so the dialog can animate out.
       setRequest((prev) => (prev ? { ...prev, open: next } : prev));
     },
@@ -218,6 +236,10 @@ export function useConfirm() {
 
   const handleConfirm = useCallback(() => {
     settle(true);
+    logActivity("ui.modal_submit", {
+      target: titleRef.current,
+      details: { kind: "confirm" },
+    });
     setRequest((prev) => (prev ? { ...prev, open: false } : prev));
   }, [settle]);
 

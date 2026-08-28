@@ -45,6 +45,7 @@ import {
   Settings,
   Phone,
   MapPin,
+  Activity,
 } from "lucide-react";
 import { useConfirm } from "@/components/ConfirmDialog";
 import { toast } from "@/lib/toast";
@@ -264,6 +265,13 @@ export default function AdminPage() {
     });
     if (!confirmed) return;
 
+    // The session cookie is httpOnly, so it can only be dropped by the server.
+    // Clearing localStorage alone would leave a valid session behind.
+    try {
+      await fetch("/api/admin/logout", { method: "POST" });
+    } catch {
+      // Offline or the request failed — the cookie expires on its own in 12h.
+    }
     localStorage.removeItem("goldensquirrel_admin");
     router.push("/admin/login");
   };
@@ -605,6 +613,10 @@ export default function AdminPage() {
             </div>
 
             <div className="flex items-center gap-2">
+              <Button variant="outline" onClick={() => router.push("/admin/activity")}>
+                <Activity className="h-4 w-4 mr-2" />
+                Activity
+              </Button>
               <Button variant="outline" onClick={fetchStores}>
                 <RefreshCw className="h-4 w-4 mr-2" />
                 Refresh

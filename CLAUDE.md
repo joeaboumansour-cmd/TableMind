@@ -94,8 +94,9 @@ The app must keep selling with no internet. This shapes almost every design deci
 | `transactions_cache` | Read-only history cache for the transactions page |
 | `offline_queue` | **Completed sales** waiting to be pushed. The money-critical queue. |
 | `pending_writes` | Generic non-sale writes (favourites, cash shifts, adjustments, **product creates/updates**) |
+| `activity_buffer` | Activity-log events waiting to be shipped. **Expendable** — capped at 20,000 rows, oldest shed first, and the first thing dropped under storage pressure. See §12. |
 
-Schema is at `version(3)`. Dexie versions are **append-only** — add a new `db.version(n).stores({...})` block, never edit an existing one. Compound indexes in use: `[store_id+barcode]` (barcode lookups must be store-scoped — barcodes are not unique across tenants), `[store_id+created_at]`, `[store_id+name]`.
+Schema is at `version(4)`. Dexie versions are **append-only** — add a new `db.version(n).stores({...})` block, never edit an existing one. Compound indexes in use: `[store_id+barcode]` (barcode lookups must be store-scoped — barcodes are not unique across tenants), `[store_id+created_at]`, `[store_id+name]`.
 
 Every write path is retry-capped at 5 attempts. Queued **transactions** are the exception to dropping: on exhaustion they are **dead-lettered** (`failed_permanently`), never deleted — each one is a completed sale whose money was taken. `getQueuedTransactions()` excludes them; `getDeadLetterTransactions()` returns them. **Nothing surfaces them in the UI yet** — that's an open task.
 
@@ -219,7 +220,7 @@ Many components read localStorage directly instead of using `useAuth()`. That's 
 
 Store-level flags in a `stores.features` JSONB column (migration **`017`**).
 
-- Registry: **`src/lib/features.ts`** — currently **8** keys: `pos`, `inventory`, `transactions`, `receipts`, `product_discount`, `transaction_analytics`, `desktop_shortcuts`, `cash_register`.
+- Registry: **`src/lib/features.ts`** — currently **9** keys: `pos`, `inventory`, `transactions`, `receipts`, `product_discount`, `transaction_analytics`, `desktop_shortcuts`, `cash_register`, `activity_logging`.
 - Guard component: **`src/lib/auth/featureGuard.tsx`** (not `src/components/FeatureFlagGuard.tsx` — that path in the docs is wrong).
 - Admin API: `GET|PATCH /api/admin/stores/features?store_id=…` (query param, not a path segment).
 - Always merge through `mergeFeaturesWithDefaults()` so a newly added flag has a value for existing stores.
@@ -289,7 +290,7 @@ git checkout 744ad0d -- tests src/tests playwright.config.ts vitest.config.ts
   a write on it**; it is a markup, not a 0-100 percentage, and it is routinely
   over 100 (up to 489% in one store) and sometimes negative. `discount_percentage`
   IS a real 0-100 percentage.
-- Migrations are append-only and manually numbered; the highest is **`025`**. **`008` is already duplicated** — check the highest number before adding.
+- Migrations are append-only and manually numbered; the highest is **`026`**. **`008` is already duplicated** — check the highest number before adding.
 - `.env.local` is correctly gitignored. Required vars are in `.env.example`.
 - Path alias: `@/*` → `./src/*`.
 - Careful: `src/lib/utils.ts` (file) and `src/lib/utils/` (directory) both exist. `@/lib/utils` resolves to the **file**; formatting helpers are at `@/lib/utils/format`.
@@ -317,3 +318,55 @@ git checkout 744ad0d -- tests src/tests playwright.config.ts vitest.config.ts
 - **Never** weaken a store-scoping filter, an auth check, or a rounding rule to make something work.
 - When touching money, offline sync, or auth, say what you verified — not just what you changed.
 - The audit doc is the shared backlog. When you fix something in it, mark it resolved there in the same change.
+
+---
+
+## 12. Activity logging (admin trail)
+
+Every action and UI interaction in a store is recorded to `activity_logs` and read only by the admin console at `/admin/activity`. Retention is **exactly 7 days**.
+
+### What is and is not captured
+
+**Actions** come from explicit `logActivity()` calls; **interactions** (clicks, field commits, named shortcuts, navigation) come from a global passive listener, `src/lib/activity/domTracker.ts`.
+
+**Individual keypresses are deliberately NOT recorded.** A scan is one event carrying the whole code; a text field is one event on blur carrying its final value. Per-key logging would be hundreds of thousands of rows a day per store, would capture passwords character by character, and would fill the offline buffer that shares a disk with queued sales. Do not "improve" this by adding a keydown logger.
+
+Values of password fields, anything inside `data-log="redact"`, and any `details` key matching `/pass|secret|token|credential|pin|otp/` are never recorded. Give a control a `data-log="…"` attribute to name it in the trail.
+
+### The pieces
+
+| File | Role |
+|---|---|
+| `src/lib/activity/types.ts` | The closed vocabulary. Every event name lives here; the server rejects anything not in it. |
+| `src/lib/activity/logger.ts` | `logActivity(action, opts)` — synchronous, never throws, never returns a promise. In-memory ring, flushed at 50 events / 5s / pagehide. |
+| `src/lib/activity/flush.ts` | Posts to `/api/activity`; buffers to Dexie on any failure; drains on reconnect. |
+| `src/lib/activity/domTracker.ts` | The passive UI trail. |
+| `src/components/ActivityTracker.tsx` | Mounted in `providers.tsx`. No-ops on `/admin` and when the flag is off. |
+| `POST /api/activity` | Ingest. Validates, clamps `occurred_at`, rate-limits, and runs partition maintenance at most hourly. |
+| `GET /api/admin/activity` | Read + `?format=csv`. Gated on `requireAdmin()`. |
+
+### Rules
+
+- **A log call must never be awaited, and never on the money path.** `logActivity` is fire-and-forget by construction; keep it that way.
+- **Cart events are emitted from `commitItems()` in `cartStore.ts`, the single writer.** Add a new mutation there and it is logged automatically — do not scatter `logActivity` through the actions instead.
+- **`occurred_at` is the client's clock, captured when the action happened**, and the server honours it. The gap to `received_at` is the outage. Never stamp a buffered event with flush time (that is the audit P1-1 mistake).
+- **`store_id` and the user fields are baked into the event at enqueue time.** `logout()` clears `goldensquirrel_auth`, so an event that looked them up at flush time would have no tenant. `auth.logout` is therefore logged *before* the keys are cleared.
+- **The buffer is expendable.** It is dropped first by `freeExpendableSpace()`, capped at 20,000 rows, and a batch the server rejects with a 4xx is discarded rather than dead-lettered. This is the opposite of how queued sales behave, on purpose.
+- **The flusher yields to the sync engine** via `setSyncBusy()`, called around `runSync()`.
+- **Kill switch:** the `activity_logging` feature flag, default on, toggled per store from the existing admin feature dialog. Use it before reaching for a deploy if volume becomes a problem.
+
+### Retention
+
+`activity_logs` is **range-partitioned by day**. `maintain_activity_log_partitions(7)` creates the partitions for the retained window plus tomorrow, and **drops** anything older — the "new day deletes the oldest day" rule is a partition drop, not a `DELETE`.
+
+There is **no DEFAULT partition**, because one would block creating the next day's partition. Instead `POST /api/activity` drops events older than the window and clamps future timestamps to `now`. If an insert ever does miss a partition, the route runs maintenance and retries once.
+
+Maintenance is called opportunistically from the ingest route (at most hourly per instance) — no cron, no Vercel config. The RPC is granted to `service_role` if you later want pg_cron to drive it.
+
+### Admin auth
+
+`src/lib/auth/adminSession.ts` — HS256 via `jose`, httpOnly `gs_admin_session` cookie, 12h. **`ADMIN_JWT_SECRET` throws when unset**; there is no fallback secret, unlike `src/lib/auth/jwt.ts` (which is TableMind scaffolding and must not be used here). The localStorage `goldensquirrel_admin` blob still exists but only drives the client-side redirect — it is not trusted by any route.
+
+`requireAdmin()` is a one-line gate. The older `/api/admin` routes are still unauthenticated (audit P0-2); use it when you touch them.
+
+---

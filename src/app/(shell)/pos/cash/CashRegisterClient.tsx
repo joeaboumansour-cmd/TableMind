@@ -35,6 +35,7 @@ import { formatLL, formatUSD, formatDateTime } from "@/lib/utils/format";
 import { combineCurrencyTotals, computeExpectedDrawer, computeVariance } from "@/lib/cashShift";
 import { connectivity } from "@/lib/connectivity";
 import { useReloadGuard } from "@/lib/pwa/useReloadGuard";
+import { logActivity } from "@/lib/activity/logger";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 interface CashShift {
@@ -223,6 +224,10 @@ export function CashRegisterPage() {
     }
 
     setIsOpening(true);
+    logActivity("cash.shift_open", {
+      target: businessDate,
+      details: { opening_ll: ll, opening_usd: usd, online: connectivity.isOnline },
+    });
     try {
       const headers = buildAuthHeaders(user);
       if (!connectivity.isOnline) {
@@ -275,6 +280,15 @@ export function CashRegisterPage() {
     if (!shift?.id) return;
 
     setIsClosing(true);
+    logActivity("cash.shift_close", {
+      target: shift.id,
+      details: {
+        closing_ll: ll,
+        closing_usd: usd,
+        has_notes: closingNotes.trim().length > 0,
+        online: connectivity.isOnline,
+      },
+    });
     try {
       const headers = buildAuthHeaders(user);
       if (!connectivity.isOnline) {
@@ -333,11 +347,25 @@ export function CashRegisterPage() {
     }
     if (!user?.isOwner) {
       toast.error("Only the store owner can record adjustments");
+      logActivity("auth.permission_denied", {
+        target: "record cash adjustment",
+        details: { permission: "owner" },
+      });
       return;
     }
     if (!shift?.id) return;
 
     setIsAddingAdj(true);
+    logActivity("cash.adjustment", {
+      target: adjType,
+      details: {
+        shift_id: shift.id,
+        amount_ll: ll,
+        amount_usd: usd,
+        reason: adjReason.trim(),
+        online: connectivity.isOnline,
+      },
+    });
     try {
       const headers = buildAuthHeaders(user);
       if (!connectivity.isOnline) {

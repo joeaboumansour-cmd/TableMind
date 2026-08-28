@@ -140,6 +140,21 @@ export interface PendingWrite {
   failed_permanently?: boolean;
 }
 
+/**
+ * One activity event waiting to be shipped to /api/activity.
+ *
+ * `seq` is a Dexie auto-increment key, which makes the buffer a strict FIFO:
+ * draining and trimming both work in insertion order without needing to sort.
+ * The event carries its own `occurred_at`, so a buffered event keeps the time
+ * it actually happened rather than the time it was flushed.
+ */
+export interface BufferedActivityEvent {
+  seq?: number;
+  occurred_at: string;
+  /** An ActivityEvent. Typed as unknown here so localDB stays free of activity imports. */
+  event: unknown;
+}
+
 // ---- Database ----
 
 const db = new Dexie("GoldenSquirrelPOS") as Dexie & {
@@ -147,6 +162,7 @@ const db = new Dexie("GoldenSquirrelPOS") as Dexie & {
   transactions_cache: EntityTable<CachedTransaction, "id">;
   offline_queue: EntityTable<QueuedTransaction, "id">;
   pending_writes: EntityTable<PendingWrite, "id">;
+  activity_buffer: EntityTable<BufferedActivityEvent, "seq">;
 };
 
 // Database version 1: initial schema
@@ -193,6 +209,32 @@ db.version(3).stores({
     "id, store_id, created_at",
   pending_writes:
     "id, type, created_at, retry_count",
+});
+
+// Database version 4: the activity buffer.
+//
+// This is a NEW top-level table rather than another PendingWrite type, and the
+// offline-write skill discourages that — so, the reasons:
+//   - pending_writes is read WHOLE by getPendingWrites() on every 30s sync
+//     cycle, on the money path. A day of buffered UI events would make that
+//     scan expensive for no benefit to the thing it exists to protect.
+//   - the retry semantics are inverted. A pending write is retried and then
+//     dead-lettered because it represents something the server must eventually
+//     learn. A log event that will not send is simply dropped.
+//   - the storage priority is inverted too: this buffer is the FIRST thing
+//     sacrificed under disk pressure, ahead of transactions_cache.
+// Keeping it separate is what stops any of that leaking into the sale path.
+db.version(4).stores({
+  products_cache:
+    "id, store_id, name, barcode, updated_at, [store_id+barcode], [store_id+name]",
+  transactions_cache:
+    "id, store_id, transaction_number, created_at, [store_id+created_at]",
+  offline_queue:
+    "id, store_id, created_at",
+  pending_writes:
+    "id, type, created_at, retry_count",
+  activity_buffer:
+    "++seq, occurred_at",
 });
 
 // ---- Storage Pressure ----
@@ -257,6 +299,19 @@ function isQuotaError(e: unknown): boolean {
  * offline_queue is never touched. That is the data this exists to protect.
  */
 async function freeExpendableSpace(): Promise<void> {
+  // Activity events go first, ahead of everything. They are a diagnostic
+  // convenience; a log buffer must never be the reason a completed sale cannot
+  // be written to disk.
+  try {
+    const dropped = await db.activity_buffer.count();
+    if (dropped > 0) {
+      await db.activity_buffer.clear();
+      console.warn(`[LocalDB] Storage pressure — dropped ${dropped} buffered activity events`);
+    }
+  } catch (e) {
+    console.warn("[LocalDB] Could not clear activity_buffer:", e);
+  }
+
   try {
     await db.transactions_cache.clear();
     console.warn("[LocalDB] Storage pressure — dropped transactions_cache to make room");
@@ -1058,6 +1113,81 @@ export async function getPendingProductUpsertIds(): Promise<Set<string> | null> 
   } catch (e) {
     console.warn("[LocalDB] Could not read pending product upserts:", e);
     return null;
+  }
+}
+
+// ---- Activity Buffer Operations ----
+
+/**
+ * Hard cap on buffered events.
+ *
+ * At the observed event rate this is roughly a day of a busy till being
+ * offline. Past it the OLDEST events are discarded, not the newest: when the
+ * buffer is full, the events near whatever is happening now are the ones worth
+ * keeping.
+ */
+export const ACTIVITY_BUFFER_MAX = 20_000;
+
+/** How many are shed at once when the cap is hit, so trimming is not per-write. */
+const ACTIVITY_BUFFER_TRIM = 2_000;
+
+/**
+ * Buffer events for later delivery.
+ *
+ * Deliberately NOT wrapped in writeWithQuotaRescue(): that helper exists to
+ * make room for money by sacrificing caches, and doing so on behalf of a log
+ * would invert the priority it enforces. If the disk is full, the log is what
+ * loses.
+ */
+export async function bufferActivityEvents(
+  events: { occurred_at: string; event: unknown }[]
+): Promise<void> {
+  if (events.length === 0) return;
+
+  try {
+    await db.activity_buffer.bulkAdd(events as BufferedActivityEvent[]);
+
+    const total = await db.activity_buffer.count();
+    if (total > ACTIVITY_BUFFER_MAX) {
+      const excess = total - ACTIVITY_BUFFER_MAX + ACTIVITY_BUFFER_TRIM;
+      const oldest = await db.activity_buffer.orderBy("seq").limit(excess).primaryKeys();
+      if (oldest.length > 0) {
+        await db.activity_buffer.bulkDelete(oldest);
+        console.warn(`[LocalDB] Activity buffer full — discarded ${oldest.length} oldest events`);
+      }
+    }
+  } catch (e) {
+    // Never propagate. A failure to record a log must not surface anywhere the
+    // operator can see it, let alone fail the action being logged.
+    console.warn("[LocalDB] Could not buffer activity events:", e);
+  }
+}
+
+/** Oldest-first batch of buffered events, for the flusher. */
+export async function getBufferedActivityEvents(limit: number): Promise<BufferedActivityEvent[]> {
+  try {
+    return await db.activity_buffer.orderBy("seq").limit(limit).toArray();
+  } catch (e) {
+    console.warn("[LocalDB] Could not read activity buffer:", e);
+    return [];
+  }
+}
+
+/** Forget events once the server has them — or once they have been given up on. */
+export async function deleteBufferedActivityEvents(seqs: number[]): Promise<void> {
+  if (seqs.length === 0) return;
+  try {
+    await db.activity_buffer.bulkDelete(seqs);
+  } catch (e) {
+    console.warn("[LocalDB] Could not delete buffered activity events:", e);
+  }
+}
+
+export async function getActivityBufferCount(): Promise<number> {
+  try {
+    return await db.activity_buffer.count();
+  } catch {
+    return 0;
   }
 }
 

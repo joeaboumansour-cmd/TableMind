@@ -60,6 +60,7 @@ import type { CachedTransaction } from "@/lib/db";
 import dynamic from "next/dynamic";
 import { connectivity } from "@/lib/connectivity";
 import { analyticsQuery, getFilterCutoff, type DateFilter } from "@/lib/dateFilter";
+import { logActivity } from "@/lib/activity/logger";
 
 // Helper: check if user auth exists in localStorage (works offline)
 function hasAuthInStorage(): boolean {
@@ -519,6 +520,13 @@ export default function TransactionHistoryPage() {
     if (!authData) return;
 
     setIsLoadingMore(true);
+    // `cursor` rather than a row count: the count lives in state that is not a
+    // dependency of this callback, and adding it would churn the memo on every
+    // page for no benefit.
+    logActivity("ui.load_more", {
+      target: "transactions",
+      details: { cursor: nextCursor },
+    });
     try {
       const response = await fetch(
         `/api/transactions?limit=${PAGE_SIZE}&cursor=${encodeURIComponent(nextCursor)}`,
@@ -707,9 +715,11 @@ export default function TransactionHistoryPage() {
           {showAnalytics && (
             <button
               type="button"
-              onClick={() =>
-                setViewMode(viewMode === "analytics" ? "transactions" : "analytics")
-              }
+              onClick={() => {
+                const next = viewMode === "analytics" ? "transactions" : "analytics";
+                logActivity("ui.view_change", { target: next, details: { from: viewMode } });
+                setViewMode(next);
+              }}
               aria-label="Toggle analytics"
               aria-pressed={viewMode === "analytics"}
               className={cn(
@@ -885,6 +895,10 @@ export default function TransactionHistoryPage() {
                               type="button"
                               onClick={() => {
                                 vibrate(8);
+                                logActivity("ui.detail_open", {
+                                  target: t.transaction_number,
+                                  details: { transaction_id: t.id, total_ll: t.total_amount },
+                                });
                                 setDetailId(t.id);
                               }}
                               className="tap flex w-full items-center gap-3 border-b border-white/[0.05] px-4 py-3 text-left active:bg-muted/40"
@@ -994,6 +1008,10 @@ export default function TransactionHistoryPage() {
                 key={f.key}
                 type="button"
                 onClick={() => {
+                  logActivity("ui.filter_change", {
+                    target: f.key,
+                    details: { filter: "date_range", from: dateFilter },
+                  });
                   setDateFilter(f.key);
                   setShowFilters(false);
                 }}

@@ -1,5 +1,10 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import {
+  isAdminSessionConfigured,
+  signAdminSession,
+  setAdminSessionCookie,
+} from "@/lib/auth/adminSession";
 
 // Create a Supabase client with service_role key to bypass RLS
 const supabaseAdmin = createClient(
@@ -18,6 +23,17 @@ export async function POST(request: Request) {
       );
     }
 
+    // Fail before touching credentials if sessions cannot be issued — better a
+    // clear 500 at login than an admin who appears signed in but is refused by
+    // every gated route.
+    if (!isAdminSessionConfigured()) {
+      console.error("[AdminLogin] ADMIN_JWT_SECRET is not configured — refusing to sign in");
+      return NextResponse.json(
+        { error: "Admin sessions are not configured on this server" },
+        { status: 500 }
+      );
+    }
+
     // Fetch admin user by username
     const { data: admin, error: fetchError } = await supabaseAdmin
       .from("admin_users")
@@ -25,10 +41,10 @@ export async function POST(request: Request) {
       .eq("username", username)
       .single();
 
-    console.log("Login attempt:", { username, password, fetchError, admin });
-
+    // NOTE: this route used to console.log the submitted password alongside the
+    // stored password_hash on every attempt (audit P0-4). Credentials must
+    // never reach a log. Failures are reported without either value.
     if (fetchError || !admin) {
-      console.log("Fetch error or no admin:", fetchError);
       return NextResponse.json(
         { error: "Invalid username or password" },
         { status: 401 }
@@ -37,11 +53,6 @@ export async function POST(request: Request) {
 
     // Verify password (direct comparison as per current implementation)
     const isValidPassword = admin.password_hash === password;
-    console.log("Password comparison:", { 
-      storedHash: admin.password_hash, 
-      inputPassword: password, 
-      isValid: isValidPassword 
-    });
 
     if (!isValidPassword) {
       return NextResponse.json(
@@ -51,7 +62,7 @@ export async function POST(request: Request) {
     }
 
     // Return admin data (without password hash)
-    return NextResponse.json({
+    const response = NextResponse.json({
       success: true,
       admin: {
         id: admin.id,
@@ -59,6 +70,12 @@ export async function POST(request: Request) {
         created_at: admin.created_at,
       },
     });
+
+    // The httpOnly cookie is the real credential — the localStorage blob the
+    // client still writes only drives the redirect on /admin pages and is not
+    // trusted by any route.
+    const token = await signAdminSession(admin.id, admin.username);
+    return setAdminSessionCookie(response, token);
   } catch (error) {
     console.error("Admin login error:", error);
     return NextResponse.json(

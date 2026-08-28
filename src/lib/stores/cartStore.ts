@@ -16,6 +16,8 @@
 
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { logActivity } from '@/lib/activity/logger';
+import type { ActivityAction } from '@/lib/activity/types';
 import {
   CartStore,
   CartItem,
@@ -106,7 +108,14 @@ export const useCartStore = create<CartStore>()(
        * The single writer. Every action that changes the active lane's
        * contents ends here, so `items` and `lanes[activeLaneId]` cannot drift.
        */
-      const commitItems = (next: CartItem[]) =>
+      const commitItems = (
+        next: CartItem[],
+        event?: {
+          action: ActivityAction;
+          target?: string;
+          details?: Record<string, unknown>;
+        }
+      ) => {
         set((s) => {
           const lane = s.lanes[s.activeLaneId] || newLane(s.activeLaneId);
           return {
@@ -117,6 +126,21 @@ export const useCartStore = create<CartStore>()(
             },
           };
         });
+
+        // Logged from the single writer rather than from each action, so a
+        // future mutation cannot be added without also being recorded. Fire and
+        // forget — logActivity never throws and never returns a promise.
+        if (event) {
+          logActivity(event.action, {
+            target: event.target,
+            details: {
+              ...event.details,
+              lane_id: get().activeLaneId,
+              cart_lines: next.length,
+            },
+          });
+        }
+      };
 
       return {
         // ---- State ----
@@ -188,7 +212,17 @@ export const useCartStore = create<CartStore>()(
             line_kind: 'product',
             catalog_unit_price: unitPriceLl,
           };
-          commitItems([newItem, ...items]);
+          commitItems([newItem, ...items], {
+            action: 'cart.add',
+            target: product.name,
+            details: {
+              product_id: product.id,
+              barcode: product.barcode,
+              quantity,
+              unit_price_ll: discountedUnitPriceLl,
+              discount_percentage: discountPercentage,
+            },
+          });
           return true;
         },
 
@@ -232,13 +266,32 @@ export const useCartStore = create<CartStore>()(
             total_discount_amount: 0,
             line_kind: 'one_off',
           };
-          commitItems([newItem, ...items]);
+          commitItems([newItem, ...items], {
+            action: 'cart.add_one_off',
+            target: input.name,
+            details: {
+              one_off_id: id,
+              barcode: input.barcode ?? null,
+              quantity,
+              unit_price_ll: unitPriceLl,
+            },
+          });
           return id;
         },
 
         removeItem: (productId: string) => {
           const { items } = get();
-          commitItems(items.filter(item => item.product_id !== productId));
+          const removed = items.find(item => item.product_id === productId);
+          commitItems(items.filter(item => item.product_id !== productId), {
+            action: 'cart.remove',
+            target: removed?.product_name,
+            details: {
+              product_id: productId,
+              quantity: removed?.quantity,
+              unit_price_ll: removed?.unit_price,
+              line_kind: removed?.line_kind,
+            },
+          });
         },
 
         updateQuantity: (productId: string, quantity: number) => {
@@ -248,10 +301,20 @@ export const useCartStore = create<CartStore>()(
             return;
           }
 
+          const before = items.find(item => item.product_id === productId);
           commitItems(
             items.map(item =>
               item.product_id === productId ? withTotals(item, quantity) : item
-            )
+            ),
+            {
+              action: 'cart.quantity',
+              target: before?.product_name,
+              details: {
+                product_id: productId,
+                from: before?.quantity,
+                to: quantity,
+              },
+            }
           );
         },
 
@@ -269,6 +332,7 @@ export const useCartStore = create<CartStore>()(
          */
         updateLine: (productId: string, patch: CartLinePatch) => {
           const { items } = get();
+          const before = items.find((item) => item.product_id === productId);
           commitItems(
             items.map((item) => {
               if (item.product_id !== productId) return item;
@@ -309,7 +373,23 @@ export const useCartStore = create<CartStore>()(
               }
 
               return withTotals(next, next.quantity);
-            })
+            }),
+            {
+              // The pricing trail. `from` is what the line cost a moment ago and
+              // `to` is what the customer will actually be charged — the pair is
+              // the whole point of recording this.
+              action: 'cart.line_edit',
+              target: before?.product_name,
+              details: {
+                product_id: productId,
+                name_from: before?.product_name,
+                name_to: patch.name,
+                price_from_ll: before?.unit_price,
+                price_to_ll: patch.unitPriceLl,
+                catalog_price_ll: before?.catalog_unit_price ?? before?.original_unit_price,
+                line_kind: before?.line_kind,
+              },
+            }
           );
         },
 
@@ -334,7 +414,14 @@ export const useCartStore = create<CartStore>()(
         },
 
         clearCart: () => {
-          commitItems([]);
+          const { items } = get();
+          commitItems([], {
+            action: 'cart.clear',
+            details: {
+              cleared_lines: items.length,
+              cleared_units: items.reduce((sum, i) => sum + i.quantity, 0),
+            },
+          });
         },
 
         setStoreId: (storeId: string) => {
@@ -355,6 +442,10 @@ export const useCartStore = create<CartStore>()(
             activeLaneId: id,
             items: [],
           });
+          logActivity('cart.lane_open', {
+            target: id,
+            details: { lane_count: s.laneOrder.length + 1 },
+          });
           return id;
         },
 
@@ -366,6 +457,14 @@ export const useCartStore = create<CartStore>()(
           const s = get();
           if (!s.lanes[laneId]) return;
 
+          // Closing a lane discards a customer's shopping, so what was in it
+          // matters more than the fact it closed.
+          const discarded = s.lanes[laneId].items;
+          const discardedDetails = {
+            discarded_lines: discarded.length,
+            discarded_units: discarded.reduce((sum, i) => sum + i.quantity, 0),
+          };
+
           if (s.laneOrder.length <= 1) {
             const cleared = newLane(laneId);
             set({
@@ -373,6 +472,10 @@ export const useCartStore = create<CartStore>()(
               laneOrder: [laneId],
               activeLaneId: laneId,
               items: [],
+            });
+            logActivity('cart.lane_close', {
+              target: laneId,
+              details: { ...discardedDetails, emptied_last_lane: true },
             });
             return;
           }
@@ -395,6 +498,10 @@ export const useCartStore = create<CartStore>()(
             activeLaneId,
             items: lanes[activeLaneId] ? lanes[activeLaneId].items : [],
           });
+          logActivity('cart.lane_close', {
+            target: laneId,
+            details: { ...discardedDetails, lane_count: laneOrder.length },
+          });
         },
 
         switchLane: (laneId: string) => {
@@ -402,6 +509,10 @@ export const useCartStore = create<CartStore>()(
           const lane = s.lanes[laneId];
           if (!lane || s.activeLaneId === laneId) return;
           set({ activeLaneId: laneId, items: lane.items });
+          logActivity('cart.lane_switch', {
+            target: laneId,
+            details: { from: s.activeLaneId, lines: lane.items.length },
+          });
         },
 
         switchLaneByPosition: (position: number) => {

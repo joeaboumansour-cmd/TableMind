@@ -4,6 +4,7 @@ import React, { createContext, useContext, useState, useEffect, useCallback, use
 import { createClient } from "@/lib/supabase/client";
 import { StoreUser, canAccess, getFullPermissions, SectionKey, UserPermissions } from "./permissions";
 import { cacheCredentials, clearCachedCredentials, validateCachedCredentials } from "./offlineAuth";
+import { logActivity, invalidateActivityIdentity, flushActivity } from "@/lib/activity/logger";
 
 const supabase = createClient();
 
@@ -167,6 +168,16 @@ export function AuthProvider({ children }: AuthProviderProps) {
       setUser(ownerUser);
       saveUserToStorage(ownerUser);
 
+      // Attribution is passed explicitly: the login page writes
+      // goldensquirrel_auth only AFTER this resolves, so reading storage here
+      // would find no tenant and the event would be dropped.
+      invalidateActivityIdentity();
+      logActivity("auth.login", {
+        target: store.username,
+        identity: { store_id: store.id, user_name: store.username },
+        details: { role: "owner", mode: "online" },
+      });
+
       // Cache credentials for offline login fallback.
       // Owner login: the person's username IS the store username.
       cacheCredentials(storeUsername, store.username, password, {
@@ -242,6 +253,17 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
       setUser(employeeUser);
       saveUserToStorage(employeeUser);
+
+      invalidateActivityIdentity();
+      logActivity("auth.login", {
+        target: employeeUser.displayName,
+        identity: {
+          store_id: employeeUser.storeId,
+          user_id: employeeUser.id,
+          user_name: employeeUser.displayName,
+        },
+        details: { role: "employee", mode: "online", permissions: perms },
+      });
 
       // Cache credentials for offline login fallback.
       //
@@ -332,6 +354,11 @@ export function AuthProvider({ children }: AuthProviderProps) {
           employeeData.username,
           storeData.license_expires_at
         );
+        invalidateActivityIdentity();
+        logActivity("auth.login", {
+          target: employeeUser.displayName,
+          details: { role: "employee", mode: "offline" },
+        });
         return { success: true };
       }
 
@@ -353,6 +380,11 @@ export function AuthProvider({ children }: AuthProviderProps) {
         storeData.username,
         storeData.license_expires_at
       );
+      invalidateActivityIdentity();
+      logActivity("auth.login", {
+        target: storeData.username,
+        details: { role: "owner", mode: "offline" },
+      });
       return { success: true };
     } catch (err) {
       console.error("Offline login error:", err);
@@ -363,9 +395,19 @@ export function AuthProvider({ children }: AuthProviderProps) {
   }, []);
 
   const logout = useCallback(() => {
+    // Logged and flushed BEFORE the auth keys are removed. clearUserFromStorage
+    // drops goldensquirrel_auth, and an event recorded after that has no
+    // store_id to be attributed to — it would simply be discarded.
+    logActivity("auth.logout", {
+      target: user?.displayName,
+      details: { role: user?.isOwner ? "owner" : "employee" },
+    });
+    flushActivity();
+
     setUser(null);
     clearUserFromStorage();
-  }, []);
+    invalidateActivityIdentity();
+  }, [user]);
 
   const refresh = useCallback(async () => {
     if (!user) return;

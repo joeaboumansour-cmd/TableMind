@@ -76,6 +76,17 @@ export const FEATURES: Record<string, FeatureDefinition> = {
     category: "core",
     default: false,
   },
+  // The kill switch for the admin activity trail. Defaults ON, because the
+  // whole point is fleet-wide coverage — but the trail is high volume, so a
+  // store can be taken out of it from the admin feature dialog without a
+  // deploy if it ever costs more than it is worth.
+  activity_logging: {
+    key: "activity_logging",
+    label: "Activity Logging",
+    description: "Record every action and UI interaction to the admin activity trail (kept 7 days)",
+    category: "core",
+    default: true,
+  },
 };
 
 export type FeatureKey = keyof typeof FEATURES;
@@ -101,6 +112,7 @@ export const FEATURE_PRESETS: Record<string, FeaturePreset> = {
       transaction_analytics: false,
       desktop_shortcuts: true,
       cash_register: false,
+      activity_logging: true,
     },
   },
 };

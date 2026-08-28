@@ -67,6 +67,7 @@ import {
   type BulkPlan,
   type BulkTarget,
 } from "@/lib/products/bulkPricing";
+import { logActivity } from "@/lib/activity/logger";
 
 interface Product {
   id: string;
@@ -510,6 +511,22 @@ function StoreProductsPageContent() {
 
         if (error) throw error;
         parentProductId = data.id;
+        // NOTE: this form still writes straight to Supabase rather than going
+        // through products/write.ts, so it is online-only and there is no
+        // syncedNow to report. Moving it across is an open task.
+        logActivity("catalog.product_update", {
+          target: name,
+          details: {
+            product_id: data.id,
+            barcode: barcode || null,
+            selling_price: selling,
+            cost_price: cost,
+            currency,
+            discount_percentage: discount,
+            stock_quantity: stockQty,
+            source: "inventory_form",
+          },
+        });
         toast.success(`Product "${name}" updated successfully!`);
       } else {
         // Create new product
@@ -532,6 +549,20 @@ function StoreProductsPageContent() {
 
         if (error) throw error;
         parentProductId = data.id;
+        logActivity("catalog.product_create", {
+          target: name,
+          details: {
+            product_id: data.id,
+            barcode: barcode || null,
+            selling_price: selling,
+            cost_price: cost,
+            currency,
+            discount_percentage: discount,
+            stock_quantity: stockQty,
+            variants: variants.filter((v) => v.barcode.trim()).length,
+            source: "inventory_form",
+          },
+        });
         toast.success(`Product "${name}" created successfully!`);
       }
 
@@ -677,6 +708,13 @@ function StoreProductsPageContent() {
         console.warn("[Products] Failed to update local cache after delete:", cacheError);
       }
 
+      logActivity("catalog.product_delete", {
+        target: productName,
+        details: {
+          product_id: productId,
+          variants_removed: products.filter((p) => p.parent_id === productId).length,
+        },
+      });
       toast.success(`Product "${productName}" deleted`);
       fetchProducts(storeId);
     } catch (error: any) {
@@ -709,6 +747,8 @@ function StoreProductsPageContent() {
       toast.error("No products to export");
       return;
     }
+
+    logActivity("catalog.export", { details: { rows: products.length } });
 
     try {
       // Build a lookup map: parent UUID -> parent barcode
@@ -995,7 +1035,12 @@ function StoreProductsPageContent() {
   const favStoreId = user?.storeId || "";
 
   const toggleFavourite = (product: InventoryProduct) => {
-    if (isFrequentlyUsed(favStoreId, product.id)) {
+    const wasFavourite = isFrequentlyUsed(favStoreId, product.id);
+    logActivity("catalog.favorite_toggle", {
+      target: product.name,
+      details: { product_id: product.id, added: !wasFavourite },
+    });
+    if (wasFavourite) {
       removeFrequentlyUsedProduct(favStoreId, product.id);
       toast.info(`${product.name} removed from quick access`, { key: "favourite" });
     } else {
@@ -1115,6 +1160,10 @@ function StoreProductsPageContent() {
 
     setIsApplyingBulk(true);
     setBulkProgress({ done: 0, total: countRequests(plan) });
+    logActivity("catalog.bulk_apply", {
+      target: plan.mode,
+      details: { affected: plan.changes.length, batches: plan.batches.length },
+    });
 
     type AppliedRow = {
       id: string;

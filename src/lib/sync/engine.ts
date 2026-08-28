@@ -22,6 +22,8 @@ import type { QueuedTransaction, PendingWrite } from "@/lib/db/localDB";
 import { syncFavoritesFromSupabase, processPendingFavoriteWrites } from "@/lib/frequentlyUsed";
 import { connectivity } from "@/lib/connectivity";
 import { buildAuthHeaders } from "@/lib/auth/requestHeaders";
+import { logActivity } from "@/lib/activity/logger";
+import { setSyncBusy } from "@/lib/activity/flush";
 
 type SyncStatus = "idle" | "syncing" | "error" | "offline";
 type SyncListener = (status: SyncStatus, pendingCount?: number) => void;
@@ -482,6 +484,10 @@ class SyncEngine {
               `[Sync] Transaction ${txn.transaction_number} exhausted ${MAX_PENDING_WRITE_RETRIES} retries — moved to dead-letter for manual resolution`
             );
             result.deadLettered++;
+            logActivity("sync.dead_letter", {
+              target: txn.transaction_number,
+              details: { attempts, error: message, total_amount: txn.total_amount },
+            });
           }
         } catch (e) {
           console.warn("[Sync] Failed to record transaction retry:", e);
@@ -652,6 +658,10 @@ class SyncEngine {
           `gave up after ${write.retry_count} attempts (${write.last_error})`,
           result
         );
+        logActivity("sync.write_dropped", {
+          target: write.type,
+          details: { id: write.id, attempts: write.retry_count, error: write.last_error, kept: true },
+        });
         continue;
       }
 
@@ -702,6 +712,10 @@ class SyncEngine {
         result.errors.push(
           `${write.type} ${write.id}: dropped after ${write.retry_count} retries (${write.last_error})`
         );
+        logActivity("sync.write_dropped", {
+          target: write.type,
+          details: { id: write.id, attempts: write.retry_count, error: write.last_error, kept: false },
+        });
         continue;
       }
 
@@ -730,6 +744,10 @@ class SyncEngine {
         await removePendingWrite(write.id);
         result.failed++;
         result.errors.push(`Stock decrement ${write.id}: dropped after ${write.retry_count} retries (${write.last_error})`);
+        logActivity("sync.write_dropped", {
+          target: write.type,
+          details: { id: write.id, attempts: write.retry_count, error: write.last_error, kept: false },
+        });
         continue;
       }
 
@@ -823,6 +841,12 @@ class SyncEngine {
     this._status = "syncing";
     this.notify();
 
+    // Stand the activity flusher down for the duration. Log delivery must
+    // never compete with a queued sale reaching the server.
+    setSyncBusy(true);
+    const startedAt = Date.now();
+    logActivity("sync.start");
+
     try {
       // MONEY FIRST.
       //
@@ -869,6 +893,21 @@ class SyncEngine {
         `processed ${favoriteResult.processed} favorite writes`
       );
 
+      // The row that answers "why has this sale not arrived". Fire and forget —
+      // there is deliberately no await anywhere on this path.
+      logActivity("sync.finish", {
+        details: {
+          success,
+          duration_ms: Date.now() - startedAt,
+          pushed: pushResult.pushed,
+          dead_lettered: pushResult.deadLettered,
+          aborted_on_transient: pushResult.abortedOnTransient,
+          pulled: pullResult.count,
+          pending_processed: pendingResult.processed,
+          pending_failed: pendingResult.failed,
+        },
+      });
+
       return {
         success,
         pulled: pullResult.count,
@@ -879,6 +918,13 @@ class SyncEngine {
     } catch (error: any) {
       this._status = "error";
       this.notify();
+      logActivity("sync.finish", {
+        details: {
+          success: false,
+          duration_ms: Date.now() - startedAt,
+          error: error?.message || String(error),
+        },
+      });
       return {
         success: false,
         pulled: 0,
@@ -888,6 +934,7 @@ class SyncEngine {
       };
     } finally {
       this.syncInProgress = false;
+      setSyncBusy(false);
     }
   }
 

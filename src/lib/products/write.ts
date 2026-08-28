@@ -28,6 +28,7 @@
 import type { CachedProduct } from "@/lib/db/localDB";
 import { buildAuthHeaders } from "@/lib/auth/requestHeaders";
 import { convertUsdToLl, convertLlToUsdForReturn } from "@/lib/utils/format";
+import { logActivity } from "@/lib/activity/logger";
 
 export interface ProductWriteInput {
   store_id: string;
@@ -120,6 +121,22 @@ export async function createProduct(
   await upsertSingleProduct(product);
 
   const syncedNow = await pushOrQueue(product, "create");
+
+  // syncedNow is the interesting half: it separates a catalogue change the
+  // server already has from one that is still sitting in pending_writes.
+  logActivity("catalog.product_create", {
+    target: product.name,
+    details: {
+      product_id: product.id,
+      barcode: product.barcode,
+      selling_price: product.selling_price,
+      cost_price: product.cost_price,
+      currency: product.currency,
+      stock_quantity: product.stock_quantity,
+      synced_now: syncedNow,
+    },
+  });
+
   return { product, syncedNow };
 }
 
@@ -138,6 +155,20 @@ export async function updateProduct(
   await upsertSingleProduct(product);
 
   const syncedNow = await pushOrQueue(product, "update");
+
+  logActivity("catalog.product_update", {
+    target: product.name,
+    details: {
+      product_id: product.id,
+      barcode: product.barcode,
+      selling_price: product.selling_price,
+      cost_price: product.cost_price,
+      currency: product.currency,
+      stock_quantity: product.stock_quantity,
+      synced_now: syncedNow,
+    },
+  });
+
   return { product, syncedNow };
 }
 
@@ -276,6 +307,22 @@ export async function repriceProduct(opts: {
     discount_percentage: preview.discountPercentage,
     stock_quantity: existing.stock_quantity,
     min_stock_threshold: existing.min_stock_threshold,
+  });
+
+  // Emitted in addition to the catalog.product_update above, because a reprice
+  // is the thing an owner actually asks about: this row carries the old price
+  // next to the new one.
+  logActivity("catalog.product_reprice", {
+    target: result.product.name,
+    details: {
+      product_id: opts.productId,
+      currency,
+      price_from: existing.selling_price,
+      price_to: opts.sellingPrice,
+      from_currency: existing.currency,
+      profit_percentage: preview.profitPercentage,
+      synced_now: result.syncedNow,
+    },
   });
 
   return { ...result, preview };

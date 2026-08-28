@@ -35,6 +35,7 @@ import { formatLL, formatUSD } from "@/lib/utils/format";
 import { cachedToProduct } from "@/lib/products/refresh";
 import { createProduct, repriceProduct } from "@/lib/products/write";
 import { isOneOffLine } from "@/lib/pos/lineItems";
+import { logActivity } from "@/lib/activity/logger";
 import type { Product } from "@/lib/types/product";
 import type { CartItem } from "@/lib/types/cart";
 
@@ -171,6 +172,7 @@ export default function ProPOSLayout({
     const { retryFailedProductWrites } = await import("@/lib/db/localDB");
     const n = await retryFailedProductWrites();
     setFailedWrites([]);
+    logActivity("sync.retry_requested", { details: { count: n } });
     if (n > 0) {
       toast.info(`Retrying ${n} product${n === 1 ? "" : "s"}…`);
       void syncEngine.syncNow();
@@ -184,6 +186,11 @@ export default function ProPOSLayout({
     const failed = await getFailedProductWrites();
     for (const w of failed) await dismissFailedProductWrite(w.id);
     setFailedWrites([]);
+    // Dismissing is a decision to accept that the local catalogue and the
+    // server now disagree. It should never happen without a trace.
+    logActivity("sync.dismissed", {
+      details: { count: failed.length, ids: failed.map((w) => w.id).slice(0, 10) },
+    });
   }, []);
 
   // ---- Lane summaries ----
@@ -224,18 +231,28 @@ export default function ProPOSLayout({
         const product = await resolveBarcode(barcode);
         if (product) {
           setUnknownBarcode(null);
+          logActivity("catalog.scan_hit", {
+            target: product.name,
+            details: { barcode, product_id: product.id },
+          });
           onProductAdd(product);
           return;
         }
         // The customer is standing there holding it, so a miss is a prompt,
         // not a dead end.
         playErrorSound();
+        // A miss is worth more than a hit: it is either a gap in the catalogue
+        // or a cashier about to price something by hand.
+        logActivity("catalog.scan_miss", {
+          target: barcode,
+          details: { can_edit_inventory: canEditInventory },
+        });
         setUnknownBarcode(barcode);
       } finally {
         setIsResolving(false);
       }
     },
-    [resolveBarcode, onProductAdd]
+    [resolveBarcode, onProductAdd, canEditInventory]
   );
 
   /** Name + price for a code the catalogue does not have. */
@@ -244,7 +261,15 @@ export default function ProPOSLayout({
       const barcode = unknownBarcode;
       // The guard is re-checked here, not just at the render site: this is the
       // function that actually writes, so it is the one that has to be safe.
-      if (!barcode || !canEditInventory) return;
+      if (!barcode) return;
+      if (!canEditInventory) {
+        // A refused pricing attempt is exactly what an owner wants to see.
+        logActivity("auth.permission_denied", {
+          target: "price unknown barcode",
+          details: { permission: "inventory", barcode, scope },
+        });
+        return;
+      }
 
       if (scope === "sale") {
         addOneOffItem({ name: input.name, unitPriceLl: input.unitPriceLl, barcode });
@@ -300,7 +325,13 @@ export default function ProPOSLayout({
 
   const handleLineSave = useCallback(
     async (item: CartItem, patch: LineEditPatch, scope: EditScope) => {
-      if (!canEditInventory) return;
+      if (!canEditInventory) {
+        logActivity("auth.permission_denied", {
+          target: "edit cart line",
+          details: { permission: "inventory", product_id: item.product_id, scope },
+        });
+        return;
+      }
 
       // Whichever scope was chosen, this sale takes the new figures. Someone is
       // waiting at the counter for the price they were quoted.
@@ -374,6 +405,12 @@ export default function ProPOSLayout({
         closeLane(laneId);
         return;
       }
+      // A lane with shopping in it needs confirming, so this is the point where
+      // the cashier is asked — the answer is logged by the dialog below.
+      logActivity("ui.modal_open", {
+        target: "close lane",
+        details: { lane_id: laneId, lines: laneItems.length },
+      });
       setLaneToClose(laneId);
     },
     [lanes, activeLaneId, items, closeLane]
@@ -402,6 +439,13 @@ export default function ProPOSLayout({
       if (e.altKey && !e.ctrlKey && !e.metaKey && /^[1-9]$/.test(e.key)) {
         e.preventDefault();
         switchLaneByPosition(Number(e.key));
+        // The generic ui.shortcut row records the keypress; this records that
+        // the till acted on it, which is not the same thing when the lane does
+        // not exist.
+        logActivity("ui.shortcut", {
+          target: `ALT+${e.key}`,
+          details: { action: "switch_lane", position: Number(e.key) },
+        });
         // Focus follows the lane: the next scan belongs to whoever just
         // stepped up to the counter.
         setEditingLineId(null);
@@ -421,7 +465,10 @@ export default function ProPOSLayout({
 
       if (e.key === "F4") {
         e.preventDefault();
-        if (!isEmpty()) onCheckout();
+        if (!isEmpty()) {
+          logActivity("sale.checkout_open", { target: "F4", details: { source: "shortcut" } });
+          onCheckout();
+        }
       }
     };
     window.addEventListener("keydown", handleKeyDown);

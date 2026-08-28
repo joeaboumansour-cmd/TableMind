@@ -258,6 +258,47 @@ export interface Database {
           created_at?: string;
         };
       };
+      // Migration 026. Daily range partitions on occurred_at, 7-day retention.
+      // `id` is GENERATED ALWAYS AS IDENTITY, so it is absent from Insert.
+      activity_logs: {
+        Row: {
+          id: number;
+          store_id: string;
+          user_id: string | null;
+          user_name: string | null;
+          session_id: string;
+          device_id: string | null;
+          category: string;
+          action: string;
+          target: string | null;
+          details: Record<string, unknown>;
+          route: string | null;
+          is_offline: boolean;
+          client_event_id: string;
+          /** Client clock, set by the device. NOT the time the server saw it. */
+          occurred_at: string;
+          received_at: string;
+        };
+        Insert: {
+          store_id: string;
+          user_id?: string | null;
+          user_name?: string | null;
+          session_id: string;
+          device_id?: string | null;
+          category: string;
+          action: string;
+          target?: string | null;
+          details?: Record<string, unknown>;
+          route?: string | null;
+          is_offline?: boolean;
+          client_event_id: string;
+          occurred_at: string;
+          received_at?: string;
+        };
+        // Activity rows are append-only: nothing updates them, and they leave
+        // by partition drop rather than by DELETE.
+        Update: never;
+      };
     };
     Views: {
       [_ in never]: never;
@@ -281,6 +322,12 @@ export interface Database {
           p_store_id: string;
         };
         Returns: { deleted_count: number; reason: string }[];
+      };
+      maintain_activity_log_partitions: {
+        Args: {
+          p_retention_days?: number;
+        };
+        Returns: { action: string; partition_name: string }[];
       };
     };
     Enums: {

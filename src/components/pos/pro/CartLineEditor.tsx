@@ -43,6 +43,7 @@ import {
 } from "@/lib/utils/format";
 import type { CartItem } from "@/lib/types/cart";
 import type { Product } from "@/lib/types/product";
+import { logActivity } from "@/lib/activity/logger";
 
 export type EditScope = "sale" | "inventory";
 export type PriceCurrency = "LL" | "USD";
@@ -100,10 +101,32 @@ export default function CartLineEditor({
   );
   const [invCurrency, setInvCurrency] = useState<PriceCurrency>(catalogCurrency);
   const nameRef = useRef<HTMLInputElement | null>(null);
+  const savedRef = useRef(false);
 
   useEffect(() => {
     nameRef.current?.focus();
     nameRef.current?.select();
+    logActivity("ui.modal_open", {
+      target: item.product_name,
+      details: {
+        kind: "line_editor",
+        product_id: item.product_id,
+        line_kind: item.line_kind,
+        unit_price_ll: item.unit_price,
+      },
+    });
+    // Closing without saving is a decision too — it says the cashier looked at
+    // changing the price and chose not to.
+    return () => {
+      if (!savedRef.current) {
+        logActivity("ui.modal_discard", {
+          target: item.product_name,
+          details: { kind: "line_editor", product_id: item.product_id },
+        });
+      }
+    };
+    // Mount/unmount only: the parent keys this on the line being edited.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const isInventory = scope === "inventory";
@@ -134,6 +157,18 @@ export default function CartLineEditor({
 
   const commit = () => {
     if (!canSave || activeParsed === null) return;
+    savedRef.current = true;
+    logActivity("ui.modal_submit", {
+      target: item.product_name,
+      details: {
+        kind: "line_editor",
+        product_id: item.product_id,
+        scope,
+        name_changed: nameChanged,
+        price_changed: priceChanged,
+        currency: isInventory ? invCurrency : "LL",
+      },
+    });
     const invLl =
       parsedInv === null
         ? item.unit_price

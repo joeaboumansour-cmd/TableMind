@@ -4,6 +4,7 @@ import { ThemeProvider } from "next-themes";
 import { Toaster } from "sonner";
 import { AuthProvider } from "@/lib/auth/AuthContext";
 import ViewportHeightSync from "@/components/ViewportHeightSync";
+import ActivityTracker from "@/components/ActivityTracker";
 
 // NOTE: TanStack Query was previously mounted here but never used — there were
 // zero useQuery/useMutation calls in the app. It was removed in the Aug 2026
@@ -19,6 +20,9 @@ export function Providers({ children }: { children: React.ReactNode }) {
         forcedTheme="dark"
       >
         <ViewportHeightSync />
+        {/* Records the store-side activity trail. Renders nothing, no-ops on
+            /admin and whenever the activity_logging flag is off. */}
+        <ActivityTracker />
         {children}
         {/* Pushed down clear of the floating POS header (status chip, scanner
             toggle, power) — at the default offset a toast sat directly on top

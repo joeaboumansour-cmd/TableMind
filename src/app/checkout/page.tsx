@@ -56,6 +56,7 @@ import {
 } from "@/lib/pos/saleCompletion";
 import { StorageFullError } from "@/lib/db/localDB";
 import { cn } from "@/lib/utils";
+import { logActivity, flushActivity } from "@/lib/activity/logger";
 
 /** Which amount the keypad is typing into. Both are always displayed. */
 type PayField = "LL" | "USD";
@@ -189,6 +190,7 @@ function CheckoutContent() {
 
   const handleClear = useCallback(() => {
     vibrate(12);
+    logActivity("sale.cleared", { details: { field: "amount_paid" } });
     setAmountPaidLL("");
     setAmountPaidUSD("");
   }, []);
@@ -423,6 +425,24 @@ function CheckoutContent() {
       // ending a sale in silence reads as "did that go through?".
       playCompleteSound();
       setTransactionComplete(true);
+      // The money event. Logged AFTER the sale is durable in offline_queue, so
+      // it can never appear for a sale that was not actually saved — and, like
+      // every other log call, never awaited.
+      logActivity("sale.payment", {
+        target: txnNumber,
+        details: {
+          total_ll: total,
+          total_usd: totalUsd,
+          amount_paid_ll: effectiveTotalPaid,
+          change_given_ll: calculatedChangeGiven,
+          change_given_usd: calcChangeUsd,
+          payment_method: "cash",
+          line_count: items.length,
+          unit_count: items.reduce((sum, i) => sum + i.quantity, 0),
+          assumed_exact: assumeExact,
+          was_offline: wasOffline,
+        },
+      });
       toast.success("Payment processed successfully!");
       if (wasOffline) {
         toast.info("Transaction saved offline - will sync when online");
@@ -448,6 +468,13 @@ function CheckoutContent() {
       // Distinguish "the disk is full" from a bug — it is the one failure here
       // the cashier can actually act on, and by this point every rebuildable
       // cache has already been sacrificed to try to make room.
+      logActivity("error.handled", {
+        target: "checkout payment failed",
+        details: {
+          storage_full: error instanceof StorageFullError,
+          message: error instanceof Error ? error.message : String(error),
+        },
+      });
       if (error instanceof StorageFullError) {
         toast.error("Device storage is full — this sale was NOT saved.", {
           description: "Free up space on the device and take the payment again before continuing.",
@@ -463,6 +490,10 @@ function CheckoutContent() {
 
   // Handle new transaction
   const handleNewTransaction = () => {
+    logActivity("sale.new");
+    // Leaving the page — get whatever is buffered on its way before the route
+    // change, rather than waiting out the 5s flush timer.
+    flushActivity();
     clearCart();
     // replace(), not push(). Going to /pos with push() leaves the finished
     // checkout sitting on the history stack directly behind it, so the next
@@ -475,6 +506,10 @@ function CheckoutContent() {
   const handleCopyLink = async () => {
     try {
       await navigator.clipboard.writeText(receiptUrl);
+      logActivity("sale.receipt_share", {
+        target: transactionNumber,
+        details: { channel: "clipboard" },
+      });
       toast.success("Receipt link copied to clipboard");
     } catch (err) {
       console.error("Failed to copy link:", err);
@@ -491,6 +526,10 @@ function CheckoutContent() {
           text: `Your receipt for transaction ${transactionNumber}`,
           url: receiptUrl,
         });
+        logActivity("sale.receipt_share", {
+          target: transactionNumber,
+          details: { channel: "web_share" },
+        });
       } catch (err) {
         // User cancelled share
       }
@@ -506,6 +545,7 @@ function CheckoutContent() {
       toast.error("Please allow pop-ups to print the QR code");
       return;
     }
+    logActivity("sale.receipt_print", { target: transactionNumber });
     printWindow.document.write(`
       <html>
         <head>
