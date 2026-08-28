@@ -29,6 +29,7 @@ import {
   TrendingUp,
   AlertTriangle,
   Inbox,
+  Trash2,
 } from "lucide-react";
 import { formatLL, formatUSD, formatDateTime } from "@/lib/utils/format";
 import { isOverdue, shiftAgeHours } from "@/lib/cash/types";
@@ -42,6 +43,7 @@ interface RegisterCardProps {
   onCloseShift: () => void;
   onAddAdjustment: () => void;
   onViewRequests: () => void;
+  onRemove: () => void;
 }
 
 export function RegisterCard({
@@ -52,6 +54,7 @@ export function RegisterCard({
   onCloseShift,
   onAddAdjustment,
   onViewRequests,
+  onRemove,
 }: RegisterCardProps) {
   const { register, shift, summary, adjustments, pendingRequestCount } = state;
 
@@ -300,10 +303,24 @@ export function RegisterCard({
                 )}
               </>
             ) : (
-              <Button size="sm" onClick={onOpenShift}>
-                <Banknote className="mr-1.5 h-4 w-4" />
-                Open shift
-              </Button>
+              <>
+                <Button size="sm" onClick={onOpenShift}>
+                  <Banknote className="mr-1.5 h-4 w-4" />
+                  Open shift
+                </Button>
+                {/* Only offered when nothing is open here. A drawer with money
+                    in it is counted before it can be removed. */}
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={onRemove}
+                  className="text-muted-foreground hover:text-destructive"
+                  data-log="remove-register"
+                >
+                  <Trash2 className="mr-1.5 h-4 w-4" />
+                  Remove
+                </Button>
+              </>
             )
           ) : (
             <p className="flex items-center gap-1.5 text-xs text-muted-foreground">

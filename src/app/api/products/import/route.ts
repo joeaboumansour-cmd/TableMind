@@ -178,39 +178,22 @@ export async function POST(request: NextRequest) {
       created: [] as string[],
     };
 
-    // Handle replace_all mode - delete all existing products and related data
+    // Handle replace_all mode - delete all existing products
+    //
+    // This deletes the CATALOGUE ONLY. It used to delete every
+    // `transaction_items` row and every `transactions` row for the store
+    // first, because `transaction_items.product_id` was a blocking FK and
+    // there was no other way to get the product deletes through -- so
+    // importing a spreadsheet destroyed the store's entire sales history,
+    // which the dialog never warned about and nobody asked for.
+    //
+    // Migration 028 made that FK `ON DELETE SET NULL`, so the sold lines
+    // survive the delete with their own denormalised name/price/quantity and
+    // simply stop pointing at a catalogue row. Do not reintroduce the
+    // transaction deletes.
     if (mode === 'replace_all') {
       console.log(`Replace all mode: deleting all products for store ${storeId}`);
 
-      // Delete transaction_items first (they reference products)
-      const { error: deleteTxnItemsError } = await supabase
-        .from('transaction_items')
-        .delete()
-        .eq('store_id', storeId);
-
-      if (deleteTxnItemsError) {
-        console.error('Failed to delete transaction_items:', deleteTxnItemsError);
-        return NextResponse.json(
-          { error: 'Failed to clear existing transactions', details: deleteTxnItemsError.message },
-          { status: 500 }
-        );
-      }
-
-      // Now delete transactions
-      const { error: deleteTxnError } = await supabase
-        .from('transactions')
-        .delete()
-        .eq('store_id', storeId);
-
-      if (deleteTxnError) {
-        console.error('Failed to delete transactions:', deleteTxnError);
-        return NextResponse.json(
-          { error: 'Failed to clear existing transactions', details: deleteTxnError.message },
-          { status: 500 }
-        );
-      }
-
-      // Finally delete all products
       const { error: deleteError } = await supabase
         .from('products')
         .delete()
@@ -224,7 +207,7 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      console.log('Successfully cleared all existing data');
+      console.log('Successfully cleared the existing catalogue (sales history kept)');
     }
 
     // ─────────────────────────────────────────────────────────────

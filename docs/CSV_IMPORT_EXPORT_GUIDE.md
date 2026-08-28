@@ -165,6 +165,10 @@ Three import modes are available:
 - **Delete ALL** existing products
 - **Import** all products from CSV as new
 - **Cannot be undone** - use with caution!
+- **Sales history is kept.** Past transactions and receipts are untouched;
+  each sold line keeps the name and price it was sold at, it just stops
+  pointing at a catalogue row. (Before migration 028 this mode deleted the
+  store's transactions too - it no longer does.)
 - Best for: Complete inventory replacement, data migration
 
 ### Step 6: Import
@@ -267,6 +271,7 @@ If some rows fail during import:
 ### 7. Use Replace All Carefully
 - Only use Replace All for complete inventory replacement
 - This will delete ALL existing products
+- It does **not** delete transactions - sales history and receipts survive
 - Make sure your CSV is complete and correct
 
 ## Profit Percentage Behavior

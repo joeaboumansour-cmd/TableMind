@@ -522,7 +522,11 @@ BEGIN
   LEFT JOIN shift_agg ON shift_agg.reg = r.id
   LEFT JOIN adj_agg ON adj_agg.reg = r.id
   WHERE r.store_id = p_store_id
-    AND r.is_active
+    -- Retired registers stay in the report as long as they sold something in
+    -- the window. Dropping them the moment they are retired would silently
+    -- rewrite last month's takings, and "where did that register's revenue go"
+    -- is exactly the question this report exists to answer.
+    AND (r.is_active OR COALESCE(agg.txn_count, 0) > 0)
   ORDER BY COALESCE(agg.revenue, 0) DESC;
 END
 $perf$;

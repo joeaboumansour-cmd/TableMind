@@ -652,10 +652,15 @@ function StoreProductsPageContent() {
   const handleDeleteProduct = async (productId: string, productName: string) => {
     // Deleting also takes any variants of this product with it, and there is
     // no undo — hence the cooldown rather than a bare yes/no.
+    //
+    // Past sales are NOT affected: transaction_items keeps its own copy of the
+    // name and price as sold, and its product_id is ON DELETE SET NULL since
+    // migration 028. Receipts and totals are unchanged.
     const confirmed = await confirm({
       title: "Delete this product?",
       description:
-        "It is removed from your inventory and from every till that has it cached. This cannot be undone.",
+        "It is removed from your inventory and from every till that has it cached. " +
+        "Past sales and receipts keep it exactly as it was sold. This cannot be undone.",
       details: (
         <div className="rounded-2xl bg-muted/50 px-4 py-3">
           <p className="font-semibold">{productName}</p>
@@ -673,9 +678,14 @@ function StoreProductsPageContent() {
         .eq("id", productId);
 
       if (error) {
-        // Handle FK constraint violations (product has transaction history)
+        // 23503 means a foreign key still blocks the delete. After migration
+        // 028 the transaction_items FK is ON DELETE SET NULL, so this should
+        // no longer fire for sales history — if it does, 028 has not been
+        // applied to this database yet. Say that, rather than telling the
+        // cashier to "deactivate" via a feature that does not exist.
         if (error.code === "23503") {
-          toast.error(`Cannot delete "${productName}" — it has transaction history. Consider deactivating it instead.`);
+          console.error("[Products] FK still blocks delete — is migration 028 applied?", error);
+          toast.error(`Cannot delete "${productName}" — something still references it. Contact support.`);
           return;
         }
         throw error;

@@ -22,7 +22,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Loader2, TrendingDown, TrendingUp, Plus } from "lucide-react";
+import { Loader2, TrendingDown, TrendingUp, Plus, Trash2, AlertTriangle } from "lucide-react";
 import { formatLL } from "@/lib/utils/format";
 import { combineCurrencyTotals } from "@/lib/cashShift";
 import type { CashRegister, ShiftSummary, StoreEmployee } from "@/lib/cash/types";
@@ -531,6 +531,80 @@ export function AdjustmentDialog({
           >
             {isSubmitting && <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />}
             Save
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ── Remove a register ────────────────────────────────────────────────────────
+
+/**
+ * Confirms removing a register, and says which of the two outcomes applies
+ * BEFORE the click rather than after.
+ *
+ * "Delete" and "retire" are not a preference — a drawer that has ever been
+ * counted keeps its shifts, because those rows are the record of real money.
+ * The dialog therefore states the consequence in plain words instead of asking
+ * "are you sure?" about an action whose meaning changes underneath it.
+ */
+export function RemoveRegisterDialog({
+  registerName,
+  hasHistory,
+  onOpenChange,
+  onConfirm,
+  isSubmitting,
+}: {
+  /** Null closes the dialog. */
+  registerName: string | null;
+  /** Whether this drawer has any shift behind it. */
+  hasHistory: boolean;
+  onOpenChange: (v: boolean) => void;
+  onConfirm: () => void;
+  isSubmitting: boolean;
+}) {
+  return (
+    <Dialog open={registerName !== null} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>
+            {hasHistory ? "Retire" : "Delete"} {registerName}?
+          </DialogTitle>
+          <DialogDescription>
+            {hasHistory
+              ? "This register has counted shifts behind it."
+              : "This register has never been used."}
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="py-2">
+          {hasHistory ? (
+            <div className="flex gap-2 rounded-lg bg-muted/60 p-3">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+              <p className="text-sm text-muted-foreground">
+                It will be <span className="font-medium text-foreground">retired</span>, not
+                deleted — it disappears from this page, but every shift ever counted on it stays
+                in the books and in the performance report. Its name becomes free to reuse.
+              </p>
+            </div>
+          ) : (
+            <div className="flex gap-2 rounded-lg bg-destructive/10 p-3">
+              <Trash2 className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
+              <p className="text-sm text-muted-foreground">
+                Nothing has ever been sold or counted on it, so it will be deleted outright.
+              </p>
+            </div>
+          )}
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            Cancel
+          </Button>
+          <Button variant="destructive" onClick={onConfirm} disabled={isSubmitting}>
+            {isSubmitting && <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />}
+            {hasHistory ? "Retire register" : "Delete register"}
           </Button>
         </DialogFooter>
       </DialogContent>

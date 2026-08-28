@@ -332,9 +332,26 @@ cash_registers (durable, named)  1 ──< N  cash_shifts (opened_at → closed_
 ```
 
 - A **register** is a physical drawer. It is named once ("Front Counter") and
-  keeps that name across days. Retiring one is a soft delete — `cash_shifts`
-  FKs to it `ON DELETE RESTRICT` so a counted history cannot be erased by
-  tidying the register list.
+  keeps that name across days.
+
+### Removing a register — the outcome is not a preference
+
+`DELETE /api/cash-registers?register_id=…` picks the removal for you:
+
+| State of the drawer | What happens |
+|---|---|
+| Never used (no shifts) | Deleted outright |
+| Has any shift history | **Retired** (`is_active = false`); every row kept |
+| Has an open shift | **Refused** — count and close it first |
+
+`cash_shifts.register_id` is `ON DELETE RESTRICT` precisely so a mistake here
+cannot cascade a drawer's counted history away, and the route never works around
+that — a `23503` falls back to retiring. **Do not "simplify" this into a single
+hard delete.** Those shift rows are the record of real money.
+
+Retired registers drop off the cash page but **stay in the performance report as
+long as they sold something in the window** — dropping them on retirement would
+silently rewrite last month's takings.
 - A **shift** is one accountable period on one register. Its life is
   `opened_at → closed_at`. **`business_date` is a label, not the identity or the
   boundary** — the old `UNIQUE (store_id, business_date)` is what made a shift

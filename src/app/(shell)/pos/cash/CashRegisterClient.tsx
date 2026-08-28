@@ -64,6 +64,7 @@ import {
   type CloseShiftValues,
   type AdjustmentValues,
 } from "@/components/cash/ShiftDialogs";
+import { RemoveRegisterDialog } from "@/components/cash/ShiftDialogs";
 import { RequestsPanel, RequestDecisionDialog } from "@/components/cash/RequestsPanel";
 import type { RegisterPerformanceRow } from "@/components/cash/RegisterPerformance";
 
@@ -145,6 +146,9 @@ export function CashRegisterPage() {
   const [adjValues, setAdjValues] = useState<AdjustmentValues>(EMPTY_ADJ);
   const [isAdjusting, setIsAdjusting] = useState(false);
 
+  const [removingRegister, setRemovingRegister] = useState<CashRegister | null>(null);
+  const [isRemoving, setIsRemoving] = useState(false);
+
   const [decidingRequest, setDecidingRequest] = useState<RegisterRequest | null>(null);
   const [decisionNote, setDecisionNote] = useState("");
   const [isDeciding, setIsDeciding] = useState(false);
@@ -156,10 +160,12 @@ export function CashRegisterPage() {
     openDialog ||
       closeShiftId !== null ||
       adjShiftId !== null ||
+      removingRegister !== null ||
       decidingRequest !== null ||
       isOpening ||
       isClosing ||
       isAdjusting ||
+      isRemoving ||
       isDeciding,
     "cash-register-busy"
   );
@@ -610,6 +616,40 @@ export function CashRegisterPage() {
     }
   };
 
+  const handleRemoveRegister = async () => {
+    if (!removingRegister) return;
+    if (!connectivity.isOnline) {
+      toast.error("Removing a register needs a connection");
+      return;
+    }
+
+    setIsRemoving(true);
+    try {
+      const res = await fetch(
+        `/api/cash-registers?register_id=${encodeURIComponent(removingRegister.id)}`,
+        { method: "DELETE", headers: buildAuthHeaders(user) }
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || "Failed to remove register");
+
+      // The server decides whether history forced a retire, so report what it
+      // actually did rather than what the button said.
+      logActivity(data.retired ? "cash.register_deactivate" : "cash.register_delete", {
+        target: removingRegister.name,
+        details: { register_id: removingRegister.id, shifts: data.shifts ?? 0 },
+      });
+
+      toast.success(data.message || "Register removed");
+      setRemovingRegister(null);
+      loadData();
+      loadPerformance();
+    } catch (error) {
+      toast.error(errorMessage(error, "Failed to remove register"));
+    } finally {
+      setIsRemoving(false);
+    }
+  };
+
   const handleDecide = async (decision: "approved" | "rejected") => {
     if (!decidingRequest) return;
     if (!connectivity.isOnline) {
@@ -828,6 +868,7 @@ export function CashRegisterPage() {
                   const first = requests.find((r) => r.register_id === state.register.id);
                   if (first) setDecidingRequest(first);
                 }}
+                onRemove={() => setRemovingRegister(state.register)}
               />
             ))}
           </div>
@@ -906,6 +947,22 @@ export function CashRegisterPage() {
         onChange={setAdjValues}
         onSubmit={handleAddAdjustment}
         isSubmitting={isAdjusting}
+      />
+
+      <RemoveRegisterDialog
+        registerName={removingRegister?.name ?? null}
+        // A register showing any shift on the cash page has been used. The
+        // server re-checks this properly before acting — this only decides
+        // which sentence the dialog shows.
+        hasHistory={
+          !!removingRegister &&
+          registerStates.some((s) => s.register.id === removingRegister.id && s.shift !== null)
+        }
+        onOpenChange={(v) => {
+          if (!v) setRemovingRegister(null);
+        }}
+        onConfirm={handleRemoveRegister}
+        isSubmitting={isRemoving}
       />
 
       <RequestDecisionDialog

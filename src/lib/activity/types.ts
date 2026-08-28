@@ -67,6 +67,7 @@ export const ACTIVITY_ACTIONS = [
   "cash.register_create",
   "cash.register_rename",
   "cash.register_deactivate",
+  "cash.register_delete",
   "cash.shift_assign",
   // Emitted once per page load when a register is showing an overdue shift, so
   // the trail records that somebody was told the drawer still needs counting.

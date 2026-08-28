@@ -233,3 +233,132 @@ export async function PATCH(request: Request) {
     return NextResponse.json({ error: "Failed to update register" }, { status: 500 });
   }
 }
+
+// ── DELETE /api/cash-registers?register_id=… ────────────────────────────────
+// Remove a register. Which removal you get depends on whether the drawer has
+// ever been counted, and that is not a preference — it is the difference
+// between tidying up a typo and destroying money history.
+//
+//   never used (no shifts)  -> deleted outright
+//   has shift history       -> RETIRED (is_active = false), rows kept
+//   has an open shift       -> refused; count and close it first
+//
+// The caller is told which of these happened. `cash_shifts.register_id` is
+// declared ON DELETE RESTRICT precisely so a mistake here cannot cascade a
+// drawer's counted history away, and this route never works around that.
+export async function DELETE(request: Request) {
+  try {
+    const supabase = await createServiceRoleClient();
+    const { storeId, userId } = readAuthHeader(request);
+
+    const caller = await resolveCaller(supabase, storeId, userId);
+    if (!caller) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    if (!canManageRegister(caller)) {
+      return NextResponse.json(
+        { error: "Only the store owner or a user with Cash Register permission can remove a register" },
+        { status: 403 }
+      );
+    }
+
+    const registerId = new URL(request.url).searchParams.get("register_id") || "";
+    if (!registerId) {
+      return NextResponse.json({ error: "register_id is required" }, { status: 400 });
+    }
+
+    // Scoped by store_id — another tenant's register reads as 404, so this
+    // cannot be used to probe for or delete other stores' drawers.
+    const { data: register } = await supabase
+      .from("cash_registers")
+      .select("id, name")
+      .eq("id", registerId)
+      .eq("store_id", storeId)
+      .maybeSingle();
+
+    if (!register) {
+      return NextResponse.json({ error: "Register not found" }, { status: 404 });
+    }
+
+    // The cash is physically in this drawer. Removing the register would hide
+    // it rather than account for it.
+    const { data: openShift } = await supabase
+      .from("cash_shifts")
+      .select("id")
+      .eq("register_id", registerId)
+      .eq("status", "open")
+      .maybeSingle();
+
+    if (openShift) {
+      return NextResponse.json(
+        { error: `"${register.name}" still has an open shift. Count and close it before removing the register.` },
+        { status: 409 }
+      );
+    }
+
+    const { count: shiftCount } = await supabase
+      .from("cash_shifts")
+      .select("id", { count: "exact", head: true })
+      .eq("register_id", registerId);
+
+    const { count: requestCount } = await supabase
+      .from("register_requests")
+      .select("id", { count: "exact", head: true })
+      .eq("register_id", registerId)
+      .eq("status", "pending");
+
+    // Anything ever counted here, or anyone still waiting on an answer from
+    // this drawer, means retire rather than delete.
+    if ((shiftCount ?? 0) > 0 || (requestCount ?? 0) > 0) {
+      const { error } = await supabase
+        .from("cash_registers")
+        .update({ is_active: false })
+        .eq("id", registerId)
+        .eq("store_id", storeId);
+
+      if (error) {
+        console.error("Cash register retire error:", error.message);
+        return NextResponse.json({ error: "Failed to retire register" }, { status: 500 });
+      }
+
+      return NextResponse.json({
+        retired: true,
+        shifts: shiftCount ?? 0,
+        message: `"${register.name}" has ${shiftCount} counted shift${shiftCount === 1 ? "" : "s"} behind it, so it was retired rather than deleted. It is gone from the cash page and its history is intact.`,
+      });
+    }
+
+    const { error } = await supabase
+      .from("cash_registers")
+      .delete()
+      .eq("id", registerId)
+      .eq("store_id", storeId);
+
+    if (error) {
+      // 23503: something still references it that the checks above did not
+      // anticipate. Retiring is always safe, so fall back rather than fail.
+      if (error.code === "23503") {
+        await supabase
+          .from("cash_registers")
+          .update({ is_active: false })
+          .eq("id", registerId)
+          .eq("store_id", storeId);
+        return NextResponse.json({
+          retired: true,
+          shifts: 0,
+          message: `"${register.name}" was retired rather than deleted — something still refers to it.`,
+        });
+      }
+      console.error("Cash register delete error:", error.message);
+      return NextResponse.json({ error: "Failed to remove register" }, { status: 500 });
+    }
+
+    return NextResponse.json({
+      retired: false,
+      message: `"${register.name}" was never used, so it was deleted.`,
+    });
+  } catch (error) {
+    console.error("Cash register DELETE error:", errorMessage(error));
+    return NextResponse.json({ error: "Failed to remove register" }, { status: 500 });
+  }
+}
