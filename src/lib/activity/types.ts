@@ -164,7 +164,10 @@ export interface ActivityEvent {
  * ingest, because there is no partition for them to land in. At 3 days a till
  * that is offline over a long weekend still loses the earliest of it.
  */
-export const ACTIVITY_RETENTION_DAYS = 3;
+// Annotated as `number`, not left to infer the literal 3: it is a tunable
+// setting, and a literal type makes ordinary comparisons against it (pluralising
+// a label, bounds checks) fail to compile at every call site.
+export const ACTIVITY_RETENTION_DAYS: number = 3;
 
 /** Caps, shared by the client (before buffering) and the server (before insert). */
 export const ACTIVITY_LIMITS = {

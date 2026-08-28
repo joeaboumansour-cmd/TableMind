@@ -70,24 +70,29 @@ interface EmployeeOption {
   username: string;
 }
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** "3 days" / "1 day" — the retention window said in plain words, in one place. */
+const RETENTION_LABEL = `${ACTIVITY_RETENTION_DAYS} day${ACTIVITY_RETENTION_DAYS === 1 ? "" : "s"}`;
+
+/** The oldest timestamp that can possibly return a row. */
+const retentionFloor = () => Date.now() - ACTIVITY_RETENTION_DAYS * DAY_MS;
+
 /**
  * Quick ranges.
  *
- * Deliberately finer than the DATE_FILTERS on the transactions page. Only
- * ACTIVITY_RETENTION_DAYS of data exists, so a range wider than that would
- * return the same rows as the widest real one while implying there is more —
- * "All 48h" is the honest ceiling. Derived from the constant rather than
- * hardcoded, so changing retention cannot leave a dead option here.
+ * Deliberately finer than the DATE_FILTERS on the transactions page, because
+ * only ACTIVITY_RETENTION_DAYS of data exists here. The widest option is
+ * derived from that constant rather than hardcoded — a fixed "Last 7 days"
+ * button would keep returning the same rows as the real ceiling while implying
+ * there is more behind it, which is exactly the kind of quiet lie a filter
+ * should not tell.
  */
 const QUICK_RANGES = [
   { key: "1h", label: "Last hour", ms: 60 * 60 * 1000 },
   { key: "6h", label: "Last 6h", ms: 6 * 60 * 60 * 1000 },
-  { key: "24h", label: "Last 24h", ms: 24 * 60 * 60 * 1000 },
-  {
-    key: "all",
-    label: `All ${ACTIVITY_RETENTION_DAYS * 24}h`,
-    ms: ACTIVITY_RETENTION_DAYS * 24 * 60 * 60 * 1000,
-  },
+  { key: "24h", label: "Last 24h", ms: DAY_MS },
+  { key: "all", label: `All ${RETENTION_LABEL}`, ms: ACTIVITY_RETENTION_DAYS * DAY_MS },
 ] as const;
 
 const CATEGORY_TONE: Record<string, string> = {
@@ -337,7 +342,7 @@ export default function AdminActivityPage() {
             <div className="min-w-0">
               <h1 className="font-bold text-lg truncate">Activity</h1>
               <p className="text-xs text-muted-foreground">
-                Last {ACTIVITY_RETENTION_DAYS * 24} hours across all stores
+                Last {RETENTION_LABEL} across all stores
               </p>
             </div>
           </div>
@@ -410,9 +415,13 @@ export default function AdminActivityPage() {
               ))}
 
               <div className="flex items-center gap-2 ml-auto">
+                {/* Bounded by the retention window at both ends. Picking a
+                    date with no data behind it looks like a bug in the log
+                    rather than a filter that reached past what is kept. */}
                 <Input
                   type="datetime-local"
                   value={from}
+                  min={toLocalInput(retentionFloor())}
                   max={to || toLocalInput(Date.now())}
                   onChange={(e) => setFrom(e.target.value)}
                   className="w-[210px]"
@@ -422,6 +431,7 @@ export default function AdminActivityPage() {
                 <Input
                   type="datetime-local"
                   value={to}
+                  min={from || toLocalInput(retentionFloor())}
                   max={toLocalInput(Date.now())}
                   onChange={(e) => setTo(e.target.value)}
                   className="w-[210px]"
@@ -448,6 +458,16 @@ export default function AdminActivityPage() {
                 );
               })}
             </div>
+
+            {/* Says what is and is not in here. Without this an admin looking
+                for a click that is not recorded concludes the log is broken,
+                rather than that passive tracking is deliberately off. */}
+            <p className="text-[11px] leading-relaxed text-muted-foreground">
+              Kept {RETENTION_LABEL}; older days are dropped automatically. Records actions —
+              sales, cart and price changes, catalogue edits, cash movements, logins, permission
+              refusals, sync failures, offline periods and errors. Passive click and typing
+              tracking is off, so individual button taps are not listed.
+            </p>
           </CardContent>
         </Card>
 
@@ -463,6 +483,11 @@ export default function AdminActivityPage() {
               <div className="py-16 text-center text-muted-foreground">
                 <Activity className="h-8 w-8 mx-auto mb-3 opacity-40" />
                 <p>No activity matches these filters.</p>
+                <p className="mt-1 text-xs">
+                  Only the last {RETENTION_LABEL} are kept, and a store with{" "}
+                  <span className="font-medium">Activity Logging</span> switched off in its feature
+                  flags records nothing at all.
+                </p>
               </div>
             ) : (
               <>
