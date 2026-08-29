@@ -568,6 +568,39 @@ html {
   display: none;
 }
 
+/* A slim, always-visible scrollbar for the quick grid.
+   Everything else in this app hides its scrollbars (.no-scrollbar), which is
+   right for full-height page scrollers on a touchscreen. It is wrong for a
+   short panel whose content routinely overflows: with no scrollbar the grid
+   looks like a complete list that happens to end, and starred products below
+   the fold are invisible. Sized to be legible without stealing tile width. */
+.quick-grid-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklab, var(--primary) 45%, transparent) transparent;
+  overscroll-behavior: contain;
+}
+
+.quick-grid-scroll::-webkit-scrollbar {
+  width: 8px;
+}
+
+.quick-grid-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.quick-grid-scroll::-webkit-scrollbar-thumb {
+  background-color: color-mix(in oklab, var(--primary) 40%, transparent);
+  border-radius: 9999px;
+  /* Inset the thumb so it reads as a hairline rather than a bar against the
+     card edge. */
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+.quick-grid-scroll:hover::-webkit-scrollbar-thumb {
+  background-color: color-mix(in oklab, var(--primary) 70%, transparent);
+}
+
 /* Respect the OS reduced-motion setting. A POS is used for long shifts and
    some users are motion-sensitive; the app must stay fully functional. */
 @media (prefers-reduced-motion: reduce) {

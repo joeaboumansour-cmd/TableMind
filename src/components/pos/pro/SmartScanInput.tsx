@@ -255,7 +255,7 @@ export default function SmartScanInput({
           {isBarcodeMode ? (
             <span className="text-primary">press Enter to add</span>
           ) : (
-            <span>letters search · digits add</span>
+            <span></span>
           )}
           <kbd className="rounded border border-white/[0.12] bg-white/[0.04] px-1.5 py-0.5 text-[10px] font-bold text-muted-foreground">
             F1

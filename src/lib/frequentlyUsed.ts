@@ -17,7 +17,20 @@ import type { PendingWrite } from "@/lib/db/localDB";
 import { connectivity } from "@/lib/connectivity";
 
 const STORAGE_KEY_PREFIX = "tm_frequently_used_";
-const MAX_FREQUENTLY_USED = 12;
+
+// There is deliberately NO cap on how many products can be starred.
+//
+// This used to be MAX_FREQUENTLY_USED = 12, applied with slice(0, 12) both on
+// add and after the Supabase merge. Starring a 13th product silently evicted
+// the oldest from the grid, so stars appeared to "replace each other" — and
+// worse, the eviction was LOCAL ONLY: the favourite still existed in
+// product_favorites, so the next merge could bring it back and drop a
+// different one. A shop with 30 quick items could never see more than 12 of
+// them, and which 12 changed under them.
+//
+// The grid these feed (QuickGrid) scrolls, so the list length is a display
+// concern rather than a storage one. The ids are UUIDs — even several hundred
+// is a few KB of localStorage.
 
 // Matches MAX_PENDING_WRITE_RETRIES in the sync engine. Kept local to avoid a
 // circular import (the engine imports this module).
@@ -53,8 +66,7 @@ export function addFrequentlyUsedProduct(storeId: string, productId: string): vo
     const ids = getFrequentlyUsedProductIds(storeId);
     if (!ids.includes(productId)) {
       ids.unshift(productId);
-      const trimmed = ids.slice(0, MAX_FREQUENTLY_USED);
-      localStorage.setItem(key, JSON.stringify(trimmed));
+      localStorage.setItem(key, JSON.stringify(ids));
     }
   } catch {
     // Ignore errors
@@ -209,13 +221,12 @@ export async function syncFavoritesFromSupabase(storeId: string): Promise<void> 
       }
     }
 
-    const trimmed = merged.slice(0, MAX_FREQUENTLY_USED);
-    localStorage.setItem(`${STORAGE_KEY_PREFIX}${storeId}`, JSON.stringify(trimmed));
+    localStorage.setItem(`${STORAGE_KEY_PREFIX}${storeId}`, JSON.stringify(merged));
 
     // Mark as synced so callers know localStorage is up-to-date
     localStorage.setItem(`${SYNCED_KEY_PREFIX}${storeId}`, Date.now().toString());
 
-    console.log(`[Favorites] Synced ${remoteIds.length} favorites from Supabase (merged: ${trimmed.length})`);
+    console.log(`[Favorites] Synced ${remoteIds.length} favorites from Supabase (merged: ${merged.length})`);
   } catch (err) {
     console.warn("[Favorites] Failed to sync from Supabase:", err);
   }

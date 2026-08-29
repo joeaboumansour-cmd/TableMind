@@ -38,8 +38,21 @@ export default function QuickGrid({ products, onAdd }: QuickGridProps) {
   }
 
   return (
-    <div className="no-scrollbar h-full overflow-y-auto overscroll-contain p-3">
-      <div className="grid grid-cols-2 gap-2 lg:grid-cols-3">
+    // A VISIBLE scrollbar, unlike the rest of the app's scrollers.
+    //
+    // This always scrolled, but `no-scrollbar` hid every cue that it did — and
+    // with the old 12-item cap on starred products there was rarely enough in
+    // here to overflow, so nobody found out. Uncapped, this list is routinely
+    // taller than the panel, and a cashier who cannot see that there is more
+    // below will believe the missing items simply are not there.
+    <div className="quick-grid-scroll h-full overflow-y-auto overscroll-contain p-3">
+      {/* Columns follow the PANEL's width, not the viewport's.
+          This was `grid-cols-2 lg:grid-cols-3`, which is a viewport breakpoint
+          — so dragging the divider wider only made the tiles fatter instead of
+          fitting more of them. auto-fill at the tile's natural minimum keeps
+          the same three columns at the default 380px and adds a column each
+          time the panel grows enough to earn one. */}
+      <div className="grid grid-cols-[repeat(auto-fill,minmax(108px,1fr))] gap-2">
         {products.map((product) => (
           <button
             key={product.id}
