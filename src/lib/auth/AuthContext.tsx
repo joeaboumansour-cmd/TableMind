@@ -5,6 +5,7 @@ import { createClient } from "@/lib/supabase/client";
 import { StoreUser, canAccess, getFullPermissions, SectionKey, UserPermissions } from "./permissions";
 import { cacheCredentials, clearCachedCredentials, validateCachedCredentials } from "./offlineAuth";
 import { logActivity, invalidateActivityIdentity, flushActivity } from "@/lib/activity/logger";
+import { connectivity } from "@/lib/connectivity";
 
 const supabase = createClient();
 
@@ -421,18 +422,59 @@ export function AuthProvider({ children }: AuthProviderProps) {
     invalidateActivityIdentity();
   }, [user]);
 
+  /**
+   * Re-read this employee's permissions from the server.
+   *
+   * ## Signing someone out requires PROOF, not silence
+   *
+   * This used to be `if (error || !employee || !employee.is_active) logout()`,
+   * which folded three different situations into one:
+   *
+   *   1. the query FAILED  — we learned nothing
+   *   2. the row is GONE   — the employee was deleted
+   *   3. is_active = false — the employee was switched off
+   *
+   * Only (2) and (3) are answers. (1) is the absence of one, and logging out on
+   * it means a dropped packet, an RLS change, a slow network or simply being
+   * offline throws a cashier off the till in the middle of a shift — on an app
+   * whose whole promise is that it keeps selling without internet.
+   *
+   * The `.single()` made this worse and is why the fix is not just "drop the
+   * error check": PostgREST returns zero rows from `.single()` as an ERROR, so
+   * case (2) arrives looking exactly like case (1). `.maybeSingle()` separates
+   * them — a missing row comes back as `data: null, error: null`, which is a
+   * real answer we can act on. It is also what resolveCaller() already uses
+   * server-side.
+   *
+   * Same rule as evaluateReconcile() and the feature-flag guard: never act
+   * destructively on unknown.
+   */
   const refresh = useCallback(async () => {
     if (!user) return;
     if (!user.isOwner) {
-      // Re-fetch employee permissions in case they changed
+      // Nothing to learn while offline, and asking anyway only invites the
+      // failure this function must not overreact to.
+      if (!connectivity.isOnline) return;
+
       try {
         const { data: employee, error } = await supabase
           .from("store_users")
           .select("is_active, permissions")
           .eq("id", user.id)
-          .single();
+          .maybeSingle();
 
-        if (error || !employee || !employee.is_active) {
+        if (error) {
+          // Could not ask. Keep the session exactly as it is and try again
+          // next time — the server still enforces permissions on every call.
+          console.warn(
+            "[Auth] Permission refresh failed; keeping current session:",
+            error.message
+          );
+          return;
+        }
+
+        // Now these ARE answers: the row is gone, or it is switched off.
+        if (!employee || !employee.is_active) {
           logout();
           return;
         }
