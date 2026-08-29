@@ -95,7 +95,8 @@ export async function GET(
           quantity,
           unit_price,
           total_price,
-          currency
+          currency,
+          modifiers
         )
       `)
       .eq("receipt_token", token)
@@ -140,6 +141,8 @@ export async function GET(
           unit_price: Number(item.unit_price) || 0,
           total_price: Number(item.total_price) || 0,
           currency: (item.currency as "LL" | "USD") || "LL",
+          // Null on every ordinary line; the receipt renders nothing for it.
+          modifiers: item.modifiers ?? null,
         })),
         store: {
           name: store?.username || "Store",

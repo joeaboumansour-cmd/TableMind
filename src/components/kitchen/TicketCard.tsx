@@ -67,7 +67,27 @@ export default function TicketCard({
             <span className="w-7 shrink-0 font-semibold tabular-nums text-primary">
               {item.quantity}&times;
             </span>
-            <span className="min-w-0 break-words">{item.product_name}</span>
+            <span className="min-w-0 break-words">
+              {item.product_name}
+              {/* The changes are the part a cook can get wrong, so they are
+                  called out rather than tucked in with the name. */}
+              {item.modifiers && item.modifiers.length > 0 && (
+                <span className="mt-0.5 flex flex-wrap gap-1">
+                  {item.modifiers.map((label) => (
+                    <span
+                      key={label}
+                      className={`rounded px-1.5 py-0.5 text-[10px] font-bold leading-none ${
+                        label.startsWith("No ")
+                          ? "bg-destructive/20 text-destructive"
+                          : "bg-primary/20 text-primary"
+                      }`}
+                    >
+                      {label}
+                    </span>
+                  ))}
+                </span>
+              )}
+            </span>
           </li>
         ))}
         {ticket.items.length === 0 && (

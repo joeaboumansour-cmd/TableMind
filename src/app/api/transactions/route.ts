@@ -124,7 +124,8 @@ export async function GET(request: Request) {
           quantity,
           unit_price,
           total_price,
-          currency
+          currency,
+          modifiers
         )
       `)
       .eq("store_id", store_id)
@@ -293,7 +294,8 @@ export async function POST(request: Request) {
           quantity,
           unit_price,
           total_price,
-          currency
+          currency,
+          modifiers
         )
       `)
       .eq("id", existingTxn.id)
@@ -369,7 +371,8 @@ export async function POST(request: Request) {
           quantity,
           unit_price,
           total_price,
-          currency
+          currency,
+          modifiers
         )
       `)
       .eq("store_id", store_id)

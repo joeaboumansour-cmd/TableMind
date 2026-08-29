@@ -83,6 +83,12 @@ export interface KitchenTicketItem {
   id: string;
   product_name: string;
   quantity: number;
+  /**
+   * What was changed about this line, already formatted. The whole reason
+   * migration 032 put modifiers on transaction_items rather than in a child
+   * table: the board reads them with no join.
+   */
+  modifiers?: string[];
 }
 
 export interface KitchenTicket {

@@ -26,6 +26,12 @@ export interface CachedTransactionItem {
   unit_price: number;
   total_price: number;
   currency: string;
+  /**
+   * Made-to-order choices as sold. Optional, like product_id above: rows
+   * cached before this field existed will not have it, and null is correct
+   * for every ordinary line anyway.
+   */
+  modifiers?: CartLineModifier[] | null;
 }
 
 export interface CachedTransaction {

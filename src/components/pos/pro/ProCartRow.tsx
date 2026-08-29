@@ -16,6 +16,7 @@ import { formatLL, formatUSD } from "@/lib/utils/format";
 import CartQuantityInput from "@/components/pos/CartQuantityInput";
 import type { CartItem } from "@/lib/types/cart";
 import { lineKey } from "@/lib/pos/lineKey";
+import { describeModifiers } from "@/lib/pos/modifierSummary";
 
 interface ProCartRowProps {
   item: CartItem;
@@ -97,19 +98,11 @@ export default function ProCartRow({
    * bury the one line that matters — the cashier needs to see "no pickles",
    * not a recital of the recipe.
    */
-  const modifierChips = (item.modifiers || [])
-    .filter((m) => m.state === "removed" || m.state === "extra")
-    .map((m) => {
-      if (m.state === "removed") {
-        return { key: m.component_id, label: `No ${m.name}`, removed: true };
-      }
-      const extraUnits = Math.max(1, m.count - (m.is_default_component ? 1 : 0));
-      return {
-        key: m.component_id,
-        label: extraUnits > 1 ? `+${extraUnits} ${m.name}` : `+ ${m.name}`,
-        removed: false,
-      };
-    });
+  const modifierChips = describeModifiers(item.modifiers).map((label) => ({
+    key: label,
+    label,
+    removed: label.startsWith("No "),
+  }));
 
   return (
     <div
