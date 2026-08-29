@@ -56,7 +56,7 @@ const WATERMARK_SAFETY_MS = 5 * 60 * 1000;
  * every page of every sync.
  */
 export const PRODUCT_COLUMNS =
-  "id, store_id, name, barcode, cost_price, selling_price, currency, profit_percentage, discount_percentage, stock_quantity, min_stock_threshold, category_id, parent_id, variant_name, updated_at";
+  "id, store_id, name, barcode, cost_price, selling_price, currency, profit_percentage, discount_percentage, stock_quantity, min_stock_threshold, category_id, kind, stock_unit, parent_id, variant_name, updated_at";
 
 /**
  * A row as PRODUCT_COLUMNS returns it. Deliberately looser than CachedProduct:
@@ -76,6 +76,8 @@ export interface ProductRow {
   stock_quantity: number;
   min_stock_threshold: number;
   category_id: string | null;
+  kind: string | null;
+  stock_unit: string | null;
   parent_id: string | null;
   variant_name: string | null;
   updated_at: string | null;
@@ -96,6 +98,10 @@ export function mapToCachedProduct(p: ProductRow): CachedProduct {
     stock_quantity: p.stock_quantity,
     min_stock_threshold: p.min_stock_threshold,
     category_id: p.category_id || null,
+    // Default-sellable: a null from the DB, or a column that predates 030,
+    // must read as sellable. Never invert this.
+    kind: p.kind || "sellable",
+    stock_unit: p.stock_unit || "unit",
     parent_id: p.parent_id || null,
     variant_name: p.variant_name || null,
     updated_at: p.updated_at || new Date().toISOString(),
@@ -124,6 +130,8 @@ export function cachedToProduct(p: CachedProduct): Product {
     stock_quantity: p.stock_quantity,
     min_stock_threshold: p.min_stock_threshold,
     category_id: p.category_id ?? null,
+    kind: p.kind || "sellable",
+    stock_unit: p.stock_unit || "unit",
     parent_id: p.parent_id || undefined,
     variant_name: p.variant_name || undefined,
   };

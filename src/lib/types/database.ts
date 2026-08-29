@@ -78,6 +78,8 @@ export interface Database {
           stock_quantity: number;
           min_stock_threshold: number;
           category_id: string | null;
+          kind: string;
+          stock_unit: string;
         };
         Insert: {
           id?: string;
@@ -92,6 +94,8 @@ export interface Database {
           stock_quantity?: number;
           min_stock_threshold?: number;
           category_id?: string | null;
+          kind?: string;
+          stock_unit?: string;
         };
         Update: {
           id?: string;
@@ -106,6 +110,8 @@ export interface Database {
           stock_quantity?: number;
           min_stock_threshold?: number;
           category_id?: string | null;
+          kind?: string;
+          stock_unit?: string;
         };
       };
       transactions: {

@@ -37,6 +37,7 @@ import {
    CheckSquare,
    MoreHorizontal,
    WifiOff,
+   Tags,
   } from "lucide-react";
  import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
@@ -71,6 +72,13 @@ import {
   type BulkTarget,
 } from "@/lib/products/bulkPricing";
 import { logActivity } from "@/lib/activity/logger";
+import { isSellable, isIngredient, normaliseKind, formatStock, STOCK_UNITS, type ProductKind } from "@/lib/products/kind";
+import { getCategories, refreshCategories } from "@/lib/categories/load";
+import type { Category } from "@/lib/categories/types";
+import { getCachedRecipes, refreshRecipes, saveRecipe } from "@/lib/recipes/load";
+import type { RecipeMap } from "@/lib/recipes/types";
+import RecipeEditor, { type DraftComponent, type IngredientOption } from "@/components/inventory/RecipeEditor";
+import CategoryManagerDialog from "@/components/inventory/CategoryManagerDialog";
 
 interface Product {
   id: string;
@@ -84,11 +92,18 @@ interface Product {
   discount_percentage: number;
   stock_quantity: number;
   min_stock_threshold: number;
+  category_id?: string | null;
+  /** 'sellable' | 'ingredient'. Test with isSellable(), never === 'sellable'. */
+  kind?: string | null;
+  stock_unit?: string | null;
   parent_id?: string | null;
   variant_name?: string | null;
 }
 
+/** "all" also hides ingredients — they are stock, not things on the shelf. */
 type StockFilter = "all" | "low" | "out";
+/** Which half of the catalogue the list is showing. */
+type KindFilter = "sellable" | "ingredient";
 
 /** Row shapes the virtualiser renders — section headers share the list. */
 type ListRow =
@@ -147,6 +162,7 @@ function StoreProductsPageContent() {
   const [detailProduct, setDetailProduct] = useState<InventoryProduct | null>(null);
   // Import / export / refresh / sign out, kept out of the header.
   const [showMore, setShowMore] = useState(false);
+  const [showCategories, setShowCategories] = useState(false);
   // True while a network refresh runs BEHIND an already-painted list. Distinct
   // from isLoading, which means "there is nothing to show yet".
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -174,6 +190,7 @@ function StoreProductsPageContent() {
   );
   // Store-level gate for the discount half of the bulk tool.
   const discountEnabled = useFeatureFlag("product_discount");
+  const menuItemsEnabled = useFeatureFlag("menu_items");
 
   // A deployed update must not reload the page out from under a task in
   // progress. Building a bulk selection is the case that actually broke: the
@@ -218,6 +235,13 @@ function StoreProductsPageContent() {
   const [sellingPrice, setSellingPrice] = useState("");
   const [stockQuantity, setStockQuantity] = useState("");
   const [minStockThreshold, setMinStockThreshold] = useState("0");
+  const [productKind, setProductKind] = useState<ProductKind>("sellable");
+  const [stockUnit, setStockUnit] = useState("unit");
+  const [categoryId, setCategoryId] = useState("");
+  const [recipeDraft, setRecipeDraft] = useState<DraftComponent[]>([]);
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [recipes, setRecipes] = useState<RecipeMap>({});
+  const [kindFilter, setKindFilter] = useState<KindFilter>("sellable");
 
   // Product Variants
   const [variants, setVariants] = useState<Array<{ barcode: string; variantName: string }>>([]);
@@ -307,6 +331,14 @@ function StoreProductsPageContent() {
     syncFavoritesFromSupabase(user.storeId).then(() => {
       setFreqVersion(v => v + 1);
     });
+
+    // Categories and recipes: paint from the localStorage copy immediately,
+    // then revalidate behind it — the same "cache first" rule this page
+    // already uses for products. A failed refresh keeps the cached copy.
+    setCategories(getCategories(user.storeId));
+    setRecipes(getCachedRecipes(user.storeId));
+    void refreshCategories(user.storeId).then(setCategories);
+    void refreshRecipes(user.storeId).then(setRecipes);
     // Invalidate whatever is still in flight. Without this, a fetch that
     // resolves after the user has left writes into an unmounted page.
     return invalidateLoads;
@@ -388,6 +420,11 @@ function StoreProductsPageContent() {
       discount_percentage: p.discount_percentage || 0,
       stock_quantity: p.stock_quantity,
       min_stock_threshold: p.min_stock_threshold,
+      category_id: p.category_id ?? null,
+      // Default-sellable: a cache written before migration 030 has no `kind`,
+      // and undefined must never hide a product. See lib/products/kind.ts.
+      kind: p.kind || "sellable",
+      stock_unit: p.stock_unit || "unit",
       parent_id: p.parent_id ?? null,
       variant_name: p.variant_name ?? null,
     }));
@@ -507,6 +544,9 @@ function StoreProductsPageContent() {
             discount_percentage: discount,
             stock_quantity: stockQty,
             min_stock_threshold: minStock,
+            category_id: categoryId || null,
+            kind: productKind,
+            stock_unit: stockUnit || "unit",
           })
           .eq("id", editingProduct.id)
           .select()
@@ -546,6 +586,9 @@ function StoreProductsPageContent() {
             discount_percentage: discount,
             stock_quantity: stockQty,
             min_stock_threshold: minStock,
+            category_id: categoryId || null,
+            kind: productKind,
+            stock_unit: stockUnit || "unit",
           })
           .select()
           .single();
@@ -594,6 +637,35 @@ function StoreProductsPageContent() {
             console.error("Variant save error:", variantError);
             toast.warning("Product saved but some variants may have failed");
           }
+        }
+      }
+
+      // The recipe is saved after the product, because a new product has no id
+      // until it is inserted. Only for sellable items: an ingredient made of
+      // other ingredients is a second level this feature does not have.
+      //
+      // A failed recipe save does NOT roll the product back — the product is
+      // already saved and correct, and losing it would be worse than saving it
+      // without its recipe. Say so plainly instead.
+      if (productKind === "sellable" && parentProductId && menuItemsEnabled) {
+        try {
+          const cleaned = recipeDraft
+            .filter((c) => c.ingredient_product_id)
+            .map((c, i) => ({ ...c, sort_order: i }));
+          const saved = await saveRecipe(storeId, parentProductId, cleaned);
+          setRecipes((prev) => {
+            const next = { ...prev };
+            if (saved.length > 0) next[parentProductId!] = saved;
+            else delete next[parentProductId!];
+            return next;
+          });
+        } catch (recipeError) {
+          console.error("Recipe save error:", recipeError);
+          toast.error(
+            recipeError instanceof Error
+              ? `Product saved, but the recipe did not: ${recipeError.message}`
+              : "Product saved, but the recipe did not"
+          );
         }
       }
 
@@ -649,6 +721,23 @@ function StoreProductsPageContent() {
     setSellingPrice(product.selling_price.toString());
     setStockQuantity(product.stock_quantity.toString());
     setMinStockThreshold(product.min_stock_threshold.toString());
+    setProductKind(normaliseKind(product.kind));
+    setStockUnit(product.stock_unit || "unit");
+    setCategoryId(product.category_id || "");
+    // Strip the server-side ids: the editor works on drafts and the PUT
+    // rewrites the whole set, so carrying ids around would only invite
+    // treating this as a patch.
+    setRecipeDraft(
+      (recipes[product.id] || []).map((c) => ({
+        ingredient_product_id: c.ingredient_product_id,
+        quantity: c.quantity,
+        is_default: c.is_default,
+        is_removable: c.is_removable,
+        max_quantity: c.max_quantity,
+        price_delta_ll: c.price_delta_ll,
+        sort_order: c.sort_order,
+      }))
+    );
     setIsDialogOpen(true);
   };
 
@@ -736,6 +825,17 @@ function StoreProductsPageContent() {
     }
   };
 
+  /**
+   * Open the dialog for a NEW product, pre-set to whichever half of the
+   * catalogue is currently being viewed: pressing + on the Ingredients tab
+   * should obviously start an ingredient.
+   */
+  const openNewProductDialog = () => {
+    resetForm();
+    setProductKind(kindFilter === "ingredient" ? "ingredient" : "sellable");
+    setIsDialogOpen(true);
+  };
+
   const resetForm = () => {
     setName("");
     setBarcode("");
@@ -746,6 +846,10 @@ function StoreProductsPageContent() {
     setSellingPrice("");
     setStockQuantity("");
     setMinStockThreshold("0");
+    setProductKind("sellable");
+    setStockUnit("unit");
+    setCategoryId("");
+    setRecipeDraft([]);
     setEditingProduct(null);
     setLastUpdated('cost');
   };
@@ -890,11 +994,36 @@ function StoreProductsPageContent() {
   // iterations plus 2,500 allocations on every keystroke, dialog toggle and
   // star click. The fresh objects also changed item identity each render,
   // which defeated the virtualizer's reuse.
+  /** Ingredients, for the recipe editor's picker. Never variants. */
+  const ingredientOptions = useMemo<IngredientOption[]>(
+    () =>
+      products
+        .filter((product) => isIngredient(product) && !product.parent_id)
+        .map((product) => ({
+          id: product.id,
+          name: product.name,
+          stock_quantity: product.stock_quantity,
+          stock_unit: product.stock_unit,
+        }))
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    [products]
+  );
+
+  /** How many ingredients exist, for the filter chip. */
+  const ingredientCount = ingredientOptions.length;
+
   const filteredProducts = useMemo(() => {
     // Hoisted: this was being recomputed once per product inside the predicate.
     const q = debouncedSearch.toLowerCase();
 
     return products
+      .filter((product) =>
+        // Ingredients are stock, not shelf items, so they are a separate view
+        // rather than mixed into the catalogue. isSellable() defaults a row
+        // with no `kind` to sellable — a cache written before migration 030
+        // must never vanish from this list.
+        kindFilter === "ingredient" ? isIngredient(product) : isSellable(product)
+      )
       .filter(
         (product) =>
           product.name.toLowerCase().includes(q) ||
@@ -916,7 +1045,7 @@ function StoreProductsPageContent() {
           _isParent: isParent,
         };
       });
-  }, [products, debouncedSearch, parentIds]);
+  }, [products, debouncedSearch, parentIds, kindFilter]);
 
   // Counts for the filter chips. Always over the whole catalogue, not the
   // current filter — a chip that reports the count of its own selection is
@@ -1383,10 +1512,7 @@ function StoreProductsPageContent() {
             </button>
             <button
               type="button"
-              onClick={() => {
-                resetForm();
-                setIsDialogOpen(true);
-              }}
+              onClick={openNewProductDialog}
               disabled={isOffline}
               aria-label="Add product"
               className="tap flex h-11 w-11 items-center justify-center gap-2 rounded-2xl bg-primary text-sm font-semibold text-primary-foreground disabled:bg-muted disabled:text-muted-foreground disabled:opacity-70 md:w-auto md:px-4"
@@ -1484,6 +1610,39 @@ function StoreProductsPageContent() {
             )}
           </button>
         ))}
+
+        {/* Ingredients are a separate view, not a stock filter — they are the
+            other half of the catalogue. Only shown once the store has menu
+            items, and always shown then, even at zero: an owner who has just
+            switched the feature on needs somewhere to put the first one. */}
+        {menuItemsEnabled && (
+          <button
+            type="button"
+            onClick={() => {
+              setKindFilter(kindFilter === "ingredient" ? "sellable" : "ingredient");
+              setOpenRowId(null);
+            }}
+            aria-pressed={kindFilter === "ingredient"}
+            className={cn(
+              "tap ml-auto flex h-9 flex-none items-center gap-1.5 rounded-full px-4 text-sm font-semibold",
+              kindFilter === "ingredient"
+                ? "bg-foreground text-background"
+                : "bg-muted/60 text-muted-foreground"
+            )}
+          >
+            Ingredients
+            {ingredientCount > 0 && (
+              <span
+                className={cn(
+                  "rounded-full px-1.5 text-xs font-bold tnum",
+                  kindFilter === "ingredient" ? "bg-background/20" : "bg-primary/20 text-primary"
+                )}
+              >
+                {ingredientCount}
+              </span>
+            )}
+          </button>
+        )}
       </div>
 
       {/* ---- Offline notice ---- */}
@@ -1530,10 +1689,7 @@ function StoreProductsPageContent() {
               <Button
                 className="mt-5 rounded-2xl"
                 disabled={isOffline}
-                onClick={() => {
-                  resetForm();
-                  setIsDialogOpen(true);
-                }}
+                onClick={openNewProductDialog}
               >
                 <Plus className="h-4 w-4" />
                 Add product
@@ -1737,6 +1893,14 @@ function StoreProductsPageContent() {
       </Dialog>
 
       {/* ---- More actions ---- */}
+      <CategoryManagerDialog
+        open={showCategories}
+        onOpenChange={setShowCategories}
+        storeId={storeId}
+        categories={categories}
+        onCategoriesChange={setCategories}
+      />
+
       <Dialog open={showMore} onOpenChange={setShowMore}>
         <DialogContent className="max-w-sm">
           <DialogHeader>
@@ -1768,6 +1932,20 @@ function StoreProductsPageContent() {
               <RefreshCw className="h-4 w-4 text-muted-foreground" />
               Refresh from server
             </button>
+            <FeatureFlagGuard feature="product_categories">
+              <button
+                type="button"
+                disabled={isOffline}
+                onClick={() => {
+                  setShowMore(false);
+                  setShowCategories(true);
+                }}
+                className="tap flex w-full items-center gap-3 rounded-xl px-4 py-3 text-left text-[15px] font-semibold hover:bg-muted/50 disabled:pointer-events-none disabled:opacity-40"
+              >
+                <Tags className="h-4 w-4 text-muted-foreground" />
+                Categories
+              </button>
+            </FeatureFlagGuard>
             <button
               type="button"
               disabled={products.length === 0 || isOffline}
@@ -2063,6 +2241,109 @@ function StoreProductsPageContent() {
                 />
               </div>
             </div>
+
+            {/* Category — only when the store uses them. */}
+            <FeatureFlagGuard feature="product_categories">
+              <div className="space-y-1.5">
+                <Label htmlFor="categoryId">Category</Label>
+                <select
+                  id="categoryId"
+                  value={categoryId}
+                  onChange={(e) => setCategoryId(e.target.value)}
+                  className="min-h-11 w-full rounded-lg border border-border bg-background px-2 text-sm"
+                >
+                  <option value="">No category</option>
+                  {categories.map((category) => (
+                    <option key={category.id} value={category.id}>
+                      {category.name}
+                    </option>
+                  ))}
+                </select>
+                {categories.length === 0 && (
+                  <p className="text-xs text-muted-foreground">
+                    No categories yet — add them from the Categories button on the list.
+                  </p>
+                )}
+              </div>
+            </FeatureFlagGuard>
+
+            {/* Type + unit. Only meaningful once the store builds menu items:
+                without menu_items there is nothing that could consume an
+                ingredient, so the choice would be a trap rather than a feature. */}
+            <FeatureFlagGuard feature="menu_items">
+              <div className="space-y-1.5">
+                <Label>Type</Label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setProductKind("sellable")}
+                    aria-pressed={productKind === "sellable"}
+                    className={`min-h-11 rounded-lg border px-3 text-sm font-medium ${
+                      productKind === "sellable"
+                        ? "border-primary bg-primary text-primary-foreground"
+                        : "border-border text-muted-foreground"
+                    }`}
+                  >
+                    Sellable
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setProductKind("ingredient")}
+                    aria-pressed={productKind === "ingredient"}
+                    className={`min-h-11 rounded-lg border px-3 text-sm font-medium ${
+                      productKind === "ingredient"
+                        ? "border-primary bg-primary text-primary-foreground"
+                        : "border-border text-muted-foreground"
+                    }`}
+                  >
+                    Ingredient
+                  </button>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  {productKind === "ingredient"
+                    ? "Used inside menu items. Never appears on the till."
+                    : "Sold at the till. Can have a recipe of ingredients."}
+                </p>
+              </div>
+
+              {productKind === "ingredient" && (
+                <div className="space-y-1.5">
+                  <Label htmlFor="stockUnit">Stock unit</Label>
+                  <select
+                    id="stockUnit"
+                    value={STOCK_UNITS.some((u) => u.value === stockUnit) ? stockUnit : "unit"}
+                    onChange={(e) => setStockUnit(e.target.value)}
+                    className="min-h-11 w-full rounded-lg border border-border bg-background px-2 text-sm"
+                  >
+                    {STOCK_UNITS.map((unit) => (
+                      <option key={unit.value} value={unit.value}>
+                        {unit.label}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-muted-foreground">
+                    Stock is a whole number in this unit, so pick the SMALLEST one you
+                    count — recipes cannot use half of it. Stock {stockQuantity || 0} means{" "}
+                    {formatStock(parseInt(stockQuantity) || 0, stockUnit)}.
+                  </p>
+                </div>
+              )}
+
+              {productKind === "sellable" && (
+                <div className="space-y-1.5">
+                  <Label>Recipe</Label>
+                  <p className="text-xs text-muted-foreground">
+                    What this is made of. Selling one deducts these instead of its own stock.
+                  </p>
+                  <RecipeEditor
+                    ingredients={ingredientOptions}
+                    components={recipeDraft}
+                    onChange={setRecipeDraft}
+                    disabled={isSubmitting}
+                  />
+                </div>
+              )}
+            </FeatureFlagGuard>
 
             <DialogFooter>
               <Button

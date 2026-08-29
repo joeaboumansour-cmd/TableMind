@@ -59,6 +59,13 @@ export interface CachedProduct {
    * "uncategorised", never as a reason to hide the product.
    */
   category_id?: string | null;
+  /**
+   * 'sellable' | 'ingredient'. OPTIONAL: rows cached before migration 030 do
+   * not have it. undefined MUST read as sellable — see lib/products/kind.ts.
+   */
+  kind?: string | null;
+  /** Unit for stock_quantity. Optional for the same reason as `kind`. */
+  stock_unit?: string | null;
   parent_id?: string | null;
   variant_name?: string | null;
   updated_at: string;

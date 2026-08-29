@@ -43,6 +43,8 @@ export interface ProductWriteInput {
   stock_quantity?: number;
   min_stock_threshold?: number;
   category_id?: string | null;
+  kind?: string | null;
+  stock_unit?: string | null;
 }
 
 export interface ProductWriteResult {
@@ -65,6 +67,8 @@ function toCachedProduct(id: string, input: ProductWriteInput): CachedProduct {
     stock_quantity: input.stock_quantity ?? 0,
     min_stock_threshold: input.min_stock_threshold ?? 0,
     category_id: input.category_id ?? null,
+    kind: input.kind || "sellable",
+    stock_unit: input.stock_unit || "unit",
     parent_id: null,
     variant_name: null,
     updated_at: new Date().toISOString(),
@@ -310,8 +314,11 @@ export async function repriceProduct(opts: {
     stock_quantity: existing.stock_quantity,
     min_stock_threshold: existing.min_stock_threshold,
     // Carried through deliberately: updateProduct rewrites the whole row, so
-    // dropping this would silently un-categorise the product on every reprice.
+    // dropping these would un-categorise a product, or turn an ingredient back
+    // into a sellable one, on every reprice from the till.
     category_id: existing.category_id ?? null,
+    kind: existing.kind || "sellable",
+    stock_unit: existing.stock_unit || "unit",
   });
 
   // Emitted in addition to the catalog.product_update above, because a reprice

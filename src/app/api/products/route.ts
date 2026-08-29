@@ -60,6 +60,8 @@ interface Validated {
   stock_quantity: number;
   min_stock_threshold: number;
   category_id: string | null;
+  kind: string;
+  stock_unit: string;
 }
 
 function readStoreId(request: Request): string | null {
@@ -174,6 +176,18 @@ function validate(body: JsonBody | null, storeId: string): Validated | string {
     categoryId = body.category_id;
   }
 
+  // Anything that is not explicitly 'ingredient' is sellable. Defaulting the
+  // other way would let a malformed write hide a product from the till.
+  const kind = body.kind === "ingredient" ? "ingredient" : "sellable";
+
+  let stockUnit = "unit";
+  if (body.stock_unit !== null && body.stock_unit !== undefined && body.stock_unit !== "") {
+    if (typeof body.stock_unit !== "string") return "stock_unit must be a string";
+    const trimmed = body.stock_unit.trim();
+    if (trimmed.length > 16) return "stock_unit is too long";
+    if (trimmed) stockUnit = trimmed;
+  }
+
   return {
     id,
     // From the header, never from the body — the caller does not get to pick
@@ -189,6 +203,8 @@ function validate(body: JsonBody | null, storeId: string): Validated | string {
     stock_quantity: stock,
     min_stock_threshold: minStock,
     category_id: categoryId,
+    kind,
+    stock_unit: stockUnit,
   };
 }
 

@@ -34,6 +34,7 @@ import {
   markPersistNoticeShown,
 } from "@/lib/pwa/persistentStorage";
 import { mapToCachedProduct, cachedToProduct } from "@/lib/products/refresh";
+import { isSellable, isIngredient } from "@/lib/products/kind";
 import ProPOSLayout from "@/components/pos/pro/ProPOSLayout";
 
 // BarcodeScanner statically imports @zxing/library (~420KB) plus the camera
@@ -295,6 +296,15 @@ export default function POSPage() {
 
   // Add a product to the cart (used by both barcode scan and saved product buttons)
   const handleProductAdd = useCallback((product: Product) => {
+    // An ingredient is not a thing a customer buys. Refuse clearly rather than
+    // silently doing nothing, and name it so the cashier knows why — this is
+    // reachable by scanning, because the barcode index is deliberately complete.
+    if (isIngredient(product)) {
+      toast.error(`${product.name} is an ingredient — it isn't sold on its own`);
+      playErrorSound();
+      return;
+    }
+
     let resolvedProduct = {...product};
 
     // If this is a variant child product, inherit values from parent (O(1) lookup)
@@ -586,12 +596,22 @@ export default function POSPage() {
 
   // Compute saved products for desktop mode (products without barcodes + frequently used)
   // Must be before any early returns to maintain hooks order
+  /**
+   * What the till may sell. Ingredients are stock consumed BY menu items, so
+   * they must not appear in search or on the quick grid.
+   *
+   * `barcodeIndex` is deliberately NOT filtered — see handleProductAdd. A
+   * scanned ingredient IS in the catalogue, and letting it fall through to the
+   * unknown-barcode prompt would read as a broken scanner.
+   */
+  const sellableProducts = useMemo(() => products.filter(isSellable), [products]);
+
   const savedProducts = useMemo(() => {
     if (!user?.storeId) return [];
-    const noBarcodeProducts = products.filter(p => !p.barcode);
+    const noBarcodeProducts = sellableProducts.filter(p => !p.barcode);
     const frequentlyUsedIds = getFrequentlyUsedProductIds(user.storeId);
     const frequentlyUsedProducts = frequentlyUsedIds
-      .map(id => products.find(p => p.id === id))
+      .map(id => sellableProducts.find(p => p.id === id))
       .filter(Boolean) as Product[];
     // Combine, deduplicating by ID
     const combined = [...noBarcodeProducts, ...frequentlyUsedProducts];
@@ -601,7 +621,7 @@ export default function POSPage() {
       seen.add(p.id);
       return true;
     });
-  }, [products, user?.storeId]);
+  }, [sellableProducts, user?.storeId]);
 
   // ---- Layout measurements for the scan-first mobile layout ----
   //
@@ -839,7 +859,7 @@ export default function POSPage() {
         <div className="absolute inset-x-0 bottom-0 z-20">
           <div ref={searchBlockRef} className="px-4 pb-3">
             <ProductSearchBar
-              products={products}
+              products={sellableProducts}
               onSelect={handleProductAdd}
               placeholder="Search or type a barcode"
               dropUp
@@ -879,7 +899,7 @@ export default function POSPage() {
   return (
     <>
       <ProPOSLayout
-        products={products}
+        products={sellableProducts}
         savedProducts={savedProducts}
         storeId={user?.storeId || ""}
         onProductAdd={handleProductAdd}
