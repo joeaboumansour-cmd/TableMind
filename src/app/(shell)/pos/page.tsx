@@ -400,6 +400,37 @@ export default function POSPage() {
     // above so this callback stays referentially stable.
   }, [addItem, incrementQuantity, isEnabled, isDesktopMode, toast]);
 
+  const sellableProducts = useMemo(() => products.filter(isSellable), [products]);
+
+  /**
+   * Every ingredient in inventory, so ANY of them can be added to ANY line —
+   * hummus does not have to be in the taouk sandwich's recipe to go on it.
+   * Variants are excluded: a variant is a way of selling a product, not a
+   * thing you put inside one.
+   */
+  const ingredientProducts = useMemo(
+    () => products.filter((p) => isIngredient(p) && !p.parent_id),
+    [products]
+  );
+
+  /**
+   * The mobile till's modifier sheet. Same hook the desktop layout uses, so the
+   * "recipe -> open the sheet, otherwise add straight to the cart" rule has one
+   * implementation rather than one per layout.
+   */
+  const {
+    setConfiguring: setMobileConfiguring,
+    handleTileAdd,
+    handleEditModifiers: handleMobileEditModifiers,
+    handleConfirm: handleMobileConfirm,
+    sheetProps: mobileSheetProps,
+  } = useMenuSheet({
+    recipes,
+    products: sellableProducts,
+    enabled: isEnabled("menu_items"),
+    onPlainAdd: handleProductAdd,
+  });
+
   // Resolve a scanned code to a product: the O(1) local index first, then a
   // live Supabase lookup for something that exists server-side but has not
   // reached this device's cache yet.
@@ -485,7 +516,10 @@ export default function POSPage() {
       if (needsServerLookup) toast.dismiss("scan-fallback");
 
       if (product) {
-        handleProductAdd(product);
+        // handleTileAdd, not handleProductAdd: a scanned item WITH a recipe
+        // must still open the modifier sheet, or it sells as a plain line and
+        // decrements the menu item instead of its ingredients.
+        handleTileAdd(product);
         return;
       }
 
@@ -495,7 +529,7 @@ export default function POSPage() {
         { key: "scan-miss" }
       );
     },
-    [resolveBarcode, handleProductAdd, toast, barcodeIndex]
+    [resolveBarcode, handleTileAdd, toast, barcodeIndex]
   );
 
   // A product created or repriced from the desktop till. Folding it into
@@ -627,37 +661,6 @@ export default function POSPage() {
    * scanned ingredient IS in the catalogue, and letting it fall through to the
    * unknown-barcode prompt would read as a broken scanner.
    */
-  const sellableProducts = useMemo(() => products.filter(isSellable), [products]);
-
-  /**
-   * Every ingredient in inventory, so ANY of them can be added to ANY line —
-   * hummus does not have to be in the taouk sandwich's recipe to go on it.
-   * Variants are excluded: a variant is a way of selling a product, not a
-   * thing you put inside one.
-   */
-  const ingredientProducts = useMemo(
-    () => products.filter((p) => isIngredient(p) && !p.parent_id),
-    [products]
-  );
-
-  /**
-   * The mobile till's modifier sheet. Same hook the desktop layout uses, so the
-   * "recipe -> open the sheet, otherwise add straight to the cart" rule has one
-   * implementation rather than one per layout.
-   */
-  const {
-    setConfiguring: setMobileConfiguring,
-    handleTileAdd,
-    handleEditModifiers: handleMobileEditModifiers,
-    handleConfirm: handleMobileConfirm,
-    sheetProps: mobileSheetProps,
-  } = useMenuSheet({
-    recipes,
-    products: sellableProducts,
-    enabled: isEnabled("menu_items"),
-    onPlainAdd: handleProductAdd,
-  });
-
   /**
    * Ingredient names for the modifier sheet. Built from the FULL catalogue,
    * not from sellableProducts — the ingredients are exactly the rows that list
@@ -962,7 +965,7 @@ export default function POSPage() {
           <div ref={searchBlockRef} className="px-4 pb-3">
             <ProductSearchBar
               products={sellableProducts}
-              onSelect={handleProductAdd}
+              onSelect={handleTileAdd}
               placeholder="Search or type a barcode"
               dropUp
               inputClassName="glass h-[52px] rounded-2xl border-white/10 text-[15px]"

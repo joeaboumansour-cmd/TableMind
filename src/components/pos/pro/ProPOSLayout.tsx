@@ -281,7 +281,13 @@ export default function ProPOSLayout({
             target: product.name,
             details: { barcode, product_id: product.id },
           });
-          onProductAdd(product);
+          // handleTileAdd, NOT onProductAdd: a scanned item WITH a recipe must
+          // still open the modifier sheet. Adding it plain would decrement the
+          // menu item's own meaningless stock instead of its ingredients, and
+          // leave the sale with modifiers=NULL so it is not a kitchen ticket.
+          // Falls straight through to a plain add when there is no recipe, so
+          // a retail wedge scanner is unaffected.
+          handleTileAdd(product);
           return;
         }
         // The customer is standing there holding it, so a miss is a prompt,
@@ -298,7 +304,7 @@ export default function ProPOSLayout({
         setIsResolving(false);
       }
     },
-    [resolveBarcode, onProductAdd, canEditInventory]
+    [resolveBarcode, handleTileAdd, canEditInventory]
   );
 
   /** Name + price for a code the catalogue does not have. */
@@ -601,7 +607,9 @@ export default function ProPOSLayout({
 
             <SmartScanInput
               products={products}
-              onSelectProduct={onProductAdd}
+              // Same rule as the grid: a product with a recipe opens the
+              // sheet however it was found — typed, scanned or tapped.
+              onSelectProduct={handleTileAdd}
               onBarcode={handleBarcode}
               inputRef={searchInputRef}
               disabled={isWriting}

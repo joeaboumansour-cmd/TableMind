@@ -102,7 +102,13 @@ function KitchenBoard() {
       // is the one thing this failure must never look like.
       setError(err instanceof Error ? err.message : "Could not reach the server");
     } finally {
-      if (seq === requestSeq.current) setIsLoading(false);
+      // ALWAYS clear, even for a superseded request. This flag means "have we
+      // ever loaded", not "is the newest load done" — gating it on the seq
+      // meant that whenever loads overlapped (connectivity flapping, the tab
+      // regaining visibility, React StrictMode double-invoking the effect in
+      // dev) every one of them was superseded before it resolved, and the
+      // board sat on "Loading…" forever while holding perfectly good data.
+      setIsLoading(false);
     }
   }, [storeId, user]);
 
