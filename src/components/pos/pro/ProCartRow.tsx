@@ -33,6 +33,14 @@ interface ProCartRowProps {
   onSetQuantity: (productId: string, quantity: number) => void;
   onRemove: (productId: string) => void;
   onOpenEditor: (productId: string) => void;
+  /**
+   * Reopen the modifier sheet for this line. Absent when the store has no menu
+   * items, in which case no line can carry modifiers anyway.
+   *
+   * Gated on `pos`, not `canEdit`: choosing a listed add-on at the owner's
+   * price is ordering, not pricing.
+   */
+  onEditModifiers?: (item: CartItem) => void;
   /** The editor panel, rendered by the parent so it owns the save handlers. */
   editor?: React.ReactNode;
 }
@@ -77,11 +85,31 @@ export default function ProCartRow({
   onSetQuantity,
   onRemove,
   onOpenEditor,
+  onEditModifiers,
   editor,
 }: ProCartRowProps) {
   const isOneOff = item.line_kind === "one_off";
   const hasDiscount = item.discount_percentage > 0;
   const edited = item.is_price_overridden || item.is_name_overridden;
+
+  /**
+   * Only the CHANGES are shown. Listing everything a sandwich contains would
+   * bury the one line that matters — the cashier needs to see "no pickles",
+   * not a recital of the recipe.
+   */
+  const modifierChips = (item.modifiers || [])
+    .filter((m) => m.state === "removed" || m.state === "extra")
+    .map((m) => {
+      if (m.state === "removed") {
+        return { key: m.component_id, label: `No ${m.name}`, removed: true };
+      }
+      const extraUnits = Math.max(1, m.count - (m.is_default_component ? 1 : 0));
+      return {
+        key: m.component_id,
+        label: extraUnits > 1 ? `+${extraUnits} ${m.name}` : `+ ${m.name}`,
+        removed: false,
+      };
+    });
 
   return (
     <div
@@ -140,6 +168,32 @@ export default function ProCartRow({
               <Tag className="h-3 w-3 flex-none text-primary" aria-label="Edited" />
             )}
           </span>
+          {modifierChips.length > 0 && (
+            <span
+              className="mt-1 flex flex-wrap gap-1"
+              onClick={(e) => {
+                if (!onEditModifiers) return;
+                // The name field around this opens the PRICE editor; the chips
+                // open the modifier sheet. Stop the outer handler so tapping a
+                // chip does not do both.
+                e.stopPropagation();
+                onEditModifiers(item);
+              }}
+            >
+              {modifierChips.map((chip) => (
+                <span
+                  key={chip.key}
+                  className={`rounded px-1.5 py-0.5 text-[10px] font-semibold leading-none ${
+                    chip.removed
+                      ? "bg-destructive/15 text-destructive"
+                      : "bg-primary/15 text-primary"
+                  }`}
+                >
+                  {chip.label}
+                </span>
+              ))}
+            </span>
+          )}
           <span className="mt-0.5 block truncate text-xs text-muted-foreground tnum">
             {hasDiscount ? (
               <>

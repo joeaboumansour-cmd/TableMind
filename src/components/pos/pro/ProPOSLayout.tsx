@@ -48,6 +48,11 @@ import ProCartRow from "./ProCartRow";
 import CartLineEditor, { type EditScope, type LineEditPatch } from "./CartLineEditor";
 import ProTotalsPanel from "./ProTotalsPanel";
 import QuickGrid from "./QuickGrid";
+import MenuBrowser from "./MenuBrowser";
+import ModifierSheet from "./ModifierSheet";
+import type { Category } from "@/lib/categories/types";
+import type { RecipeMap } from "@/lib/recipes/types";
+import type { CartLineModifier } from "@/lib/types/cart";
 import PanelResizer, { usePanelWidth } from "./PanelResizer";
 import { useScanFocus } from "./useScanFocus";
 
@@ -57,6 +62,12 @@ const LANE_TICK_MS = 1000;
 interface ProPOSLayoutProps {
   products: Product[];
   savedProducts: Product[];
+  /** Menu categories for the browse rail. Empty for a retail store. */
+  categories: Category[];
+  /** Every recipe in the store, by menu product id. Empty for a retail store. */
+  recipes: RecipeMap;
+  /** Ingredient names for the modifier sheet, by product id. */
+  ingredientNames: Map<string, string>;
   storeId: string;
   /** Adds to the active lane, with the page's variant/discount resolution. */
   onProductAdd: (product: Product) => void;
@@ -71,6 +82,9 @@ interface ProPOSLayoutProps {
 export default function ProPOSLayout({
   products,
   savedProducts,
+  categories,
+  recipes,
+  ingredientNames,
   storeId,
   onProductAdd,
   resolveBarcode,
@@ -94,6 +108,8 @@ export default function ProPOSLayout({
   const switchLane = useCartStore((s) => s.switchLane);
   const switchLaneByPosition = useCartStore((s) => s.switchLaneByPosition);
   const addOneOffItem = useCartStore((s) => s.addOneOffItem);
+  const addConfiguredItem = useCartStore((s) => s.addConfiguredItem);
+  const updateItemModifiers = useCartStore((s) => s.updateItemModifiers);
   const updateLine = useCartStore((s) => s.updateLine);
   const incrementQuantity = useCartStore((s) => s.incrementQuantity);
   const decrementQuantity = useCartStore((s) => s.decrementQuantity);
@@ -109,6 +125,14 @@ export default function ProPOSLayout({
 
   // ---- Local UI state ----
   const [editingLineId, setEditingLineId] = useState<string | null>(null);
+  /**
+   * The modifier sheet's subject. `lineId` null = building a NEW line;
+   * set = editing the choices on an existing one.
+   */
+  const [configuring, setConfiguring] = useState<{
+    product: Product;
+    lineId: string | null;
+  } | null>(null);
   const [unknownBarcode, setUnknownBarcode] = useState<string | null>(null);
   const [isResolving, setIsResolving] = useState(false);
   const [isWriting, setIsWriting] = useState(false);
@@ -144,6 +168,9 @@ export default function ProPOSLayout({
     unknownBarcode !== null ||
     laneToClose !== null ||
     clearConfirmOpen ||
+    // A half-configured sandwich is exactly the typed state a service-worker
+    // reload would throw away, and the sheet owns the keyboard while it is up.
+    configuring !== null ||
     isWriting;
   useScanFocus(searchInputRef, keyboardBusy);
 
@@ -490,6 +517,41 @@ export default function ProPOSLayout({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [switchLaneByPosition, isEmpty, onCheckout, laneToClose, clearConfirmOpen]);
 
+  /**
+   * Menu mode: browse by category instead of the quick-access grid.
+   *
+   * Requires categories to actually exist — a rail with nothing in it is worse
+   * than the grid it replaced. With the flag off this is false and the right
+   * panel renders exactly what it always did.
+   */
+  const menuMode = isEnabled("product_categories") && categories.length > 0;
+
+  /**
+   * A tile was tapped. An item with a recipe opens the sheet; anything else
+   * goes straight into the cart, exactly as before.
+   */
+  const handleTileAdd = useCallback(
+    (product: Product) => {
+      const components = recipes[product.id];
+      if (isEnabled("menu_items") && components && components.length > 0) {
+        setConfiguring({ product, lineId: null });
+        return;
+      }
+      onProductAdd(product);
+    },
+    [recipes, isEnabled, onProductAdd]
+  );
+
+  /** Reopen the sheet for a line already in the cart. */
+  const handleEditModifiers = useCallback(
+    (item: CartItem) => {
+      const product = products.find((p) => p.id === item.product_id);
+      if (!product) return;
+      setConfiguring({ product, lineId: lineKey(item) });
+    },
+    [products]
+  );
+
   const editingItem = editingLineId
     ? items.find((i) => lineKey(i) === editingLineId)
     : undefined;
@@ -657,6 +719,9 @@ export default function ProPOSLayout({
                         removeItem(id);
                       }}
                       canEdit={canEditInventory}
+                      onEditModifiers={
+                        isEnabled("menu_items") ? handleEditModifiers : undefined
+                      }
                       onOpenEditor={(id) =>
                         setEditingLineId((current) => (current === id ? null : id))
                       }
@@ -713,10 +778,44 @@ export default function ProPOSLayout({
           </div>
 
           <div className="mt-3 min-h-0 flex-1 overflow-hidden rounded-3xl border bg-card">
-            <QuickGrid products={savedProducts} onAdd={onProductAdd} />
+            {menuMode ? (
+              <MenuBrowser
+                products={products}
+                categories={categories}
+                onAdd={handleTileAdd}
+              />
+            ) : (
+              <QuickGrid products={savedProducts} onAdd={onProductAdd} />
+            )}
           </div>
         </div>
       </div>
+
+      <ModifierSheet
+        open={configuring !== null}
+        onOpenChange={(open) => {
+          if (!open) setConfiguring(null);
+        }}
+        product={configuring?.product ?? null}
+        components={configuring ? recipes[configuring.product.id] || [] : []}
+        ingredientNames={ingredientNames}
+        initial={
+          configuring?.lineId
+            ? items.find((i) => lineKey(i) === configuring.lineId)?.modifiers ?? null
+            : null
+        }
+        onConfirm={(modifiers: CartLineModifier[]) => {
+          if (!configuring) return;
+          if (configuring.lineId) {
+            updateItemModifiers(configuring.lineId, modifiers);
+          } else {
+            addConfiguredItem(configuring.product, modifiers);
+            playSuccessSound();
+          }
+          setConfiguring(null);
+          searchInputRef.current?.focus();
+        }}
+      />
 
       <ConfirmDialog
         open={clearConfirmOpen}

@@ -35,6 +35,10 @@ import {
 } from "@/lib/pwa/persistentStorage";
 import { mapToCachedProduct, cachedToProduct } from "@/lib/products/refresh";
 import { isSellable, isIngredient } from "@/lib/products/kind";
+import { getCategories, refreshCategories } from "@/lib/categories/load";
+import type { Category } from "@/lib/categories/types";
+import { getCachedRecipes, refreshRecipes } from "@/lib/recipes/load";
+import type { RecipeMap } from "@/lib/recipes/types";
 import ProPOSLayout from "@/components/pos/pro/ProPOSLayout";
 
 // BarcodeScanner statically imports @zxing/library (~420KB) plus the camera
@@ -67,6 +71,8 @@ export default function POSPage() {
     return true;
   });
   const [products, setProducts] = useState<Product[]>([]);
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [recipes, setRecipes] = useState<RecipeMap>({});
   const [isLoading, setIsLoading] = useState(true);
   // Throttles the focus-triggered refresh (see the load effect below)
   const lastFocusSyncRef = useRef(0);
@@ -192,6 +198,14 @@ export default function POSPage() {
           const store_id = user.storeId;
           setStoreId(store_id);
           syncEngine.setStoreId(store_id);
+
+          // Cache first, then revalidate — the rail and the modifier sheet must
+          // be usable on the first frame with no internet, and a failed refresh
+          // keeps whatever was cached rather than emptying them.
+          setCategories(getCategories(store_id));
+          setRecipes(getCachedRecipes(store_id));
+          void refreshCategories(store_id).then(setCategories);
+          void refreshRecipes(store_id).then(setRecipes);
 
           // ALWAYS load from local cache first for instant display
           const cached = await getCachedProducts(store_id);
@@ -612,6 +626,17 @@ export default function POSPage() {
    */
   const sellableProducts = useMemo(() => products.filter(isSellable), [products]);
 
+  /**
+   * Ingredient names for the modifier sheet. Built from the FULL catalogue,
+   * not from sellableProducts — the ingredients are exactly the rows that list
+   * excludes, and a sheet that cannot name them is useless.
+   */
+  const ingredientNames = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const product of products) map.set(product.id, product.name);
+    return map;
+  }, [products]);
+
   const savedProducts = useMemo(() => {
     if (!user?.storeId) return [];
     const noBarcodeProducts = sellableProducts.filter(p => !p.barcode);
@@ -907,6 +932,9 @@ export default function POSPage() {
       <ProPOSLayout
         products={sellableProducts}
         savedProducts={savedProducts}
+        categories={categories}
+        recipes={recipes}
+        ingredientNames={ingredientNames}
         storeId={user?.storeId || ""}
         onProductAdd={handleProductAdd}
         resolveBarcode={resolveBarcode}
