@@ -2,7 +2,7 @@
 
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from "react";
 import { createClient } from "@/lib/supabase/client";
-import { StoreUser, canAccess, getFullPermissions, SectionKey, UserPermissions } from "./permissions";
+import { StoreUser, canAccess, getFullPermissions, parsePermissions, SectionKey, UserPermissions } from "./permissions";
 import { cacheCredentials, clearCachedCredentials, validateCachedCredentials } from "./offlineAuth";
 import { logActivity, invalidateActivityIdentity, flushActivity } from "@/lib/activity/logger";
 import { connectivity } from "@/lib/connectivity";
@@ -245,27 +245,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
       }
 
       // Parse permissions
-      let perms: UserPermissions;
-      try {
-        const rawPerms = typeof employee.permissions === "string"
-          ? JSON.parse(employee.permissions)
-          : employee.permissions;
-        perms = {
-          pos: rawPerms.pos === true,
-          inventory: rawPerms.inventory === true,
-          transactions: rawPerms.transactions === true,
-          receipts: rawPerms.receipts === true,
-          cash_register: rawPerms.cash_register === true,
-        };
-      } catch {
-        perms = {
-          pos: false,
-          inventory: false,
-          transactions: false,
-          receipts: false,
-          cash_register: false,
-        };
-      }
+      const perms: UserPermissions = parsePermissions(employee.permissions);
 
       const employeeUser: StoreUser = {
         id: employee.id,
@@ -339,28 +319,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
       // If employee data exists, this was an employee login
       if (employeeData) {
-        // Parse permissions
-        let perms: UserPermissions;
-        try {
-          const rawPerms = typeof employeeData.permissions === "string"
-            ? JSON.parse(employeeData.permissions)
-            : employeeData.permissions;
-          perms = {
-            pos: rawPerms.pos === true,
-            inventory: rawPerms.inventory === true,
-            transactions: rawPerms.transactions === true,
-            receipts: rawPerms.receipts === true,
-            cash_register: rawPerms.cash_register === true,
-          };
-        } catch {
-          perms = {
-            pos: false,
-            inventory: false,
-            transactions: false,
-            receipts: false,
-            cash_register: false,
-          };
-        }
+        const perms: UserPermissions = parsePermissions(employeeData.permissions);
 
         const employeeUser: StoreUser = {
           id: employeeData.id,
@@ -497,13 +456,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
         const updatedUser: StoreUser = {
           ...user,
-          permissions: {
-            pos: rawPerms.pos === true,
-            inventory: rawPerms.inventory === true,
-            transactions: rawPerms.transactions === true,
-            receipts: rawPerms.receipts === true,
-            cash_register: rawPerms.cash_register === true,
-          },
+          permissions: parsePermissions(rawPerms),
         };
         setUser(updatedUser);
         saveUserToStorage(updatedUser);

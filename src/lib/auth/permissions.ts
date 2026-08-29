@@ -12,6 +12,7 @@ export const SECTIONS = {
   transactions: { label: "Transaction History", description: "View past sales and receipts" },
   receipts: { label: "View Receipts", description: "Access individual transaction receipts" },
   cash_register: { label: "Cash Register", description: "View and reconcile the daily cash drawer" },
+  kitchen: { label: "Kitchen Display", description: "See paid orders and move them through preparation" },
 } as const;
 
 export type SectionKey = keyof typeof SECTIONS;
@@ -22,6 +23,7 @@ export interface UserPermissions {
   transactions: boolean;
   receipts: boolean;
   cash_register: boolean;
+  kitchen: boolean;
   [key: string]: boolean; // Allows future sections without type changes
 }
 
@@ -44,6 +46,7 @@ export function getDefaultPermissions(): UserPermissions {
     transactions: false,
     receipts: false,
     cash_register: false,
+    kitchen: false,
   };
   return perms;
 }
@@ -58,7 +61,42 @@ export function getFullPermissions(): UserPermissions {
     transactions: true,
     receipts: true,
     cash_register: true,
+    kitchen: true,
   };
+  return perms;
+}
+
+/**
+ * Parse a raw `store_users.permissions` value into a complete UserPermissions.
+ *
+ * Every section is derived from SECTIONS, so adding a section here is the only
+ * edit needed — this used to be hand-written three times in AuthContext, each
+ * copy listing the five keys literally, which meant a new section silently
+ * arrived as `undefined` (falsy, so it read as "denied") at every call site
+ * that had not been updated.
+ *
+ * Anything unparseable becomes all-false rather than throwing. A permissions
+ * blob we cannot read is not permission to do anything — the safe direction
+ * for a section gate is always to withhold.
+ */
+export function parsePermissions(raw: unknown): UserPermissions {
+  let parsed: unknown = raw;
+
+  if (typeof raw === "string") {
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return getDefaultPermissions();
+    }
+  }
+
+  if (!parsed || typeof parsed !== "object") return getDefaultPermissions();
+
+  const source = parsed as Record<string, unknown>;
+  const perms = getDefaultPermissions();
+  for (const key of Object.keys(SECTIONS)) {
+    perms[key] = source[key] === true;
+  }
   return perms;
 }
 

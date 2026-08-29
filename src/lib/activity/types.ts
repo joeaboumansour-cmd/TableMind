@@ -15,6 +15,7 @@ export const ACTIVITY_CATEGORIES = [
   "catalog",
   "sale",
   "cash",
+  "kitchen",
   "auth",
   "nav",
   "ui",
@@ -74,6 +75,11 @@ export const ACTIVITY_ACTIONS = [
   "cash.shift_overdue_seen",
   "cash.request_approve",
   "cash.request_reject",
+
+  // --- Kitchen display
+  // One row per ticket move. The board is a shared surface several people
+  // touch, so who advanced which order is the whole point of logging it.
+  "kitchen.ticket_move",
 
   // --- Auth
   "auth.login",
