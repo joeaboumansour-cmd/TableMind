@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import { getDefaultPermissions } from "@/lib/auth/permissions";
 
 const supabaseAdmin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -64,13 +65,11 @@ export async function POST(request: Request) {
         password_hash: password,
         display_name: display_name || username,
         is_active: true,
-        permissions: permissions || {
-          pos: false,
-          inventory: false,
-          transactions: false,
-          receipts: false,
-          cash_register: false,
-        },
+        // Derived from SECTIONS, never listed by hand — a hand-written copy
+        // is how the `kitchen` section came to be ungrantable. The admin UI
+        // always sends `permissions`, so this is only the fallback, but a
+        // fallback that silently omits a section is exactly the same bug.
+        permissions: permissions || getDefaultPermissions(),
       })
       .select("id, store_id, username, display_name, is_active, permissions, created_at")
       .single();

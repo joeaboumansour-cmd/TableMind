@@ -69,6 +69,8 @@ import dynamic from "next/dynamic";
 import { connectivity } from "@/lib/connectivity";
 import { analyticsQuery, getFilterCutoff, type DateFilter } from "@/lib/dateFilter";
 import { logActivity } from "@/lib/activity/logger";
+import { describeModifiers } from "@/lib/pos/modifierSummary";
+import type { CartLineModifier } from "@/lib/types/cart";
 
 // Helper: check if user auth exists in localStorage (works offline)
 function hasAuthInStorage(): boolean {
@@ -106,6 +108,10 @@ interface TransactionItem {
   unit_price: number;
   total_price: number;
   currency: string;
+  /** Made-to-order choices as sold. Null on every ordinary line. */
+  modifiers?: CartLineModifier[] | null;
+  /** Free-text instruction for this line. */
+  note?: string | null;
 }
 
 interface Transaction {
@@ -349,6 +355,8 @@ function TransactionHistoryPageContent() {
                   unit_price: item.unit_price,
                   total_price: item.total_price,
                   currency: item.currency,
+                  modifiers: item.modifiers ?? null,
+                  note: item.note ?? null,
                 })),
               }));
               cacheTransactions(toCache).catch((err) =>
@@ -423,6 +431,10 @@ function TransactionHistoryPageContent() {
           unit_price: it.unit_price,
           total_price: it.total_price,
           currency: it.currency,
+          // A queued sale shows its modifiers too — the cashier may need to
+          // check what was ordered before it has even reached the server.
+          modifiers: it.modifiers ?? null,
+          note: it.note ?? null,
         })),
         calculated_change: (q.amount_paid ?? 0) - (q.total_amount ?? 0),
         syncState,
@@ -1157,6 +1169,18 @@ function TransactionHistoryPageContent() {
                     <span className="min-w-0 flex-1">
                       <span className="font-medium">{item.product_name}</span>
                       <span className="text-muted-foreground tnum"> × {item.quantity}</span>
+                      {/* What was changed, in the same words the till, the
+                          kitchen and the receipt use. */}
+                      {describeModifiers(item.modifiers).map((label) => (
+                        <span key={label} className="block text-xs text-muted-foreground">
+                          {label}
+                        </span>
+                      ))}
+                      {item.note && (
+                        <span className="block text-xs italic text-muted-foreground">
+                          “{item.note}”
+                        </span>
+                      )}
                     </span>
                     <span className="flex-none text-right">
                       {/* total_price is stored in LL for every line, whatever the

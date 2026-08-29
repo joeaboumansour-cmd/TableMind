@@ -4,6 +4,8 @@
 // ===
 
 import Dexie, { type EntityTable } from "dexie";
+import type { CartLineModifier } from "@/lib/types/cart";
+import type { StockDecrement } from "@/lib/pos/lineItems";
 
 // ---- Types ----
 
@@ -24,6 +26,14 @@ export interface CachedTransactionItem {
   unit_price: number;
   total_price: number;
   currency: string;
+  /**
+   * Made-to-order choices as sold. Optional, like product_id above: rows
+   * cached before this field existed will not have it, and null is correct
+   * for every ordinary line anyway.
+   */
+  modifiers?: CartLineModifier[] | null;
+  /** Free-text instruction for this line. Optional, like modifiers above. */
+  note?: string | null;
 }
 
 export interface CachedTransaction {
@@ -53,6 +63,21 @@ export interface CachedProduct {
   discount_percentage: number;
   stock_quantity: number;
   min_stock_threshold: number;
+  /**
+   * product_categories.id. OPTIONAL because rows cached by a build from
+   * before categories existed do not have it — treat `undefined` as
+   * "uncategorised", never as a reason to hide the product.
+   */
+  category_id?: string | null;
+  /**
+   * 'sellable' | 'ingredient'. OPTIONAL: rows cached before migration 030 do
+   * not have it. undefined MUST read as sellable — see lib/products/kind.ts.
+   */
+  kind?: string | null;
+  /** Unit for stock_quantity. Optional for the same reason as `kind`. */
+  stock_unit?: string | null;
+  /** One portion of this ingredient, in its stock_unit. Defaults to 1. */
+  serving_qty?: number | null;
   parent_id?: string | null;
   variant_name?: string | null;
   updated_at: string;
@@ -75,6 +100,23 @@ export interface QueuedTransaction {
   user_id?: string;
   user_name?: string;
   items: QueuedTransactionItem[];
+  /**
+   * What this sale takes out of stock, computed at CHECKOUT time.
+   *
+   * ⚠️ This field is why an offline menu sale deducts the right thing.
+   *
+   * The server falls back to deriving decrements from `items` when this is
+   * absent — correct for every ordinary sale and for every row queued before
+   * this existed. But for a MENU line, `items` names the sandwich, so that
+   * fallback would decrement the sandwich instead of its ingredients: silent,
+   * offline-only, and invisible until a stock take.
+   *
+   * Computed here rather than on the server on purpose: the recipe AT THE TIME
+   * OF SALE is the right recipe. A sandwich sold offline on Monday and synced
+   * on Wednesday must deduct what Monday's recipe said, not what the owner
+   * changed it to on Tuesday.
+   */
+  stock_decrements?: StockDecrement[];
   created_at: string;
   /** Sync attempts so far. Absent on rows queued before this field existed. */
   retry_count?: number;
@@ -120,6 +162,14 @@ export interface QueuedTransactionItem {
   currency: string;
   unit_price_usd: number;
   total_price_usd: number;
+  /**
+   * Made-to-order choices as sold. NULL = an ordinary line; [] = a menu line
+   * with nothing changed. Mirrors SaleLineItem exactly so the online and
+   * offline payloads cannot disagree.
+   */
+  modifiers?: CartLineModifier[] | null;
+  /** Free-text instruction for this line. Mirrors SaleLineItem. */
+  note?: string | null;
 }
 
 export interface PendingWrite {

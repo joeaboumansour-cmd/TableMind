@@ -59,6 +59,10 @@ interface Validated {
   discount_percentage: number;
   stock_quantity: number;
   min_stock_threshold: number;
+  category_id: string | null;
+  kind: string;
+  stock_unit: string;
+  serving_qty: number;
 }
 
 function readStoreId(request: Request): string | null {
@@ -161,6 +165,40 @@ function validate(body: JsonBody | null, storeId: string): Validated | string {
   const minStock = wholeNumber(body.min_stock_threshold, "min_stock_threshold");
   if (typeof minStock === "string") return minStock;
 
+  // The database enforces that the category belongs to THIS store, via the
+  // composite FK (category_id, store_id) added in migration 029 — so there is
+  // no ownership lookup to pay for here. A category from another tenant fails
+  // the insert rather than being silently accepted.
+  let categoryId: string | null = null;
+  if (body.category_id !== null && body.category_id !== undefined && body.category_id !== "") {
+    if (typeof body.category_id !== "string" || !UUID_RE.test(body.category_id)) {
+      return "category_id must be a UUID";
+    }
+    categoryId = body.category_id;
+  }
+
+  // Anything that is not explicitly 'ingredient' is sellable. Defaulting the
+  // other way would let a malformed write hide a product from the till.
+  const kind = body.kind === "ingredient" ? "ingredient" : "sellable";
+
+  let stockUnit = "unit";
+  if (body.stock_unit !== null && body.stock_unit !== undefined && body.stock_unit !== "") {
+    if (typeof body.stock_unit !== "string") return "stock_unit must be a string";
+    const trimmed = body.stock_unit.trim();
+    if (trimmed.length > 16) return "stock_unit is too long";
+    if (trimmed) stockUnit = trimmed;
+  }
+
+  // One portion of an ingredient, in its own stock_unit. Must be positive —
+  // a zero or negative serving would deduct nothing or ADD stock on a sale.
+  let servingQty = 1;
+  if (body.serving_qty !== null && body.serving_qty !== undefined && body.serving_qty !== "") {
+    const n = Number(body.serving_qty);
+    if (!Number.isFinite(n) || n <= 0) return "serving_qty must be greater than zero";
+    if (n > 1_000_000) return "serving_qty is out of range";
+    servingQty = n;
+  }
+
   return {
     id,
     // From the header, never from the body — the caller does not get to pick
@@ -175,6 +213,10 @@ function validate(body: JsonBody | null, storeId: string): Validated | string {
     discount_percentage: discount,
     stock_quantity: stock,
     min_stock_threshold: minStock,
+    category_id: categoryId,
+    kind,
+    stock_unit: stockUnit,
+    serving_qty: servingQty,
   };
 }
 

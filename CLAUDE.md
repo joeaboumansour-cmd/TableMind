@@ -22,6 +22,8 @@ A **mobile-first, offline-first retail Point of Sale PWA** for shops in **Lebano
 
 **The tenancy column is `store_id`.** Never `merchant_id`, never `restaurant_id`. If you see those, you are reading dead code or a stale doc.
 
+> **Not every store is a retail store any more.** Bakeries, coffee shops and snack counters sell **made-to-order** items assembled from ingredients. See [§13](#13-store-types-menus-and-ingredient-depletion).
+
 ---
 
 ## 2. Stack (verified against `package.json`, not docs)
@@ -153,7 +155,7 @@ onto `products/write.ts` is an open task.
 
 ### Permissions vs roles — don't mix them up
 
-- ✅ **`src/lib/auth/permissions.ts`** is the real system. Five `SECTIONS`: `pos`, `inventory`, `transactions`, `receipts`, `cash_register`. Guard with `PermissionGuard` from `src/lib/auth/guards.tsx`.
+- ✅ **`src/lib/auth/permissions.ts`** is the real system. Six `SECTIONS`: `pos`, `inventory`, `transactions`, `receipts`, `cash_register`, `kitchen`. Guard with `PermissionGuard` from `src/lib/auth/guards.tsx`. **Parse a stored permissions blob with `parsePermissions()`**, which is driven by `SECTIONS` — three hand-written copies of that mapping used to exist in `AuthContext`, and a new section silently arrived as `undefined` (i.e. denied) at every one that was not updated.
 > **`inventory` is the pricing permission.** Everything on the desktop till that
 > decides what a customer is charged — retyping a cart line's price or name,
 > naming an unknown barcode, adding a product — is gated on it, in one place
@@ -220,7 +222,8 @@ Many components read localStorage directly instead of using `useAuth()`. That's 
 
 Store-level flags in a `stores.features` JSONB column (migration **`017`**).
 
-- Registry: **`src/lib/features.ts`** — currently **9** keys: `pos`, `inventory`, `transactions`, `receipts`, `product_discount`, `transaction_analytics`, `desktop_shortcuts`, `cash_register`, `activity_logging`.
+- Registry: **`src/lib/features.ts`** — currently **13** keys: `pos`, `inventory`, `transactions`, `receipts`, `product_discount`, `transaction_analytics`, `desktop_shortcuts`, `cash_register`, `activity_logging`, `product_categories`, `menu_items`, `recipe_stock_depletion`, `kitchen_display`.
+- Presets: `general`, `retail`, `pharmacy`, `bakery`, `coffee_shop`, `snack`. **Every preset must enumerate every key** — `handlePresetChange` overwrites the whole flags object, so an omitted key falls through to `FEATURES[key].default` at read time and the preset silently means something other than what it reads as.
 - Guard component: **`src/lib/auth/featureGuard.tsx`** (not `src/components/FeatureFlagGuard.tsx` — that path in the docs is wrong).
 - Admin API: `GET|PATCH /api/admin/stores/features?store_id=…` (query param, not a path segment).
 - Always merge through `mergeFeaturesWithDefaults()` so a newly added flag has a value for existing stores.
@@ -290,7 +293,7 @@ git checkout 744ad0d -- tests src/tests playwright.config.ts vitest.config.ts
   a write on it**; it is a markup, not a 0-100 percentage, and it is routinely
   over 100 (up to 489% in one store) and sometimes negative. `discount_percentage`
   IS a real 0-100 percentage.
-- Migrations are append-only and manually numbered; the highest is **`027`**. **`008` is already duplicated** — check the highest number before adding.
+- Migrations are append-only and manually numbered; the highest is **`033`**. **`008` is already duplicated** — check the highest number before adding.
 - `.env.local` is correctly gitignored. Required vars are in `.env.example`.
 - Path alias: `@/*` → `./src/*`.
 - Careful: `src/lib/utils.ts` (file) and `src/lib/utils/` (directory) both exist. `@/lib/utils` resolves to the **file**; formatting helpers are at `@/lib/utils/format`.
@@ -528,3 +531,107 @@ Maintenance is called opportunistically from the ingest route (at most hourly pe
 `requireAdmin()` is a one-line gate. The older `/api/admin` routes are still unauthenticated (audit P0-2); use it when you touch them.
 
 ---
+
+## 13. Store types, menus and ingredient depletion
+
+A **snack shop** sells a fries sandwich: no barcode, assembled from ingredients, and the customer changes it at the counter. That is what this subsystem is for.
+
+### Store type is a label; behaviour gates on flags
+
+`stores.store_type` records **which preset an admin picked** and nothing reads it at runtime. All behaviour gates on the feature flags in §7, because `mergeFeaturesWithDefaults()` back-fills a new key for every existing store with no data migration, while `store_type` would leave every live store on `'general'` until touched by hand. A store is also allowed to be a mix (a pharmacy with a coffee counter), which a type cannot express and flags can.
+
+**Do not add `storeType` to `StoreUser`.** It is persisted to `goldensquirrel_user`, so every already-logged-in device would have it `undefined`, and nothing needs it synchronously.
+
+### Ingredients ARE products
+
+`products.kind` is `'sellable' | 'ingredient'` (migration **030**). One table, so the products cache, offline sync, inventory screen, CSV and `decrement_stock` all work on ingredients for free.
+
+> **`isSellable()` in `src/lib/products/kind.ts` is `!== 'ingredient'`, NEVER `=== 'sellable'`.** `kind` is optional on `CachedProduct`, so a device whose IndexedDB predates 030 has `undefined` on every row. The strict form would show an **empty catalogue** on the busiest screen in the app. Default-sellable is the safe direction.
+
+The till hides ingredients from search and the grid, but **`barcodeIndex` stays complete** — a scanned ingredient *is* in the catalogue, so falling through to the unknown-barcode prompt would read as a broken scanner. `handleProductAdd` refuses it by name instead.
+
+**`stock_quantity` stays INTEGER, and the ingredient's `stock_unit` IS the recipe unit.** Pickles are `'g'` with stock `4000`; a recipe of `20` means 20 grams. No float maths near stock, no RPC change. The cost: a recipe cannot use half a unit, so units must be the smallest the shop counts.
+
+> The one silent way this loses money is a **unit mismatch** — pickles entered as `4` (jars) against a recipe of `20` (grams) drives stock to -4000, unnoticed until a stock take. Three mitigations: `stock_unit` lives on the product so there is one answer; inventory renders `4000 g`, never a bare `4000`; the recipe editor shows live **servings remaining** while you type. It is a convention with no enforcement — keep all three.
+
+### Recipes
+
+`recipe_components` (migration **031**): `quantity` NUMERIC(12,3) for authoring, plus `is_default`, `is_removable`, `max_quantity`, `price_delta_ll` DECIMAL(14,2).
+
+- **Removing a default never refunds.** Crediting for a removal is a negative-price surface behind a control that needs only `pos`.
+- `ingredient_product_id` is **`ON DELETE RESTRICT`** — deleting an in-use ingredient is refused, not silently broken. Same principle as `cash_shifts.register_id`.
+- `PUT /api/recipes` **replaces** a whole recipe. Not atomic; acceptable only because no money or stock moves on that path. If recipes ever gain a till-side write, move it into a plpgsql function first.
+
+### Cart line identity
+
+The cart was keyed by `product_id`, but two sandwiches with different modifiers are two lines of the **same product**. `CartItem.line_uid` is optional and **`lineKey()` in `src/lib/pos/lineKey.ts` is the only way to address a line**. For a plain line the key *is* the product id, so retail behaviour is unchanged.
+
+**Persist `version` stays 1.** `line_uid` is optional precisely so no store migration is needed; bumping it would newly run `migrate()` over every live device's parked lanes for nothing.
+
+> `updateLine`, `removeItem`, `updateQuantity`, `increment/decrementQuantity`, the `#cart-item-` anchor and every React `key` use `lineKey()`. Using `product_id` there means editing one configured line edits the other.
+
+`addConfiguredItem` **always appends, never dedupes** — the kitchen prepares two sandwiches in parallel and one must be voidable alone.
+
+### Money on a configured line
+
+- Add-ons are **exact LL** summed into `unit_price`; `roundToNearest5k` still runs only in `getTotal()`.
+- The product discount applies to the **base only**, never to add-ons.
+- The base is **derived** (`unit_price` minus extras), not stored, which makes the `updateLine` interaction correct for free.
+
+### Stock depletion
+
+**`buildStockDecrements()` in `src/lib/pos/lineItems.ts` is the only place.** A line with `modifiers.length > 0` decrements its **components**; a line without decrements itself, exactly as before. Integerised **once, at the whole line** — `round(qty * count * line_qty)`, never per unit.
+
+The client computes it and the server obeys, falling back to the `items`-derived loop when `stock_decrements` is absent. Client-side because **the recipe at the time of sale is the right recipe** — a sandwich sold offline Monday and synced Wednesday must deduct what Monday's recipe said.
+
+> **`QueuedTransaction.stock_decrements` must be forwarded by the sync engine's replay.** Without it a queued menu sale falls into the fallback and decrements the **menu item** instead of its ingredients — silent, offline-only, invisible until a stock take. `checkout/page.tsx` builds two payloads from one source; the field goes in **both**.
+>
+> The `else` branch in `POST /api/transactions` is the **compatibility hinge** for every sale already sitting in a device's queue. Do not remove it.
+
+A sale is **never blocked** for want of an ingredient. Stock goes negative routinely.
+
+### Modifiers on the sale
+
+`transaction_items.modifiers` JSONB (migration **032**), nullable, no default:
+
+| value | meaning |
+|---|---|
+| `NULL` | an ordinary line — every sale made before 032 |
+| `[]` | a menu line where nothing was changed |
+
+**The distinction is load-bearing:** the kitchen board filters tickets on `modifiers IS NOT NULL`, so collapsing `[]` to `null` would make a retail store see every sale as a ticket. Use `?? null`, never `|| null`.
+
+> **Migration 032 must be applied before the code that sends the column.** The `transaction_items` insert failure is deliberately swallowed (the sale is already created), so against a database without the column every sale succeeds with **no line items** — empty receipts, empty tickets, broken analytics, silently.
+
+Chosen over a child table because the checkout path is already insert then insert then loop, and a child table needs a third write depending on generated ids. Cost: "how many had extra cheese" needs a JSONB scan.
+
+`describeModifiers()` in `src/lib/pos/modifierSummary.ts` formats them for **all four** surfaces — cart row, kitchen ticket, receipt, history — so a cook and a customer read the same words. Only the *changes* are shown, never the whole recipe.
+
+### Kitchen display
+
+`/kitchen`, gated on the `kitchen` section **and** the `kitchen_display` flag. `kitchen_ticket_state` (migration **033**) holds only preparation state; the paid transaction **is** the order.
+
+> **The state row is created lazily by the kitchen API, never by `POST /api/transactions`.** That is the load-bearing property: the money path does not change shape, and a kitchen outage cannot affect a sale. A transaction with no row is implicitly `'new'`. Do not "improve" this by inserting a ticket at checkout.
+
+`PATCH` carries `from` and rejects a stale value with 409 — two stations *will* tap the same card. Backwards moves are allowed (a cook who mistaps must be able to undo); `served` and `voided` are terminal.
+
+**Internet-only, and it says so.** The dangerous failure is not an error, it is an empty board reading as "no orders" — hence the offline banner and keeping the last tickets on screen.
+
+> Until modifiers are widespread, the board treats **every** sale in the last 6 hours as a ticket, because there is nothing else to mark a food order with. Harmless, and invisible to anyone without `kitchen_display`.
+
+### Pieces
+
+| Path | Role |
+|---|---|
+| `src/lib/products/kind.ts` | `isSellable()`, `STOCK_UNITS`, `formatStock()` |
+| `src/lib/categories/**` | Category types, localStorage cache, loader |
+| `src/lib/recipes/**` | Recipe types, cache, `saveRecipe()` |
+| `src/lib/pos/lineKey.ts` | `lineKey()` — the only way to address a cart line |
+| `src/lib/pos/modifierSummary.ts` | `describeModifiers()` — one wording everywhere |
+| `src/lib/kitchen/types.ts` | Ticket status machine, `BOARD_COLUMNS` |
+| `src/components/pos/pro/useMenuSheet.ts` | "Open the sheet or add directly" — shared by both tills |
+| `src/components/pos/pro/MenuBrowser.tsx` | Category rail over `QuickGrid` (whose props are unchanged) |
+| `src/components/pos/pro/ModifierSheet.tsx` | The modifier dialog. Gated on `pos`, not `inventory` |
+| `src/components/inventory/RecipeEditor.tsx` | Recipe authoring, with the servings hint |
+| `src/components/inventory/CategoryManagerDialog.tsx` | Category CRUD |
+| `/api/categories`, `/api/recipes`, `/api/kitchen/tickets` | All `resolveCaller()`-gated |

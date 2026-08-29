@@ -14,7 +14,68 @@ import { Product } from './product';
  *              nullable, and the transactions API already skips the stock
  *              decrement when it is absent.
  */
-export type CartLineKind = 'product' | 'one_off';
+export type CartLineKind = 'product' | 'one_off' | 'configured';
+
+/**
+ * One ingredient choice on a made-to-order line.
+ *
+ * `name` and `price_delta_ll` are DENORMALISED onto the line on purpose: the
+ * recipe can be edited while a sale is in progress, and the cart must not
+ * re-price itself under the cashier. Same principle that makes
+ * transaction_items carry its own product_name and unit_price.
+ *
+ * A configured line stores EVERY component, including untouched ones as
+ * 'included'. That is what lets the sale-time expansion in lineItems.ts need
+ * no external lookup, and lets a kitchen ticket render from the line alone.
+ */
+export interface CartLineModifier {
+  /**
+   * Which choice this is.
+   *
+   * Normally `recipe_components.id`. For an ingredient added that is NOT in
+   * the product's recipe at all — hummus on a taouk sandwich — there is no
+   * recipe row, so this is a synthetic `adhoc:<uuid>` key. Same convention as
+   * the cart's `oneoff:` line keys: local-only, never a real id, and never
+   * sent anywhere that expects one.
+   */
+  component_id: string;
+  /** The ingredient. Needed for stock, and to survive a recipe edit. */
+  ingredient_product_id: string;
+  /**
+   * True when this ingredient is not part of the product's recipe. Its price
+   * came from the INGREDIENT PRODUCT'S OWN selling_price rather than from a
+   * recipe row's price_delta_ll.
+   */
+  is_adhoc?: boolean;
+  /** Denormalised: the name AS SOLD. */
+  name: string;
+  /**
+   * 'included' — came with it, at ingredient_qty, no charge
+   * 'removed'  — "no pickles": no stock deducted, and NO refund
+   * 'extra'    — added: charged price_delta_ll and deducted, per extra unit
+   */
+  state: 'included' | 'removed' | 'extra';
+  /**
+   * Units of the ingredient consumed per ONE unit of the menu item, for ONE
+   * count of this component. Total deducted is
+   * `ingredient_qty * count * line_quantity`.
+   */
+  ingredient_qty: number;
+  /** Charged per EXTRA count, LL, exact. */
+  price_delta_ll: number;
+  /**
+   * How many of this component are on the line. 0 when removed, 1 for a plain
+   * default, 2+ when the cashier added more.
+   */
+  count: number;
+  /**
+   * Did the recipe include this by default? Denormalised alongside the rest,
+   * because it decides how many counts are FREE: a default gives one away, an
+   * add-on charges from the first. Re-deriving it from the recipe at sale time
+   * would re-price the line if the recipe changed mid-sale.
+   */
+  is_default_component: boolean;
+}
 
 export interface CartItem {
   product_id: string;
@@ -45,6 +106,18 @@ export interface CartItem {
   is_price_overridden?: boolean;
   /** The cashier retyped the name on this line. */
   is_name_overridden?: boolean;
+  /**
+   * Present ONLY on a configured (made-to-order) line. Absent means the line's
+   * identity is its product_id, exactly as it always was — see lineKey().
+   */
+  line_uid?: string;
+  /** The ingredient choices on a configured line. */
+  modifiers?: CartLineModifier[];
+  /**
+   * Free-text instruction for this line — "cut in half", "extra spicy".
+   * Things no ingredient list can express. Reaches the kitchen and the receipt.
+   */
+  note?: string;
 }
 
 export interface Cart {
@@ -115,6 +188,29 @@ export interface CartState {
 export interface CartActions {
   addItem: (product: Product, quantity?: number) => boolean;
   addOneOffItem: (input: OneOffInput) => string;
+  /**
+   * Add a made-to-order line. ALWAYS appends, never dedupes: two identical
+   * sandwiches stay two lines so the kitchen can prepare them in parallel and
+   * one can be voided independently. Returns the new line's key.
+   */
+  addConfiguredItem: (
+    product: Product,
+    modifiers: CartLineModifier[],
+    quantity?: number,
+    note?: string
+  ) => string;
+  /**
+   * Replace the modifiers and note on a line, and re-price it.
+   *
+   * Works on ANY line, not only one that was configured on the way in: in a
+   * snack shop every sellable product is customisable, so a plain line that
+   * gains a modifier or a note is converted in place and given a line_uid.
+   */
+  updateItemModifiers: (
+    lineId: string,
+    modifiers: CartLineModifier[],
+    note?: string
+  ) => void;
   removeItem: (productId: string) => void;
   updateQuantity: (productId: string, quantity: number) => void;
   updateLine: (productId: string, patch: CartLinePatch) => void;

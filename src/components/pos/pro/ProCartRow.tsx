@@ -10,11 +10,13 @@
 // and the price are themselves buttons — tapping either opens the editor.
 // =============================================
 
-import { Minus, Plus, X, Tag } from "lucide-react";
+import { Minus, Plus, X, Tag, SlidersHorizontal } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatLL, formatUSD } from "@/lib/utils/format";
 import CartQuantityInput from "@/components/pos/CartQuantityInput";
 import type { CartItem } from "@/lib/types/cart";
+import { lineKey } from "@/lib/pos/lineKey";
+import { describeModifiers } from "@/lib/pos/modifierSummary";
 
 interface ProCartRowProps {
   item: CartItem;
@@ -32,6 +34,14 @@ interface ProCartRowProps {
   onSetQuantity: (productId: string, quantity: number) => void;
   onRemove: (productId: string) => void;
   onOpenEditor: (productId: string) => void;
+  /**
+   * Reopen the modifier sheet for this line. Absent when the store has no menu
+   * items, in which case no line can carry modifiers anyway.
+   *
+   * Gated on `pos`, not `canEdit`: choosing a listed add-on at the owner's
+   * price is ordering, not pricing.
+   */
+  onEditModifiers?: (item: CartItem) => void;
   /** The editor panel, rendered by the parent so it owns the save handlers. */
   editor?: React.ReactNode;
 }
@@ -76,15 +86,41 @@ export default function ProCartRow({
   onSetQuantity,
   onRemove,
   onOpenEditor,
+  onEditModifiers,
   editor,
 }: ProCartRowProps) {
+  /**
+   * Menu mode. The parent only supplies onEditModifiers when the store has
+   * `menu_items` on, so its presence IS the signal.
+   *
+   * In menu mode the NAME opens the modifier sheet, not the price editor.
+   * On a snack till "change this sandwich" is the common action and
+   * "reprice it" is the rare one, and modifying is allowed with `pos` while
+   * repricing needs `inventory` — so a cashier who cannot reprice must still
+   * be able to take "no ketchup, add hummus".
+   *
+   * The price editor is still reachable from the line total, unchanged.
+   */
+  const canModify = !!onEditModifiers;
+
   const isOneOff = item.line_kind === "one_off";
   const hasDiscount = item.discount_percentage > 0;
   const edited = item.is_price_overridden || item.is_name_overridden;
 
+  /**
+   * Only the CHANGES are shown. Listing everything a sandwich contains would
+   * bury the one line that matters — the cashier needs to see "no pickles",
+   * not a recital of the recipe.
+   */
+  const modifierChips = describeModifiers(item.modifiers).map((label) => ({
+    key: label,
+    label,
+    removed: label.startsWith("No "),
+  }));
+
   return (
     <div
-      id={`cart-item-${item.product_id}`}
+      id={`cart-item-${lineKey(item)}`}
       className={cn(
         "animate-cart-item-in rounded-2xl px-2 py-2 transition-colors duration-300",
         isHighlighted
@@ -100,7 +136,7 @@ export default function ProCartRow({
           <button
             type="button"
             aria-label={`Decrease ${item.product_name}`}
-            onClick={() => onDecrement(item.product_id)}
+            onClick={() => onDecrement(lineKey(item))}
             className="tap flex h-11 w-11 items-center justify-center rounded-xl text-muted-foreground hover:text-foreground"
           >
             <Minus className="h-5 w-5" />
@@ -108,12 +144,12 @@ export default function ProCartRow({
           <CartQuantityInput
             quantity={item.quantity}
             productName={item.product_name}
-            onCommit={(q) => onSetQuantity(item.product_id, q)}
+            onCommit={(q) => onSetQuantity(lineKey(item), q)}
           />
           <button
             type="button"
             aria-label={`Increase ${item.product_name}`}
-            onClick={() => onIncrement(item.product_id)}
+            onClick={() => onIncrement(lineKey(item))}
             className="tap flex h-11 w-11 items-center justify-center rounded-xl text-primary hover:text-primary/80"
           >
             <Plus className="h-5 w-5" />
@@ -122,8 +158,10 @@ export default function ProCartRow({
 
         {/* ---- Name + unit price. Both open the editor. ---- */}
         <Field
-          canEdit={canEdit}
-          onClick={() => onOpenEditor(item.product_id)}
+          canEdit={canModify || canEdit}
+          onClick={() =>
+            canModify ? onEditModifiers!(item) : onOpenEditor(lineKey(item))
+          }
           className="min-w-0 flex-1 rounded-xl px-2 py-1 text-left"
         >
           <span className="flex items-center gap-1.5">
@@ -138,7 +176,32 @@ export default function ProCartRow({
             {edited && (
               <Tag className="h-3 w-3 flex-none text-primary" aria-label="Edited" />
             )}
+            {/* A hidden tap target is not a feature. On a snack till the row
+                says it can be changed, so a cashier does not have to discover
+                it by guessing. */}
+            {canModify && (
+              <SlidersHorizontal
+                className="h-3.5 w-3.5 flex-none text-muted-foreground"
+                aria-hidden
+              />
+            )}
           </span>
+          {modifierChips.length > 0 && (
+            <span className="mt-1 flex flex-wrap gap-1">
+              {modifierChips.map((chip) => (
+                <span
+                  key={chip.key}
+                  className={`rounded px-1.5 py-0.5 text-[10px] font-semibold leading-none ${
+                    chip.removed
+                      ? "bg-destructive/15 text-destructive"
+                      : "bg-primary/15 text-primary"
+                  }`}
+                >
+                  {chip.label}
+                </span>
+              ))}
+            </span>
+          )}
           <span className="mt-0.5 block truncate text-xs text-muted-foreground tnum">
             {hasDiscount ? (
               <>
@@ -166,7 +229,7 @@ export default function ProCartRow({
         {/* ---- Line total ---- */}
         <Field
           canEdit={canEdit}
-          onClick={() => onOpenEditor(item.product_id)}
+          onClick={() => onOpenEditor(lineKey(item))}
           className="w-[132px] flex-none rounded-xl px-2 py-1 text-right"
         >
           <span className="block text-[15px] font-semibold tnum">
@@ -180,7 +243,7 @@ export default function ProCartRow({
         <button
           type="button"
           aria-label={`Remove ${item.product_name}`}
-          onClick={() => onRemove(item.product_id)}
+          onClick={() => onRemove(lineKey(item))}
           className="tap flex h-11 w-11 flex-none items-center justify-center rounded-xl text-muted-foreground/60 hover:bg-destructive/10 hover:text-destructive"
         >
           <X className="h-5 w-5" />

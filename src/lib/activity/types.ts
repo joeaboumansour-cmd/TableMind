@@ -15,6 +15,7 @@ export const ACTIVITY_CATEGORIES = [
   "catalog",
   "sale",
   "cash",
+  "kitchen",
   "auth",
   "nav",
   "ui",
@@ -36,6 +37,11 @@ export const ACTIVITY_ACTIONS = [
   "cart.remove",
   "cart.quantity",
   "cart.line_edit",
+  // Made-to-order: a line built from a recipe, and any later change to it.
+  // Both carry what was removed and what was added, because "no pickles" is
+  // exactly the kind of thing a customer later disputes.
+  "cart.configure",
+  "cart.modifiers_changed",
   "cart.clear",
   "cart.lane_open",
   "cart.lane_close",
@@ -74,6 +80,11 @@ export const ACTIVITY_ACTIONS = [
   "cash.shift_overdue_seen",
   "cash.request_approve",
   "cash.request_reject",
+
+  // --- Kitchen display
+  // One row per ticket move. The board is a shared surface several people
+  // touch, so who advanced which order is the whole point of logging it.
+  "kitchen.ticket_move",
 
   // --- Auth
   "auth.login",

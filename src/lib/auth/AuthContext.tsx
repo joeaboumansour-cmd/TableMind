@@ -2,7 +2,7 @@
 
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from "react";
 import { createClient } from "@/lib/supabase/client";
-import { StoreUser, canAccess, getFullPermissions, SectionKey, UserPermissions } from "./permissions";
+import { StoreUser, canAccess, getFullPermissions, parsePermissions, SectionKey, UserPermissions } from "./permissions";
 import { cacheCredentials, clearCachedCredentials, validateCachedCredentials } from "./offlineAuth";
 import { logActivity, invalidateActivityIdentity, flushActivity } from "@/lib/activity/logger";
 import { connectivity } from "@/lib/connectivity";
@@ -107,14 +107,26 @@ function saveLegacyAuthToStorage(storeId: string, username: string, licenseExpir
   );
 }
 
+/**
+ * Per-store display caches that must not survive a logout.
+ *
+ * The cash snapshot holds one store's drawer figures for instant rendering,
+ * and the category list holds one store's rail. Clear both on logout so the
+ * next person to sign in on this device — plausibly a different store,
+ * certainly a different shift — cannot be shown the last one's data before the
+ * first fetch returns.
+ */
+const CLEAR_ON_LOGOUT_PREFIXES = [
+  "goldensquirrel_cash_snapshot_",
+  "store_categories_",
+];
+
 function clearUserFromStorage() {
-  // The cash snapshot holds one store's drawer figures for instant rendering.
-  // Clear it on logout so the next person to sign in on this device — plausibly
-  // a different store, certainly a different shift — cannot be shown the last
-  // one's takings before the first fetch returns.
   try {
     for (const key of Object.keys(localStorage)) {
-      if (key.startsWith("goldensquirrel_cash_snapshot_")) localStorage.removeItem(key);
+      if (CLEAR_ON_LOGOUT_PREFIXES.some((prefix) => key.startsWith(prefix))) {
+        localStorage.removeItem(key);
+      }
     }
   } catch {
     /* a storage we cannot read is a storage with nothing to leak */
@@ -233,27 +245,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
       }
 
       // Parse permissions
-      let perms: UserPermissions;
-      try {
-        const rawPerms = typeof employee.permissions === "string"
-          ? JSON.parse(employee.permissions)
-          : employee.permissions;
-        perms = {
-          pos: rawPerms.pos === true,
-          inventory: rawPerms.inventory === true,
-          transactions: rawPerms.transactions === true,
-          receipts: rawPerms.receipts === true,
-          cash_register: rawPerms.cash_register === true,
-        };
-      } catch {
-        perms = {
-          pos: false,
-          inventory: false,
-          transactions: false,
-          receipts: false,
-          cash_register: false,
-        };
-      }
+      const perms: UserPermissions = parsePermissions(employee.permissions);
 
       const employeeUser: StoreUser = {
         id: employee.id,
@@ -327,28 +319,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
       // If employee data exists, this was an employee login
       if (employeeData) {
-        // Parse permissions
-        let perms: UserPermissions;
-        try {
-          const rawPerms = typeof employeeData.permissions === "string"
-            ? JSON.parse(employeeData.permissions)
-            : employeeData.permissions;
-          perms = {
-            pos: rawPerms.pos === true,
-            inventory: rawPerms.inventory === true,
-            transactions: rawPerms.transactions === true,
-            receipts: rawPerms.receipts === true,
-            cash_register: rawPerms.cash_register === true,
-          };
-        } catch {
-          perms = {
-            pos: false,
-            inventory: false,
-            transactions: false,
-            receipts: false,
-            cash_register: false,
-          };
-        }
+        const perms: UserPermissions = parsePermissions(employeeData.permissions);
 
         const employeeUser: StoreUser = {
           id: employeeData.id,
@@ -485,13 +456,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
         const updatedUser: StoreUser = {
           ...user,
-          permissions: {
-            pos: rawPerms.pos === true,
-            inventory: rawPerms.inventory === true,
-            transactions: rawPerms.transactions === true,
-            receipts: rawPerms.receipts === true,
-            cash_register: rawPerms.cash_register === true,
-          },
+          permissions: parsePermissions(rawPerms),
         };
         setUser(updatedUser);
         saveUserToStorage(updatedUser);

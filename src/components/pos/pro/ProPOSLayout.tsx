@@ -35,6 +35,7 @@ import { formatLL, formatUSD } from "@/lib/utils/format";
 import { cachedToProduct } from "@/lib/products/refresh";
 import { createProduct, repriceProduct } from "@/lib/products/write";
 import { isOneOffLine } from "@/lib/pos/lineItems";
+import { lineKey } from "@/lib/pos/lineKey";
 import { logActivity } from "@/lib/activity/logger";
 import type { Product } from "@/lib/types/product";
 import type { CartItem } from "@/lib/types/cart";
@@ -47,6 +48,11 @@ import ProCartRow from "./ProCartRow";
 import CartLineEditor, { type EditScope, type LineEditPatch } from "./CartLineEditor";
 import ProTotalsPanel from "./ProTotalsPanel";
 import QuickGrid from "./QuickGrid";
+import MenuBrowser from "./MenuBrowser";
+import ModifierSheet from "./ModifierSheet";
+import { useMenuSheet } from "./useMenuSheet";
+import type { Category } from "@/lib/categories/types";
+import type { RecipeMap } from "@/lib/recipes/types";
 import PanelResizer, { usePanelWidth } from "./PanelResizer";
 import { useScanFocus } from "./useScanFocus";
 
@@ -56,6 +62,14 @@ const LANE_TICK_MS = 1000;
 interface ProPOSLayoutProps {
   products: Product[];
   savedProducts: Product[];
+  /** Menu categories for the browse rail. Empty for a retail store. */
+  categories: Category[];
+  /** Every recipe in the store, by menu product id. Empty for a retail store. */
+  recipes: RecipeMap;
+  /** Ingredient names for the modifier sheet, by product id. */
+  ingredientNames: Map<string, string>;
+  /** Every ingredient in inventory — anything can be added to anything. */
+  ingredients: Product[];
   storeId: string;
   /** Adds to the active lane, with the page's variant/discount resolution. */
   onProductAdd: (product: Product) => void;
@@ -70,6 +84,10 @@ interface ProPOSLayoutProps {
 export default function ProPOSLayout({
   products,
   savedProducts,
+  categories,
+  recipes,
+  ingredientNames,
+  ingredients,
   storeId,
   onProductAdd,
   resolveBarcode,
@@ -133,6 +151,21 @@ export default function ProPOSLayout({
   // The single gate for every price-setting affordance on this screen. Also
   // requires the store to have the inventory feature at all — with it off
   // there is nowhere to manage what would be created.
+  // One rule, shared with the mobile menu page — see useMenuSheet.
+  const {
+    configuring,
+    setConfiguring,
+    handleTileAdd,
+    handleEditModifiers,
+    handleConfirm,
+    sheetProps,
+  } = useMenuSheet({
+    recipes,
+    products,
+    enabled: isEnabled("menu_items"),
+    onPlainAdd: onProductAdd,
+  });
+
   const canEditInventory = isEnabled("inventory") && canAccess("inventory");
 
   // Focus belongs to the scan field unless something else legitimately owns the
@@ -143,6 +176,9 @@ export default function ProPOSLayout({
     unknownBarcode !== null ||
     laneToClose !== null ||
     clearConfirmOpen ||
+    // A half-configured sandwich is exactly the typed state a service-worker
+    // reload would throw away, and the sheet owns the keyboard while it is up.
+    configuring !== null ||
     isWriting;
   useScanFocus(searchInputRef, keyboardBusy);
 
@@ -245,7 +281,13 @@ export default function ProPOSLayout({
             target: product.name,
             details: { barcode, product_id: product.id },
           });
-          onProductAdd(product);
+          // handleTileAdd, NOT onProductAdd: a scanned item WITH a recipe must
+          // still open the modifier sheet. Adding it plain would decrement the
+          // menu item's own meaningless stock instead of its ingredients, and
+          // leave the sale with modifiers=NULL so it is not a kitchen ticket.
+          // Falls straight through to a plain add when there is no recipe, so
+          // a retail wedge scanner is unaffected.
+          handleTileAdd(product);
           return;
         }
         // The customer is standing there holding it, so a miss is a prompt,
@@ -262,7 +304,7 @@ export default function ProPOSLayout({
         setIsResolving(false);
       }
     },
-    [resolveBarcode, onProductAdd, canEditInventory]
+    [resolveBarcode, handleTileAdd, canEditInventory]
   );
 
   /** Name + price for a code the catalogue does not have. */
@@ -346,7 +388,9 @@ export default function ProPOSLayout({
       // Whichever scope was chosen, this sale takes the new figures. Someone is
       // waiting at the counter for the price they were quoted.
       if (scope === "sale") {
-        updateLine(item.product_id, { name: patch.name, unitPriceLl: patch.unitPriceLl });
+        // lineKey(), NOT product_id: two configured lines of the same product
+        // must be repriced independently.
+        updateLine(lineKey(item), { name: patch.name, unitPriceLl: patch.unitPriceLl });
         setEditingLineId(null);
         return;
       }
@@ -391,7 +435,9 @@ export default function ProPOSLayout({
           );
         }
 
-        updateLine(item.product_id, { name: patch.name, unitPriceLl: patch.unitPriceLl });
+        // lineKey(), NOT product_id: two configured lines of the same product
+        // must be repriced independently.
+        updateLine(lineKey(item), { name: patch.name, unitPriceLl: patch.unitPriceLl });
         setEditingLineId(null);
       } catch (error: unknown) {
         console.error("[POS] Line inventory write failed:", error);
@@ -485,8 +531,18 @@ export default function ProPOSLayout({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [switchLaneByPosition, isEmpty, onCheckout, laneToClose, clearConfirmOpen]);
 
+  /**
+   * Menu mode: browse by category instead of the quick-access grid.
+   *
+   * Requires categories to actually exist — a rail with nothing in it is worse
+   * than the grid it replaced. With the flag off this is false and the right
+   * panel renders exactly what it always did.
+   */
+  const menuMode = isEnabled("product_categories") && categories.length > 0;
+
+
   const editingItem = editingLineId
-    ? items.find((i) => i.product_id === editingLineId)
+    ? items.find((i) => lineKey(i) === editingLineId)
     : undefined;
 
   return (
@@ -551,7 +607,9 @@ export default function ProPOSLayout({
 
             <SmartScanInput
               products={products}
-              onSelectProduct={onProductAdd}
+              // Same rule as the grid: a product with a recipe opens the
+              // sheet however it was found — typed, scanned or tapped.
+              onSelectProduct={handleTileAdd}
               onBarcode={handleBarcode}
               inputRef={searchInputRef}
               disabled={isWriting}
@@ -640,10 +698,10 @@ export default function ProPOSLayout({
                 <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto px-2 pb-2">
                   {items.map((item) => (
                     <ProCartRow
-                      key={item.product_id}
+                      key={lineKey(item)}
                       item={item}
-                      isHighlighted={highlightedItemId === item.product_id}
-                      isEditing={editingLineId === item.product_id}
+                      isHighlighted={highlightedItemId === lineKey(item)}
+                      isEditing={editingLineId === lineKey(item)}
                       onIncrement={incrementQuantity}
                       onDecrement={decrementQuantity}
                       onSetQuantity={updateQuantity}
@@ -652,13 +710,16 @@ export default function ProPOSLayout({
                         removeItem(id);
                       }}
                       canEdit={canEditInventory}
+                      onEditModifiers={
+                        isEnabled("menu_items") ? handleEditModifiers : undefined
+                      }
                       onOpenEditor={(id) =>
                         setEditingLineId((current) => (current === id ? null : id))
                       }
                       editor={
-                        editingItem && editingItem.product_id === item.product_id ? (
+                        editingItem && lineKey(editingItem) === lineKey(item) ? (
                           <CartLineEditor
-                            key={item.product_id}
+                            key={lineKey(item)}
                             item={editingItem}
                             product={catalogFor(editingItem)}
                             busy={isWriting}
@@ -708,10 +769,31 @@ export default function ProPOSLayout({
           </div>
 
           <div className="mt-3 min-h-0 flex-1 overflow-hidden rounded-3xl border bg-card">
-            <QuickGrid products={savedProducts} onAdd={onProductAdd} />
+            {menuMode ? (
+              <MenuBrowser
+                products={products}
+                categories={categories}
+                onAdd={handleTileAdd}
+              />
+            ) : (
+              <QuickGrid products={savedProducts} onAdd={onProductAdd} />
+            )}
           </div>
         </div>
       </div>
+
+      <ModifierSheet
+        {...sheetProps}
+        onOpenChange={(open) => {
+          if (!open) setConfiguring(null);
+        }}
+        ingredientNames={ingredientNames}
+        ingredients={ingredients}
+        onConfirm={(modifiers, note) => {
+          handleConfirm(modifiers, note);
+          searchInputRef.current?.focus();
+        }}
+      />
 
       <ConfirmDialog
         open={clearConfirmOpen}

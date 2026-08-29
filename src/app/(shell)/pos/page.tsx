@@ -34,7 +34,15 @@ import {
   markPersistNoticeShown,
 } from "@/lib/pwa/persistentStorage";
 import { mapToCachedProduct, cachedToProduct } from "@/lib/products/refresh";
+import { isSellable, isIngredient } from "@/lib/products/kind";
+import { getCategories, refreshCategories } from "@/lib/categories/load";
+import type { Category } from "@/lib/categories/types";
+import { getCachedRecipes, refreshRecipes } from "@/lib/recipes/load";
+import type { RecipeMap } from "@/lib/recipes/types";
 import ProPOSLayout from "@/components/pos/pro/ProPOSLayout";
+import MenuBrowser from "@/components/pos/pro/MenuBrowser";
+import ModifierSheet from "@/components/pos/pro/ModifierSheet";
+import { useMenuSheet } from "@/components/pos/pro/useMenuSheet";
 
 // BarcodeScanner statically imports @zxing/library (~420KB) plus the camera
 // pipeline. It is only ever rendered when the scanner is open, so loading it
@@ -66,6 +74,8 @@ export default function POSPage() {
     return true;
   });
   const [products, setProducts] = useState<Product[]>([]);
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [recipes, setRecipes] = useState<RecipeMap>({});
   const [isLoading, setIsLoading] = useState(true);
   // Throttles the focus-triggered refresh (see the load effect below)
   const lastFocusSyncRef = useRef(0);
@@ -192,6 +202,14 @@ export default function POSPage() {
           setStoreId(store_id);
           syncEngine.setStoreId(store_id);
 
+          // Cache first, then revalidate — the rail and the modifier sheet must
+          // be usable on the first frame with no internet, and a failed refresh
+          // keeps whatever was cached rather than emptying them.
+          setCategories(getCategories(store_id));
+          setRecipes(getCachedRecipes(store_id));
+          void refreshCategories(store_id).then(setCategories);
+          void refreshRecipes(store_id).then(setRecipes);
+
           // ALWAYS load from local cache first for instant display
           const cached = await getCachedProducts(store_id);
           if (cached && cached.length > 0) {
@@ -295,6 +313,15 @@ export default function POSPage() {
 
   // Add a product to the cart (used by both barcode scan and saved product buttons)
   const handleProductAdd = useCallback((product: Product) => {
+    // An ingredient is not a thing a customer buys. Refuse clearly rather than
+    // silently doing nothing, and name it so the cashier knows why — this is
+    // reachable by scanning, because the barcode index is deliberately complete.
+    if (isIngredient(product)) {
+      toast.error(`${product.name} is an ingredient — it isn't sold on its own`);
+      playErrorSound();
+      return;
+    }
+
     let resolvedProduct = {...product};
 
     // If this is a variant child product, inherit values from parent (O(1) lookup)
@@ -326,6 +353,12 @@ export default function POSPage() {
     // callback identity stays stable across cart changes. That matters because
     // this function is the `onScan` prop of the memoized scanner: rebuilding it
     // on every add re-rendered the live camera subtree mid-scan.
+    //
+    // Matches on product_id, NOT lineKey(), and that is correct: this path only
+    // ever handles a plain scanned/tapped product, whose lineKey IS its
+    // product_id. A configured (made-to-order) line never arrives here — it is
+    // built through addConfiguredItem, which deliberately never dedupes, so two
+    // sandwiches with different modifiers stay two lines.
     const existingItem = useCartStore
       .getState()
       .items.find((item) => item.product_id === product.id);
@@ -366,6 +399,37 @@ export default function POSPage() {
     // `items` is deliberately NOT a dependency — it is read via getState()
     // above so this callback stays referentially stable.
   }, [addItem, incrementQuantity, isEnabled, isDesktopMode, toast]);
+
+  const sellableProducts = useMemo(() => products.filter(isSellable), [products]);
+
+  /**
+   * Every ingredient in inventory, so ANY of them can be added to ANY line —
+   * hummus does not have to be in the taouk sandwich's recipe to go on it.
+   * Variants are excluded: a variant is a way of selling a product, not a
+   * thing you put inside one.
+   */
+  const ingredientProducts = useMemo(
+    () => products.filter((p) => isIngredient(p) && !p.parent_id),
+    [products]
+  );
+
+  /**
+   * The mobile till's modifier sheet. Same hook the desktop layout uses, so the
+   * "recipe -> open the sheet, otherwise add straight to the cart" rule has one
+   * implementation rather than one per layout.
+   */
+  const {
+    setConfiguring: setMobileConfiguring,
+    handleTileAdd,
+    handleEditModifiers: handleMobileEditModifiers,
+    handleConfirm: handleMobileConfirm,
+    sheetProps: mobileSheetProps,
+  } = useMenuSheet({
+    recipes,
+    products: sellableProducts,
+    enabled: isEnabled("menu_items"),
+    onPlainAdd: handleProductAdd,
+  });
 
   // Resolve a scanned code to a product: the O(1) local index first, then a
   // live Supabase lookup for something that exists server-side but has not
@@ -452,7 +516,10 @@ export default function POSPage() {
       if (needsServerLookup) toast.dismiss("scan-fallback");
 
       if (product) {
-        handleProductAdd(product);
+        // handleTileAdd, not handleProductAdd: a scanned item WITH a recipe
+        // must still open the modifier sheet, or it sells as a plain line and
+        // decrements the menu item instead of its ingredients.
+        handleTileAdd(product);
         return;
       }
 
@@ -462,7 +529,7 @@ export default function POSPage() {
         { key: "scan-miss" }
       );
     },
-    [resolveBarcode, handleProductAdd, toast, barcodeIndex]
+    [resolveBarcode, handleTileAdd, toast, barcodeIndex]
   );
 
   // A product created or repriced from the desktop till. Folding it into
@@ -586,12 +653,38 @@ export default function POSPage() {
 
   // Compute saved products for desktop mode (products without barcodes + frequently used)
   // Must be before any early returns to maintain hooks order
+  /**
+   * What the till may sell. Ingredients are stock consumed BY menu items, so
+   * they must not appear in search or on the quick grid.
+   *
+   * `barcodeIndex` is deliberately NOT filtered — see handleProductAdd. A
+   * scanned ingredient IS in the catalogue, and letting it fall through to the
+   * unknown-barcode prompt would read as a broken scanner.
+   */
+  /**
+   * Ingredient names for the modifier sheet. Built from the FULL catalogue,
+   * not from sellableProducts — the ingredients are exactly the rows that list
+   * excludes, and a sheet that cannot name them is useless.
+   */
+  /**
+   * Menu mode: the mobile till browses a menu instead of pointing a camera.
+   * A rail with no categories behind it is worse than the camera it replaces,
+   * hence the length check as well as the flag — same rule as ProPOSLayout.
+   */
+  const menuMode = isEnabled("product_categories") && categories.length > 0;
+
+  const ingredientNames = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const product of products) map.set(product.id, product.name);
+    return map;
+  }, [products]);
+
   const savedProducts = useMemo(() => {
     if (!user?.storeId) return [];
-    const noBarcodeProducts = products.filter(p => !p.barcode);
+    const noBarcodeProducts = sellableProducts.filter(p => !p.barcode);
     const frequentlyUsedIds = getFrequentlyUsedProductIds(user.storeId);
     const frequentlyUsedProducts = frequentlyUsedIds
-      .map(id => products.find(p => p.id === id))
+      .map(id => sellableProducts.find(p => p.id === id))
       .filter(Boolean) as Product[];
     // Combine, deduplicating by ID
     const combined = [...noBarcodeProducts, ...frequentlyUsedProducts];
@@ -601,7 +694,7 @@ export default function POSPage() {
       seen.add(p.id);
       return true;
     });
-  }, [products, user?.storeId]);
+  }, [sellableProducts, user?.storeId]);
 
   // ---- Layout measurements for the scan-first mobile layout ----
   //
@@ -703,6 +796,18 @@ export default function POSPage() {
         }}
       />
 
+      {/* Mobile only: the desktop layout mounts its own via ProPOSLayout. */}
+      {!isDesktopMode && (
+        <ModifierSheet
+          {...mobileSheetProps}
+          onOpenChange={(open) => {
+            if (!open) setMobileConfiguring(null);
+          }}
+          ingredientNames={ingredientNames}
+          ingredients={ingredientProducts}
+          onConfirm={handleMobileConfirm}
+        />
+      )}
     </>
   );
 
@@ -713,9 +818,29 @@ export default function POSPage() {
   if (!isDesktopMode) {
     return (
       <div ref={posSurfaceRef} className="relative h-full w-full overflow-hidden bg-black">
-        {/* ---- Camera layer ---- */}
+        {/* ---- Camera layer, or the menu ---- */}
+        {/*
+          A snack shop has no barcodes, so a camera is the wrong page for it:
+          the menu takes the camera's place and everything floating over it —
+          header, search pill, cart sheet — is untouched.
+
+          Note BarcodeScanner is NOT MOUNTED in menu mode, so ZXing's ~420KB
+          dynamic chunk is never fetched for these stores. That is a real bundle
+          win, not just a layout change.
+
+          The scanner switch stays in the header, so the odd barcoded bottle can
+          still be scanned by turning it on.
+        */}
         <div className="absolute inset-0">
-          {isScannerActive ? (
+          {menuMode && !isScannerActive ? (
+            <div className="absolute inset-0 bg-background pb-[var(--pos-sheet-peek,0px)]">
+              <MenuBrowser
+                products={sellableProducts}
+                categories={categories}
+                onAdd={handleTileAdd}
+              />
+            </div>
+          ) : isScannerActive ? (
             /* Unmounted (not merely deactivated) when off. Unmount runs the
                scanner's stopEverything() cleanup — stop all MediaStream
                tracks, reset ZXing, tear down Quagga — and removes the <video>
@@ -839,8 +964,8 @@ export default function POSPage() {
         <div className="absolute inset-x-0 bottom-0 z-20">
           <div ref={searchBlockRef} className="px-4 pb-3">
             <ProductSearchBar
-              products={products}
-              onSelect={handleProductAdd}
+              products={sellableProducts}
+              onSelect={handleTileAdd}
               placeholder="Search or type a barcode"
               dropUp
               inputClassName="glass h-[52px] rounded-2xl border-white/10 text-[15px]"
@@ -858,6 +983,10 @@ export default function POSPage() {
             highlightedItemId={highlightedItemId}
             onIncrement={incrementQuantity}
             onDecrement={decrementQuantity}
+            // Presence of this prop is the menu-mode signal inside the sheet.
+            onEditModifiers={
+              isEnabled("menu_items") ? handleMobileEditModifiers : undefined
+            }
             onClear={handleClearCart}
             onCheckout={() => router.push("/checkout")}
           />
@@ -879,8 +1008,12 @@ export default function POSPage() {
   return (
     <>
       <ProPOSLayout
-        products={products}
+        products={sellableProducts}
         savedProducts={savedProducts}
+        categories={categories}
+        recipes={recipes}
+        ingredientNames={ingredientNames}
+        ingredients={ingredientProducts}
         storeId={user?.storeId || ""}
         onProductAdd={handleProductAdd}
         resolveBarcode={resolveBarcode}

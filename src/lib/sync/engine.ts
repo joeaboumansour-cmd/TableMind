@@ -382,7 +382,27 @@ class SyncEngine {
             currency: item.currency,
             unit_price_usd: item.unit_price_usd || 0,
             total_price_usd: item.total_price_usd || 0,
+            // `?? null`, never `|| null`: [] means "a menu line with nothing
+            // changed", which is what the kitchen board filters tickets on.
+            modifiers: item.modifiers ?? null,
+            note: item.note ?? null,
           })),
+          // ⚠️ Forwarding this is what makes an OFFLINE menu sale deduct the
+          // right thing.
+          //
+          // Without it the server falls back to deriving decrements from
+          // `items` — which names the sandwich, not the bread and pickles — so
+          // a sale rung up during an outage would decrement the menu item
+          // instead of its ingredients. Silent, offline-only, and invisible
+          // until a stock take.
+          //
+          // Spread conditionally so a row queued BEFORE this field existed
+          // sends no key at all and gets exactly today's fallback behaviour,
+          // rather than an explicit undefined or an empty array (which would
+          // wrongly mean "this sale consumes nothing").
+          ...(Array.isArray(txn.stock_decrements) && {
+            stock_decrements: txn.stock_decrements,
+          }),
         };
 
         const response = await fetch("/api/transactions", {

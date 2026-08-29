@@ -19,6 +19,8 @@ import {
 import { toast } from "@/lib/toast";
 import { formatLL, formatDateTime } from "@/lib/utils/format";
 import { isValidReceiptToken } from "@/lib/receipt/token";
+import { describeModifiers } from "@/lib/pos/modifierSummary";
+import type { CartLineModifier } from "@/lib/types/cart";
 
 interface PublicReceiptItem {
   product_name: string;
@@ -26,6 +28,10 @@ interface PublicReceiptItem {
   unit_price: number;
   total_price: number;
   currency: "LL" | "USD";
+  /** Made-to-order choices as sold. Null on every ordinary line. */
+  modifiers?: CartLineModifier[] | null;
+  /** Free-text instruction for this line. */
+  note?: string | null;
 }
 
 interface PublicReceipt {
@@ -354,8 +360,23 @@ export default function PublicReceiptPage() {
                     key={index}
                     className="grid grid-cols-12 gap-2 text-sm items-baseline"
                   >
-                    <div className="col-span-5 font-medium truncate">
-                      {item.product_name}
+                    <div className="col-span-5 font-medium">
+                      <span className="block truncate">{item.product_name}</span>
+                      {/* What the customer asked for, in the same words the
+                          till and the kitchen used. */}
+                      {describeModifiers(item.modifiers).map((label) => (
+                        <span
+                          key={label}
+                          className="block truncate text-xs font-normal text-muted-foreground"
+                        >
+                          {label}
+                        </span>
+                      ))}
+                      {item.note && (
+                        <span className="block text-xs font-normal italic text-muted-foreground">
+                          “{item.note}”
+                        </span>
+                      )}
                     </div>
                     <div className="col-span-2 text-right text-muted-foreground">
                       {item.quantity}

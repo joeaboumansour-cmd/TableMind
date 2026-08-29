@@ -14,7 +14,7 @@
 // (see the comment at the top of AppShell.tsx).
 // =============================================
 
-import { ScanLine, History, Package, Banknote } from "lucide-react";
+import { ScanLine, History, Package, Banknote, ChefHat } from "lucide-react";
 import { useAuth } from "@/lib/auth/AuthContext";
 import { useFeatureFlags } from "@/hooks/useFeatureFlags";
 import type { SectionKey } from "@/lib/auth/permissions";
@@ -65,6 +65,14 @@ export const TABS: Tab[] = [
     section: "cash_register",
     feature: "cash_register",
     matches: (p) => p.startsWith("/pos/cash"),
+  },
+  {
+    href: "/kitchen",
+    label: "Kitchen",
+    icon: ChefHat,
+    section: "kitchen",
+    feature: "kitchen_display",
+    matches: (p) => p.startsWith("/kitchen"),
   },
 ];
 

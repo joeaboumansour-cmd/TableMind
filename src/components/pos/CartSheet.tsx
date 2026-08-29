@@ -19,11 +19,13 @@
 // =============================================
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { CreditCard, Minus, Plus, ScanLine } from "lucide-react";
+import { CreditCard, Minus, Plus, ScanLine, SlidersHorizontal } from "lucide-react";
 import type { CartItem } from "@/lib/types/cart";
 import { formatLL, formatLLParts, formatUSD } from "@/lib/utils/format";
 import { vibrate } from "@/lib/feedback";
 import { cn } from "@/lib/utils";
+import { lineKey } from "@/lib/pos/lineKey";
+import { describeModifiers } from "@/lib/pos/modifierSummary";
 
 /** Height of the sheet when the cart is empty — handle plus a one-line hint. */
 const PEEK_HEIGHT = 104;
@@ -52,6 +54,12 @@ interface CartSheetProps {
   highlightedItemId: string | null;
   onIncrement: (productId: string) => void;
   onDecrement: (productId: string) => void;
+  /**
+   * Open the modifier sheet for a line. Supplied only when the store has
+   * `menu_items` on, so its presence IS the menu-mode signal — same convention
+   * as ProCartRow on the desktop till.
+   */
+  onEditModifiers?: (item: CartItem) => void;
   onClear: () => void;
   onCheckout: () => void;
 }
@@ -71,6 +79,7 @@ export default function CartSheet({
   highlightedItemId,
   onIncrement,
   onDecrement,
+  onEditModifiers,
   onClear,
   onCheckout,
 }: CartSheetProps) {
@@ -268,16 +277,24 @@ export default function CartSheet({
         <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain px-2">
           {items.map((item) => (
             <div
-              key={item.product_id}
-              id={`cart-item-${item.product_id}`}
+              key={lineKey(item)}
+              id={`cart-item-${lineKey(item)}`}
               className={cn(
                 "animate-cart-item-in flex items-center gap-3 rounded-2xl px-3 py-2.5 transition-colors duration-300",
-                highlightedItemId === item.product_id
+                highlightedItemId === lineKey(item)
                   ? "bg-primary/15 ring-1 ring-primary/60"
                   : "ring-1 ring-transparent"
               )}
             >
-              <div className="min-w-0 flex-1">
+              <button
+                type="button"
+                disabled={!onEditModifiers}
+                onClick={() => onEditModifiers?.(item)}
+                className={cn(
+                  "min-w-0 flex-1 rounded-lg text-left",
+                  onEditModifiers && "tap -mx-1 px-1 hover:bg-white/[0.04]"
+                )}
+              >
                 <p className="flex items-center gap-1.5 text-[15px] font-semibold leading-tight">
                   <span className="truncate">{item.product_name}</span>
                   {/* A one-off has no catalogue row behind it — it was named and
@@ -287,6 +304,12 @@ export default function CartSheet({
                     <span className="flex-none rounded bg-primary/15 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-primary">
                       One-off
                     </span>
+                  )}
+                  {onEditModifiers && (
+                    <SlidersHorizontal
+                      className="h-3.5 w-3.5 flex-none text-muted-foreground"
+                      aria-hidden
+                    />
                   )}
                 </p>
                 <p className="mt-0.5 truncate text-xs text-muted-foreground tnum">
@@ -304,13 +327,32 @@ export default function CartSheet({
                     <>{formatLL(item.unit_price)} each</>
                   )}
                 </p>
-              </div>
+                {/* Only the CHANGES, same rule and same wording as the desktop
+                    row and the receipt — describeModifiers() is shared. */}
+                {describeModifiers(item.modifiers).length > 0 && (
+                  <span className="mt-1 flex flex-wrap gap-1">
+                    {describeModifiers(item.modifiers).map((label) => (
+                      <span
+                        key={label}
+                        className={cn(
+                          "rounded px-1.5 py-0.5 text-[10px] font-semibold leading-none",
+                          label.startsWith("No ")
+                            ? "bg-destructive/15 text-destructive"
+                            : "bg-primary/15 text-primary"
+                        )}
+                      >
+                        {label}
+                      </span>
+                    ))}
+                  </span>
+                )}
+              </button>
 
               <div className="flex flex-shrink-0 items-center rounded-xl bg-muted/70">
                 <button
                   type="button"
                   aria-label={`Decrease ${item.product_name}`}
-                  onClick={() => onDecrement(item.product_id)}
+                  onClick={() => onDecrement(lineKey(item))}
                   className="tap flex h-9 w-9 items-center justify-center rounded-xl text-muted-foreground"
                 >
                   <Minus className="h-4 w-4" />
@@ -321,7 +363,7 @@ export default function CartSheet({
                 <button
                   type="button"
                   aria-label={`Increase ${item.product_name}`}
-                  onClick={() => onIncrement(item.product_id)}
+                  onClick={() => onIncrement(lineKey(item))}
                   className="tap flex h-9 w-9 items-center justify-center rounded-xl text-primary"
                 >
                   <Plus className="h-4 w-4" />
