@@ -33,6 +33,7 @@ import { logActivity } from "@/lib/activity/logger";
 import TicketCard from "@/components/kitchen/TicketCard";
 import {
   BOARD_COLUMNS,
+  mergePendingMoves,
   type KitchenTicket,
   type TicketStatus,
 } from "@/lib/kitchen/types";
@@ -58,6 +59,27 @@ function KitchenBoard() {
   // board flicker back to stale content.
   const requestSeq = useRef(0);
 
+  /**
+   * Moves this board has made that the server has not confirmed yet.
+   *
+   * ## The bug this exists to fix
+   *
+   * `move()` updates local state optimistically so a tap feels instant. But a
+   * poll that was ALREADY IN FLIGHT when the cook tapped returns the OLD
+   * status, and `load()` replaces the whole list — so the card jumped to
+   * Ready, snapped back to Preparing when that poll landed, then moved again
+   * on the next poll 8 seconds later.
+   *
+   * requestSeq did not help: it only orders polls against each other, and this
+   * is a poll racing a MUTATION.
+   *
+   * So a move is remembered here and re-applied on top of every load until the
+   * server reports the same status, at which point the memory is dropped. A
+   * failed or rejected move clears it immediately, so the board falls back to
+   * whatever the server actually says rather than lying indefinitely.
+   */
+  const pendingMoves = useRef<Map<string, TicketStatus>>(new Map());
+
   const load = useCallback(async () => {
     if (!storeId) return;
     const seq = ++requestSeq.current;
@@ -68,7 +90,11 @@ function KitchenBoard() {
       if (!response.ok) throw new Error(`API error ${response.status}`);
       const body = (await response.json()) as { tickets?: KitchenTicket[] };
       if (seq !== requestSeq.current) return; // a newer poll already answered
-      setTickets(Array.isArray(body.tickets) ? body.tickets : []);
+
+      const fresh = Array.isArray(body.tickets) ? body.tickets : [];
+      // Re-apply anything this board has done that the server has not caught
+      // up with yet — see mergePendingMoves().
+      setTickets(mergePendingMoves(fresh, pendingMoves.current));
       setError(null);
     } catch (err) {
       if (seq !== requestSeq.current) return;
@@ -142,6 +168,9 @@ function KitchenBoard() {
       // Optimistic: a cook tapping "Start" must see it move immediately, on a
       // connection that is often poor. Rolled back below if the server refuses.
       const previous = ticket.status;
+      // Remember the intent BEFORE the optimistic update, so a poll already in
+      // flight cannot undo it when it lands.
+      pendingMoves.current.set(id, to);
       setTickets((prev) =>
         to === "served" || to === "voided"
           ? prev.filter((t) => t.transaction_id !== id)
@@ -156,7 +185,10 @@ function KitchenBoard() {
         });
 
         if (response.status === 409) {
-          // Another station got there first. Their move is the real one.
+          // Another station got there first. Their move is the real one, so
+          // drop our intent before reloading or the merge would keep asserting
+          // a move the server has refused.
+          pendingMoves.current.delete(id);
           setError("That ticket was already moved by someone else");
           await load();
           return;
@@ -169,6 +201,9 @@ function KitchenBoard() {
           details: { transaction_id: id, from: previous, to },
         });
       } catch (err) {
+        // The move did not land. Forget it, or the board would keep showing a
+        // status the server never accepted.
+        pendingMoves.current.delete(id);
         setError(err instanceof Error ? err.message : "Could not update the ticket");
         await load(); // the server is the truth; re-read rather than guess
       } finally {

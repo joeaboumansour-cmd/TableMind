@@ -106,6 +106,55 @@ export interface KitchenTicket {
 }
 
 /**
+ * Re-apply this board's unconfirmed moves on top of a fresh server list.
+ *
+ * ## Why this exists
+ *
+ * A move updates the board optimistically so a tap feels instant. But a poll
+ * that was ALREADY IN FLIGHT when the cook tapped returns the OLD status, and
+ * the board replaces its list wholesale — so the card jumped to Ready, snapped
+ * back to Preparing when that poll landed, then moved again on the next poll.
+ *
+ * A request sequence number does not help: that orders polls against each
+ * other, and this is a poll racing a MUTATION.
+ *
+ * So an unconfirmed move is re-applied here until the server reports the same
+ * status, at which point it is forgotten. MUTATES `pending` — entries are
+ * deleted as they are confirmed, which is the point: the override is meant to
+ * be temporary, and one that never expired would hide real server state.
+ */
+export function mergePendingMoves(
+  fresh: KitchenTicket[],
+  pending: Map<string, TicketStatus>
+): KitchenTicket[] {
+  const merged: KitchenTicket[] = [];
+
+  for (const ticket of fresh) {
+    const intent = pending.get(ticket.transaction_id);
+    if (intent === undefined) {
+      merged.push(ticket);
+      continue;
+    }
+    if (ticket.status === intent) {
+      pending.delete(ticket.transaction_id); // the server caught up
+      merged.push(ticket);
+      continue;
+    }
+    merged.push({ ...ticket, status: intent }); // still stale; keep the intent
+  }
+
+  // A ticket moved to served or voided leaves the board, so the server simply
+  // stops returning it — its absence IS the confirmation.
+  for (const [id, intent] of pending) {
+    if (!isLiveStatus(intent) && !fresh.some((t) => t.transaction_id === id)) {
+      pending.delete(id);
+    }
+  }
+
+  return merged;
+}
+
+/**
  * How long a ticket has been waiting, in milliseconds.
  *
  * Measured from the SALE, not from when the state row appeared — a ticket
