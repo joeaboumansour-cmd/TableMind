@@ -37,6 +37,11 @@ export const ACTIVITY_ACTIONS = [
   "cart.remove",
   "cart.quantity",
   "cart.line_edit",
+  // Made-to-order: a line built from a recipe, and any later change to it.
+  // Both carry what was removed and what was added, because "no pickles" is
+  // exactly the kind of thing a customer later disputes.
+  "cart.configure",
+  "cart.modifiers_changed",
   "cart.clear",
   "cart.lane_open",
   "cart.lane_close",

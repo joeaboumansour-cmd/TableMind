@@ -24,6 +24,7 @@ import type { CartItem } from "@/lib/types/cart";
 import { formatLL, formatLLParts, formatUSD } from "@/lib/utils/format";
 import { vibrate } from "@/lib/feedback";
 import { cn } from "@/lib/utils";
+import { lineKey } from "@/lib/pos/lineKey";
 
 /** Height of the sheet when the cart is empty — handle plus a one-line hint. */
 const PEEK_HEIGHT = 104;
@@ -268,11 +269,11 @@ export default function CartSheet({
         <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain px-2">
           {items.map((item) => (
             <div
-              key={item.product_id}
-              id={`cart-item-${item.product_id}`}
+              key={lineKey(item)}
+              id={`cart-item-${lineKey(item)}`}
               className={cn(
                 "animate-cart-item-in flex items-center gap-3 rounded-2xl px-3 py-2.5 transition-colors duration-300",
-                highlightedItemId === item.product_id
+                highlightedItemId === lineKey(item)
                   ? "bg-primary/15 ring-1 ring-primary/60"
                   : "ring-1 ring-transparent"
               )}
@@ -310,7 +311,7 @@ export default function CartSheet({
                 <button
                   type="button"
                   aria-label={`Decrease ${item.product_name}`}
-                  onClick={() => onDecrement(item.product_id)}
+                  onClick={() => onDecrement(lineKey(item))}
                   className="tap flex h-9 w-9 items-center justify-center rounded-xl text-muted-foreground"
                 >
                   <Minus className="h-4 w-4" />
@@ -321,7 +322,7 @@ export default function CartSheet({
                 <button
                   type="button"
                   aria-label={`Increase ${item.product_name}`}
-                  onClick={() => onIncrement(item.product_id)}
+                  onClick={() => onIncrement(lineKey(item))}
                   className="tap flex h-9 w-9 items-center justify-center rounded-xl text-primary"
                 >
                   <Plus className="h-4 w-4" />

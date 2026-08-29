@@ -25,11 +25,13 @@ import {
   LaneSummary,
   OneOffInput,
   CartLinePatch,
+  CartLineModifier,
   CartState,
 } from '@/lib/types/cart';
 import { Product } from '@/lib/types/product';
 import { convertLlToUsdForReturn, SELL_RATE, roundToNearest5k } from '@/lib/utils/format';
 import { newOneOffId } from '@/lib/pos/lineItems';
+import { lineKey, newLineUid } from '@/lib/pos/lineKey';
 
 /** ALT+1..ALT+9 addresses the lanes, so nine is the ceiling. */
 export const MAX_LANES = 9;
@@ -72,6 +74,27 @@ interface PersistedCart {
   lanes?: Record<string, { items?: unknown[] } & Partial<Lane>>;
   laneOrder?: string[];
   activeLaneId?: string;
+}
+
+/**
+ * Total LL charged for add-ons on ONE unit of a line.
+ *
+ * Only 'extra' components cost anything: an included component is already in
+ * the menu price, and a removed one is NOT refunded (crediting for a removal
+ * would be a negative-price surface behind a control needing only `pos`).
+ *
+ * `count` is the total on the line including the default, so a 1x default
+ * cheese taken to 3 charges for 2.
+ */
+function extrasOf(modifiers: CartLineModifier[] | undefined): number {
+  if (!modifiers || modifiers.length === 0) return 0;
+  let total = 0;
+  for (const m of modifiers) {
+    if (m.state !== 'extra') continue;
+    const extraUnits = Math.max(0, m.count - (m.is_default_component ? 1 : 0));
+    total += m.price_delta_ll * extraUnits;
+  }
+  return total;
 }
 
 /** Recompute the derived line totals after quantity or unit price changes. */
@@ -153,7 +176,10 @@ export const useCartStore = create<CartStore>()(
         // ---- Actions ----
         addItem: (product: Product, quantity: number = 1) => {
           const { items } = get();
-          const existingItem = items.find(item => item.product_id === product.id);
+          // lineKey() is product_id for a plain line, so this is the same
+          // check it always was. A configured line's key is a `line:` uuid and
+          // can never collide with a product id.
+          const existingItem = items.find(item => lineKey(item) === product.id);
 
           // Idempotent: scanning the same product must NOT increment quantity.
           // Quantity is only ever increased via the manual "+" button (incrementQuantity).
@@ -279,10 +305,147 @@ export const useCartStore = create<CartStore>()(
           return id;
         },
 
+        /**
+         * A made-to-order line.
+         *
+         * ALWAYS appends, never dedupes — mirroring addOneOffItem. Two
+         * identical sandwiches stay two lines: the kitchen prepares them in
+         * parallel, and one can be voided without touching the other. Merging
+         * on a "modifier signature" would make remove ambiguous, and +/-
+         * already covers "two of the same".
+         *
+         * Money, per CLAUDE.md §3:
+         *  - add-ons are EXACT LL, summed into unit_price. No per-line
+         *    rounding; roundToNearest5k stays in getTotal() alone.
+         *  - the product discount applies to the BASE only, never to add-ons,
+         *    so "50% off sandwich" does not silently halve the extra cheese.
+         *  - a USD-priced menu item is converted to LL first and the line
+         *    becomes currency 'LL', because a line carrying LL add-ons is no
+         *    longer tracking the rate and the field should say so.
+         */
+        addConfiguredItem: (product: Product, modifiers: CartLineModifier[], quantity = 1) => {
+          const { items } = get();
+          const qty = quantity > 0 ? quantity : 1;
+          const uid = newLineUid();
+
+          const baseLl =
+            product.currency === 'USD'
+              ? product.selling_price * SELL_RATE
+              : product.selling_price;
+
+          const discountPercentage = product.discount_percentage || 0;
+          const discountedBase =
+            discountPercentage > 0
+              ? baseLl * (1 - discountPercentage / 100)
+              : baseLl;
+
+          const extras = extrasOf(modifiers);
+          const unitPriceLl = discountedBase + extras;
+          const originalUnitPriceLl = baseLl + extras;
+          const unitPriceUsd = convertLlToUsdForReturn(unitPriceLl);
+          const originalUnitPriceUsd = convertLlToUsdForReturn(originalUnitPriceLl);
+          const unitDiscount = originalUnitPriceLl - unitPriceLl;
+
+          const newItem: CartItem = {
+            product_id: product.id,
+            product_name: product.name,
+            barcode: product.barcode,
+            quantity: qty,
+            unit_price: unitPriceLl,
+            total_price: qty * unitPriceLl,
+            unit_price_usd: unitPriceUsd,
+            total_price_usd: qty * unitPriceUsd,
+            stock_quantity: product.stock_quantity,
+            currency: 'LL',
+            discount_percentage: discountPercentage,
+            original_unit_price: originalUnitPriceLl,
+            original_total_price: qty * originalUnitPriceLl,
+            original_unit_price_usd: originalUnitPriceUsd,
+            original_total_price_usd: qty * originalUnitPriceUsd,
+            unit_price_discount_amount: unitDiscount,
+            total_discount_amount: qty * unitDiscount,
+            line_kind: 'configured',
+            catalog_unit_price: baseLl,
+            line_uid: uid,
+            modifiers,
+          };
+
+          commitItems([newItem, ...items], {
+            action: 'cart.configure',
+            target: product.name,
+            details: {
+              product_id: product.id,
+              line_uid: uid,
+              quantity: qty,
+              unit_price_ll: unitPriceLl,
+              extras_ll: extras,
+              removed: modifiers.filter(m => m.state === 'removed').map(m => m.name),
+              added: modifiers.filter(m => m.state === 'extra').map(m => m.name),
+            },
+          });
+          return uid;
+        },
+
+        /**
+         * Replace a configured line's modifiers and re-price it.
+         *
+         * The base is DERIVED (`unit_price - extras(current)`) rather than
+         * stored. That is what makes the interaction with updateLine correct
+         * for free: a cashier who retyped the whole line price typed it
+         * INCLUDING the current add-ons, so removing one afterwards drops that
+         * delta off the typed price rather than resurrecting the catalogue one.
+         */
+        updateItemModifiers: (lineId: string, modifiers: CartLineModifier[]) => {
+          const { items } = get();
+          const before = items.find(item => lineKey(item) === lineId);
+          if (!before) return;
+
+          commitItems(
+            items.map((item) => {
+              if (lineKey(item) !== lineId) return item;
+
+              const currentExtras = extrasOf(item.modifiers || []);
+              const nextExtras = extrasOf(modifiers);
+              const base = item.unit_price - currentExtras;
+              const originalBase = item.original_unit_price - currentExtras;
+
+              const unitPriceLl = base + nextExtras;
+              const originalUnitPriceLl = originalBase + nextExtras;
+              const unitPriceUsd = convertLlToUsdForReturn(unitPriceLl);
+              const originalUnitPriceUsd = convertLlToUsdForReturn(originalUnitPriceLl);
+              const unitDiscount = originalUnitPriceLl - unitPriceLl;
+
+              return withTotals(
+                {
+                  ...item,
+                  modifiers,
+                  unit_price: unitPriceLl,
+                  unit_price_usd: unitPriceUsd,
+                  original_unit_price: originalUnitPriceLl,
+                  original_unit_price_usd: originalUnitPriceUsd,
+                  unit_price_discount_amount: unitDiscount,
+                },
+                item.quantity
+              );
+            }),
+            {
+              action: 'cart.modifiers_changed',
+              target: before.product_name,
+              details: {
+                product_id: before.product_id,
+                line_uid: before.line_uid,
+                removed: modifiers.filter(m => m.state === 'removed').map(m => m.name),
+                added: modifiers.filter(m => m.state === 'extra').map(m => m.name),
+                price_from_ll: before.unit_price,
+              },
+            }
+          );
+        },
+
         removeItem: (productId: string) => {
           const { items } = get();
-          const removed = items.find(item => item.product_id === productId);
-          commitItems(items.filter(item => item.product_id !== productId), {
+          const removed = items.find(item => lineKey(item) === productId);
+          commitItems(items.filter(item => lineKey(item) !== productId), {
             action: 'cart.remove',
             target: removed?.product_name,
             details: {
@@ -301,10 +464,10 @@ export const useCartStore = create<CartStore>()(
             return;
           }
 
-          const before = items.find(item => item.product_id === productId);
+          const before = items.find(item => lineKey(item) === productId);
           commitItems(
             items.map(item =>
-              item.product_id === productId ? withTotals(item, quantity) : item
+              lineKey(item) === productId ? withTotals(item, quantity) : item
             ),
             {
               action: 'cart.quantity',
@@ -332,10 +495,10 @@ export const useCartStore = create<CartStore>()(
          */
         updateLine: (productId: string, patch: CartLinePatch) => {
           const { items } = get();
-          const before = items.find((item) => item.product_id === productId);
+          const before = items.find((item) => lineKey(item) === productId);
           commitItems(
             items.map((item) => {
-              if (item.product_id !== productId) return item;
+              if (lineKey(item) !== productId) return item;
 
               let next: CartItem = { ...item };
 
@@ -395,7 +558,7 @@ export const useCartStore = create<CartStore>()(
 
         incrementQuantity: (productId: string) => {
           const { items } = get();
-          const item = items.find(i => i.product_id === productId);
+          const item = items.find(i => lineKey(i) === productId);
           if (item) {
             get().updateQuantity(productId, item.quantity + 1);
             return true;
@@ -405,7 +568,7 @@ export const useCartStore = create<CartStore>()(
 
         decrementQuantity: (productId: string) => {
           const { items } = get();
-          const item = items.find(i => i.product_id === productId);
+          const item = items.find(i => lineKey(i) === productId);
           if (item && item.quantity > 1) {
             get().updateQuantity(productId, item.quantity - 1);
           } else if (item) {

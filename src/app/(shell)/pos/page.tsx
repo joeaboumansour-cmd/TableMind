@@ -336,6 +336,12 @@ export default function POSPage() {
     // callback identity stays stable across cart changes. That matters because
     // this function is the `onScan` prop of the memoized scanner: rebuilding it
     // on every add re-rendered the live camera subtree mid-scan.
+    //
+    // Matches on product_id, NOT lineKey(), and that is correct: this path only
+    // ever handles a plain scanned/tapped product, whose lineKey IS its
+    // product_id. A configured (made-to-order) line never arrives here — it is
+    // built through addConfiguredItem, which deliberately never dedupes, so two
+    // sandwiches with different modifiers stay two lines.
     const existingItem = useCartStore
       .getState()
       .items.find((item) => item.product_id === product.id);

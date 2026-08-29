@@ -15,6 +15,7 @@ import { cn } from "@/lib/utils";
 import { formatLL, formatUSD } from "@/lib/utils/format";
 import CartQuantityInput from "@/components/pos/CartQuantityInput";
 import type { CartItem } from "@/lib/types/cart";
+import { lineKey } from "@/lib/pos/lineKey";
 
 interface ProCartRowProps {
   item: CartItem;
@@ -84,7 +85,7 @@ export default function ProCartRow({
 
   return (
     <div
-      id={`cart-item-${item.product_id}`}
+      id={`cart-item-${lineKey(item)}`}
       className={cn(
         "animate-cart-item-in rounded-2xl px-2 py-2 transition-colors duration-300",
         isHighlighted
@@ -100,7 +101,7 @@ export default function ProCartRow({
           <button
             type="button"
             aria-label={`Decrease ${item.product_name}`}
-            onClick={() => onDecrement(item.product_id)}
+            onClick={() => onDecrement(lineKey(item))}
             className="tap flex h-11 w-11 items-center justify-center rounded-xl text-muted-foreground hover:text-foreground"
           >
             <Minus className="h-5 w-5" />
@@ -108,12 +109,12 @@ export default function ProCartRow({
           <CartQuantityInput
             quantity={item.quantity}
             productName={item.product_name}
-            onCommit={(q) => onSetQuantity(item.product_id, q)}
+            onCommit={(q) => onSetQuantity(lineKey(item), q)}
           />
           <button
             type="button"
             aria-label={`Increase ${item.product_name}`}
-            onClick={() => onIncrement(item.product_id)}
+            onClick={() => onIncrement(lineKey(item))}
             className="tap flex h-11 w-11 items-center justify-center rounded-xl text-primary hover:text-primary/80"
           >
             <Plus className="h-5 w-5" />
@@ -123,7 +124,7 @@ export default function ProCartRow({
         {/* ---- Name + unit price. Both open the editor. ---- */}
         <Field
           canEdit={canEdit}
-          onClick={() => onOpenEditor(item.product_id)}
+          onClick={() => onOpenEditor(lineKey(item))}
           className="min-w-0 flex-1 rounded-xl px-2 py-1 text-left"
         >
           <span className="flex items-center gap-1.5">
@@ -166,7 +167,7 @@ export default function ProCartRow({
         {/* ---- Line total ---- */}
         <Field
           canEdit={canEdit}
-          onClick={() => onOpenEditor(item.product_id)}
+          onClick={() => onOpenEditor(lineKey(item))}
           className="w-[132px] flex-none rounded-xl px-2 py-1 text-right"
         >
           <span className="block text-[15px] font-semibold tnum">
@@ -180,7 +181,7 @@ export default function ProCartRow({
         <button
           type="button"
           aria-label={`Remove ${item.product_name}`}
-          onClick={() => onRemove(item.product_id)}
+          onClick={() => onRemove(lineKey(item))}
           className="tap flex h-11 w-11 flex-none items-center justify-center rounded-xl text-muted-foreground/60 hover:bg-destructive/10 hover:text-destructive"
         >
           <X className="h-5 w-5" />

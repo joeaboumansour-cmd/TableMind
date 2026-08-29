@@ -35,6 +35,7 @@ import { formatLL, formatUSD } from "@/lib/utils/format";
 import { cachedToProduct } from "@/lib/products/refresh";
 import { createProduct, repriceProduct } from "@/lib/products/write";
 import { isOneOffLine } from "@/lib/pos/lineItems";
+import { lineKey } from "@/lib/pos/lineKey";
 import { logActivity } from "@/lib/activity/logger";
 import type { Product } from "@/lib/types/product";
 import type { CartItem } from "@/lib/types/cart";
@@ -346,7 +347,9 @@ export default function ProPOSLayout({
       // Whichever scope was chosen, this sale takes the new figures. Someone is
       // waiting at the counter for the price they were quoted.
       if (scope === "sale") {
-        updateLine(item.product_id, { name: patch.name, unitPriceLl: patch.unitPriceLl });
+        // lineKey(), NOT product_id: two configured lines of the same product
+        // must be repriced independently.
+        updateLine(lineKey(item), { name: patch.name, unitPriceLl: patch.unitPriceLl });
         setEditingLineId(null);
         return;
       }
@@ -391,7 +394,9 @@ export default function ProPOSLayout({
           );
         }
 
-        updateLine(item.product_id, { name: patch.name, unitPriceLl: patch.unitPriceLl });
+        // lineKey(), NOT product_id: two configured lines of the same product
+        // must be repriced independently.
+        updateLine(lineKey(item), { name: patch.name, unitPriceLl: patch.unitPriceLl });
         setEditingLineId(null);
       } catch (error: unknown) {
         console.error("[POS] Line inventory write failed:", error);
@@ -486,7 +491,7 @@ export default function ProPOSLayout({
   }, [switchLaneByPosition, isEmpty, onCheckout, laneToClose, clearConfirmOpen]);
 
   const editingItem = editingLineId
-    ? items.find((i) => i.product_id === editingLineId)
+    ? items.find((i) => lineKey(i) === editingLineId)
     : undefined;
 
   return (
@@ -640,10 +645,10 @@ export default function ProPOSLayout({
                 <div className="no-scrollbar min-h-0 flex-1 overflow-y-auto px-2 pb-2">
                   {items.map((item) => (
                     <ProCartRow
-                      key={item.product_id}
+                      key={lineKey(item)}
                       item={item}
-                      isHighlighted={highlightedItemId === item.product_id}
-                      isEditing={editingLineId === item.product_id}
+                      isHighlighted={highlightedItemId === lineKey(item)}
+                      isEditing={editingLineId === lineKey(item)}
                       onIncrement={incrementQuantity}
                       onDecrement={decrementQuantity}
                       onSetQuantity={updateQuantity}
@@ -656,9 +661,9 @@ export default function ProPOSLayout({
                         setEditingLineId((current) => (current === id ? null : id))
                       }
                       editor={
-                        editingItem && editingItem.product_id === item.product_id ? (
+                        editingItem && lineKey(editingItem) === lineKey(item) ? (
                           <CartLineEditor
-                            key={item.product_id}
+                            key={lineKey(item)}
                             item={editingItem}
                             product={catalogFor(editingItem)}
                             busy={isWriting}
