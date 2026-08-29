@@ -32,6 +32,8 @@ export interface CachedTransactionItem {
    * for every ordinary line anyway.
    */
   modifiers?: CartLineModifier[] | null;
+  /** Free-text instruction for this line. Optional, like modifiers above. */
+  note?: string | null;
 }
 
 export interface CachedTransaction {
@@ -74,6 +76,8 @@ export interface CachedProduct {
   kind?: string | null;
   /** Unit for stock_quantity. Optional for the same reason as `kind`. */
   stock_unit?: string | null;
+  /** One portion of this ingredient, in its stock_unit. Defaults to 1. */
+  serving_qty?: number | null;
   parent_id?: string | null;
   variant_name?: string | null;
   updated_at: string;
@@ -164,6 +168,8 @@ export interface QueuedTransactionItem {
    * offline payloads cannot disagree.
    */
   modifiers?: CartLineModifier[] | null;
+  /** Free-text instruction for this line. Mirrors SaleLineItem. */
+  note?: string | null;
 }
 
 export interface PendingWrite {

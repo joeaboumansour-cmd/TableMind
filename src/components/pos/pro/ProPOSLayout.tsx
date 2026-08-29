@@ -68,6 +68,8 @@ interface ProPOSLayoutProps {
   recipes: RecipeMap;
   /** Ingredient names for the modifier sheet, by product id. */
   ingredientNames: Map<string, string>;
+  /** Every ingredient in inventory — anything can be added to anything. */
+  ingredients: Product[];
   storeId: string;
   /** Adds to the active lane, with the page's variant/discount resolution. */
   onProductAdd: (product: Product) => void;
@@ -85,6 +87,7 @@ export default function ProPOSLayout({
   categories,
   recipes,
   ingredientNames,
+  ingredients,
   storeId,
   onProductAdd,
   resolveBarcode,
@@ -777,8 +780,9 @@ export default function ProPOSLayout({
           if (!open) setConfiguring(null);
         }}
         ingredientNames={ingredientNames}
-        onConfirm={(modifiers) => {
-          handleConfirm(modifiers);
+        ingredients={ingredients}
+        onConfirm={(modifiers, note) => {
+          handleConfirm(modifiers, note);
           searchInputRef.current?.focus();
         }}
       />

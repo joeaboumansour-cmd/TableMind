@@ -385,6 +385,7 @@ class SyncEngine {
             // `?? null`, never `|| null`: [] means "a menu line with nothing
             // changed", which is what the kitchen board filters tickets on.
             modifiers: item.modifiers ?? null,
+            note: item.note ?? null,
           })),
           // ⚠️ Forwarding this is what makes an OFFLINE menu sale deduct the
           // right thing.

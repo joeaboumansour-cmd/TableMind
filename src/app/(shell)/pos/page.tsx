@@ -630,6 +630,17 @@ export default function POSPage() {
   const sellableProducts = useMemo(() => products.filter(isSellable), [products]);
 
   /**
+   * Every ingredient in inventory, so ANY of them can be added to ANY line —
+   * hummus does not have to be in the taouk sandwich's recipe to go on it.
+   * Variants are excluded: a variant is a way of selling a product, not a
+   * thing you put inside one.
+   */
+  const ingredientProducts = useMemo(
+    () => products.filter((p) => isIngredient(p) && !p.parent_id),
+    [products]
+  );
+
+  /**
    * The mobile till's modifier sheet. Same hook the desktop layout uses, so the
    * "recipe -> open the sheet, otherwise add straight to the cart" rule has one
    * implementation rather than one per layout.
@@ -637,6 +648,7 @@ export default function POSPage() {
   const {
     setConfiguring: setMobileConfiguring,
     handleTileAdd,
+    handleEditModifiers: handleMobileEditModifiers,
     handleConfirm: handleMobileConfirm,
     sheetProps: mobileSheetProps,
   } = useMenuSheet({
@@ -789,6 +801,7 @@ export default function POSPage() {
             if (!open) setMobileConfiguring(null);
           }}
           ingredientNames={ingredientNames}
+          ingredients={ingredientProducts}
           onConfirm={handleMobileConfirm}
         />
       )}
@@ -967,6 +980,10 @@ export default function POSPage() {
             highlightedItemId={highlightedItemId}
             onIncrement={incrementQuantity}
             onDecrement={decrementQuantity}
+            // Presence of this prop is the menu-mode signal inside the sheet.
+            onEditModifiers={
+              isEnabled("menu_items") ? handleMobileEditModifiers : undefined
+            }
             onClear={handleClearCart}
             onCheckout={() => router.push("/checkout")}
           />
@@ -993,6 +1010,7 @@ export default function POSPage() {
         categories={categories}
         recipes={recipes}
         ingredientNames={ingredientNames}
+        ingredients={ingredientProducts}
         storeId={user?.storeId || ""}
         onProductAdd={handleProductAdd}
         resolveBarcode={resolveBarcode}

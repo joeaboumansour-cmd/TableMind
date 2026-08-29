@@ -29,10 +29,24 @@ export type CartLineKind = 'product' | 'one_off' | 'configured';
  * no external lookup, and lets a kitchen ticket render from the line alone.
  */
 export interface CartLineModifier {
-  /** recipe_components.id — which recipe row this choice refers to. */
+  /**
+   * Which choice this is.
+   *
+   * Normally `recipe_components.id`. For an ingredient added that is NOT in
+   * the product's recipe at all — hummus on a taouk sandwich — there is no
+   * recipe row, so this is a synthetic `adhoc:<uuid>` key. Same convention as
+   * the cart's `oneoff:` line keys: local-only, never a real id, and never
+   * sent anywhere that expects one.
+   */
   component_id: string;
   /** The ingredient. Needed for stock, and to survive a recipe edit. */
   ingredient_product_id: string;
+  /**
+   * True when this ingredient is not part of the product's recipe. Its price
+   * came from the INGREDIENT PRODUCT'S OWN selling_price rather than from a
+   * recipe row's price_delta_ll.
+   */
+  is_adhoc?: boolean;
   /** Denormalised: the name AS SOLD. */
   name: string;
   /**
@@ -99,6 +113,11 @@ export interface CartItem {
   line_uid?: string;
   /** The ingredient choices on a configured line. */
   modifiers?: CartLineModifier[];
+  /**
+   * Free-text instruction for this line — "cut in half", "extra spicy".
+   * Things no ingredient list can express. Reaches the kitchen and the receipt.
+   */
+  note?: string;
 }
 
 export interface Cart {
@@ -177,10 +196,21 @@ export interface CartActions {
   addConfiguredItem: (
     product: Product,
     modifiers: CartLineModifier[],
-    quantity?: number
+    quantity?: number,
+    note?: string
   ) => string;
-  /** Replace the modifiers on a configured line and re-price it. */
-  updateItemModifiers: (lineId: string, modifiers: CartLineModifier[]) => void;
+  /**
+   * Replace the modifiers and note on a line, and re-price it.
+   *
+   * Works on ANY line, not only one that was configured on the way in: in a
+   * snack shop every sellable product is customisable, so a plain line that
+   * gains a modifier or a note is converted in place and given a line_uid.
+   */
+  updateItemModifiers: (
+    lineId: string,
+    modifiers: CartLineModifier[],
+    note?: string
+  ) => void;
   removeItem: (productId: string) => void;
   updateQuantity: (productId: string, quantity: number) => void;
   updateLine: (productId: string, patch: CartLinePatch) => void;

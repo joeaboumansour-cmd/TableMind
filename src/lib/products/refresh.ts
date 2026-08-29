@@ -56,7 +56,7 @@ const WATERMARK_SAFETY_MS = 5 * 60 * 1000;
  * every page of every sync.
  */
 export const PRODUCT_COLUMNS =
-  "id, store_id, name, barcode, cost_price, selling_price, currency, profit_percentage, discount_percentage, stock_quantity, min_stock_threshold, category_id, kind, stock_unit, parent_id, variant_name, updated_at";
+  "id, store_id, name, barcode, cost_price, selling_price, currency, profit_percentage, discount_percentage, stock_quantity, min_stock_threshold, category_id, kind, stock_unit, serving_qty, parent_id, variant_name, updated_at";
 
 /**
  * A row as PRODUCT_COLUMNS returns it. Deliberately looser than CachedProduct:
@@ -78,6 +78,7 @@ export interface ProductRow {
   category_id: string | null;
   kind: string | null;
   stock_unit: string | null;
+  serving_qty: number | string | null;
   parent_id: string | null;
   variant_name: string | null;
   updated_at: string | null;
@@ -102,6 +103,9 @@ export function mapToCachedProduct(p: ProductRow): CachedProduct {
     // must read as sellable. Never invert this.
     kind: p.kind || "sellable",
     stock_unit: p.stock_unit || "unit",
+    // NUMERIC arrives from PostgREST as a string. Coerce once, here, so no
+    // consumer multiplies a string by a quantity.
+    serving_qty: Number(p.serving_qty) > 0 ? Number(p.serving_qty) : 1,
     parent_id: p.parent_id || null,
     variant_name: p.variant_name || null,
     updated_at: p.updated_at || new Date().toISOString(),
@@ -132,6 +136,7 @@ export function cachedToProduct(p: CachedProduct): Product {
     category_id: p.category_id ?? null,
     kind: p.kind || "sellable",
     stock_unit: p.stock_unit || "unit",
+    serving_qty: p.serving_qty ?? 1,
     parent_id: p.parent_id || undefined,
     variant_name: p.variant_name || undefined,
   };

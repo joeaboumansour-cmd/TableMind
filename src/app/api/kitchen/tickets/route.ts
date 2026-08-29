@@ -85,6 +85,7 @@ interface TxnRow {
     product_name: string;
     quantity: number;
     modifiers: CartLineModifier[] | null;
+    note: string | null;
   }> | null;
   kitchen_ticket_state:
     | { status: string; claimed_by: string | null; started_at: string | null; ready_at: string | null }
@@ -118,7 +119,7 @@ export async function GET(request: Request) {
       id,
       transaction_number,
       created_at,
-      transaction_items ( id, product_name, quantity, modifiers ),
+      transaction_items ( id, product_name, quantity, modifiers, note ),
       kitchen_ticket_state ( status, claimed_by, started_at, ready_at )
     `
     )
@@ -147,6 +148,7 @@ export async function GET(request: Request) {
       // Formatted server-side with the SAME helper the cart and receipt use,
       // so a cook and a customer never read different words for one change.
       modifiers: describeModifiers(item.modifiers),
+      note: item.note ?? null,
     }));
 
     tickets.push({

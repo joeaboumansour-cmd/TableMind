@@ -96,6 +96,8 @@ interface Product {
   /** 'sellable' | 'ingredient'. Test with isSellable(), never === 'sellable'. */
   kind?: string | null;
   stock_unit?: string | null;
+  /** One portion of this ingredient, in its stock_unit. */
+  serving_qty?: number | null;
   parent_id?: string | null;
   variant_name?: string | null;
 }
@@ -237,6 +239,7 @@ function StoreProductsPageContent() {
   const [minStockThreshold, setMinStockThreshold] = useState("0");
   const [productKind, setProductKind] = useState<ProductKind>("sellable");
   const [stockUnit, setStockUnit] = useState("unit");
+  const [servingQty, setServingQty] = useState("1");
   const [categoryId, setCategoryId] = useState("");
   const [recipeDraft, setRecipeDraft] = useState<DraftComponent[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
@@ -425,6 +428,7 @@ function StoreProductsPageContent() {
       // and undefined must never hide a product. See lib/products/kind.ts.
       kind: p.kind || "sellable",
       stock_unit: p.stock_unit || "unit",
+      serving_qty: p.serving_qty ?? 1,
       parent_id: p.parent_id ?? null,
       variant_name: p.variant_name ?? null,
     }));
@@ -547,6 +551,7 @@ function StoreProductsPageContent() {
             category_id: categoryId || null,
             kind: productKind,
             stock_unit: stockUnit || "unit",
+            serving_qty: parseFloat(servingQty) > 0 ? parseFloat(servingQty) : 1,
           })
           .eq("id", editingProduct.id)
           .select()
@@ -589,6 +594,7 @@ function StoreProductsPageContent() {
             category_id: categoryId || null,
             kind: productKind,
             stock_unit: stockUnit || "unit",
+            serving_qty: parseFloat(servingQty) > 0 ? parseFloat(servingQty) : 1,
           })
           .select()
           .single();
@@ -723,6 +729,7 @@ function StoreProductsPageContent() {
     setMinStockThreshold(product.min_stock_threshold.toString());
     setProductKind(normaliseKind(product.kind));
     setStockUnit(product.stock_unit || "unit");
+    setServingQty(String(product.serving_qty ?? 1));
     setCategoryId(product.category_id || "");
     // Strip the server-side ids: the editor works on drafts and the PUT
     // rewrites the whole set, so carrying ids around would only invite
@@ -848,6 +855,7 @@ function StoreProductsPageContent() {
     setMinStockThreshold("0");
     setProductKind("sellable");
     setStockUnit("unit");
+    setServingQty("1");
     setCategoryId("");
     setRecipeDraft([]);
     setEditingProduct(null);
@@ -2326,6 +2334,33 @@ function StoreProductsPageContent() {
                     count — recipes cannot use half of it. Stock {stockQuantity || 0} means{" "}
                     {formatStock(parseInt(stockQuantity) || 0, stockUnit)}.
                   </p>
+
+                  <div className="space-y-1.5 pt-2">
+                    <Label htmlFor="servingQty">One portion</Label>
+                    <div className="flex items-center gap-2">
+                      <Input
+                        id="servingQty"
+                        type="number"
+                        step="0.001"
+                        min="0"
+                        placeholder="1"
+                        value={servingQty}
+                        onChange={(e) => setServingQty(e.target.value)}
+                        inputMode="decimal"
+                        className="tnum"
+                      />
+                      <span className="flex-none text-sm">{stockUnit}</span>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      How much one scoop or slice is. Used when this is added to an item
+                      that has no recipe line for it, and as the default when you put it
+                      in a recipe.
+                      {parseFloat(sellingPrice) > 0 && (
+                        <> Adding it charges {formatLL(parseFloat(sellingPrice) || 0)} — set
+                        the price above to 0 to make it free.</>
+                      )}
+                    </p>
+                  </div>
                 </div>
               )}
 

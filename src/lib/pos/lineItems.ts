@@ -52,6 +52,8 @@ export interface SaleLineItem {
    * The distinction is what the kitchen board filters on — see migration 032.
    */
   modifiers?: CartLineModifier[] | null;
+  /** Free-text instruction for this line. Null on an ordinary line. */
+  note?: string | null;
 }
 
 /**
@@ -71,6 +73,9 @@ export function buildTransactionItems(items: CartItem[]): SaleLineItem[] {
     // (a menu line with no changes) and must not be collapsed to null, which
     // means "not a food order at all".
     modifiers: item.modifiers ?? null,
+    // Trimmed to null so an empty box does not become an empty string that
+    // renders as a blank line on a receipt.
+    note: item.note?.trim() || null,
   }));
 }
 

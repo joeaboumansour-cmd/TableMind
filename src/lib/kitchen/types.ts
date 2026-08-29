@@ -89,6 +89,8 @@ export interface KitchenTicketItem {
    * table: the board reads them with no join.
    */
   modifiers?: string[];
+  /** Free-text instruction for this line — "cut in half". */
+  note?: string | null;
 }
 
 export interface KitchenTicket {

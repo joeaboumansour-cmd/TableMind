@@ -51,6 +51,9 @@ export function useMenuSheet({
   const handleTileAdd = useCallback(
     (product: Product) => {
       const components = recipes[product.id];
+      // Only a product WITH a recipe opens the sheet on the way in. Anything
+      // else goes straight to the cart, so selling a bottle of water stays one
+      // tap — it can still be customised afterwards from the cart row.
       if (enabled && components && components.length > 0) {
         setConfiguring({ product, lineId: null });
         return;
@@ -60,7 +63,16 @@ export function useMenuSheet({
     [recipes, enabled, onPlainAdd]
   );
 
-  /** Reopen the sheet for a line already in the cart. */
+  /**
+   * Open the sheet for a line already in the cart.
+   *
+   * Works on ANY line, with or without a recipe: in a snack shop every
+   * sellable product is customisable, because an ingredient can be added to
+   * anything and a note can be left on anything.
+   *
+   * A one-off line is the exception — it has no catalogue row, so there is no
+   * product to build a sheet around.
+   */
   const handleEditModifiers = useCallback(
     (item: CartItem) => {
       const product = products.find((p) => p.id === item.product_id);
@@ -71,12 +83,12 @@ export function useMenuSheet({
   );
 
   const handleConfirm = useCallback(
-    (modifiers: CartLineModifier[]) => {
+    (modifiers: CartLineModifier[], note: string) => {
       if (!configuring) return;
       if (configuring.lineId) {
-        updateItemModifiers(configuring.lineId, modifiers);
+        updateItemModifiers(configuring.lineId, modifiers, note);
       } else {
-        addConfiguredItem(configuring.product, modifiers);
+        addConfiguredItem(configuring.product, modifiers, 1, note);
         playSuccessSound();
       }
       setConfiguring(null);
@@ -84,11 +96,18 @@ export function useMenuSheet({
     [configuring, addConfiguredItem, updateItemModifiers]
   );
 
-  /** The current line's choices when editing, so the sheet opens pre-filled. */
-  const initial = useMemo(() => {
+  /** The current line when editing, so the sheet opens pre-filled. */
+  const editingLine = useMemo(() => {
     if (!configuring?.lineId) return null;
-    return items.find((i) => lineKey(i) === configuring.lineId)?.modifiers ?? null;
+    return items.find((i) => lineKey(i) === configuring.lineId) ?? null;
   }, [configuring, items]);
+
+  /**
+   * `initial` doubles as the "am I editing?" flag for the sheet's button label
+   * and remount key, so an existing line with no modifiers yet must still
+   * produce an array rather than null.
+   */
+  const initial = editingLine ? editingLine.modifiers ?? [] : null;
 
   const components = configuring ? recipes[configuring.product.id] || [] : [];
 
@@ -104,6 +123,7 @@ export function useMenuSheet({
       product: configuring?.product ?? null,
       components,
       initial,
+      initialNote: editingLine?.note ?? "",
     },
   };
 }

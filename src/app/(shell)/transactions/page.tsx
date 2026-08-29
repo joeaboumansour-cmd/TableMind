@@ -110,6 +110,8 @@ interface TransactionItem {
   currency: string;
   /** Made-to-order choices as sold. Null on every ordinary line. */
   modifiers?: CartLineModifier[] | null;
+  /** Free-text instruction for this line. */
+  note?: string | null;
 }
 
 interface Transaction {
@@ -354,6 +356,7 @@ function TransactionHistoryPageContent() {
                   total_price: item.total_price,
                   currency: item.currency,
                   modifiers: item.modifiers ?? null,
+                  note: item.note ?? null,
                 })),
               }));
               cacheTransactions(toCache).catch((err) =>
@@ -431,6 +434,7 @@ function TransactionHistoryPageContent() {
           // A queued sale shows its modifiers too — the cashier may need to
           // check what was ordered before it has even reached the server.
           modifiers: it.modifiers ?? null,
+          note: it.note ?? null,
         })),
         calculated_change: (q.amount_paid ?? 0) - (q.total_amount ?? 0),
         syncState,
@@ -1172,6 +1176,11 @@ function TransactionHistoryPageContent() {
                           {label}
                         </span>
                       ))}
+                      {item.note && (
+                        <span className="block text-xs italic text-muted-foreground">
+                          “{item.note}”
+                        </span>
+                      )}
                     </span>
                     <span className="flex-none text-right">
                       {/* total_price is stored in LL for every line, whatever the

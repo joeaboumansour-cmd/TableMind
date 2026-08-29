@@ -80,6 +80,7 @@ export interface Database {
           category_id: string | null;
           kind: string;
           stock_unit: string;
+          serving_qty: number;
         };
         Insert: {
           id?: string;
@@ -96,6 +97,7 @@ export interface Database {
           category_id?: string | null;
           kind?: string;
           stock_unit?: string;
+          serving_qty?: number;
         };
         Update: {
           id?: string;
@@ -112,6 +114,7 @@ export interface Database {
           category_id?: string | null;
           kind?: string;
           stock_unit?: string;
+          serving_qty?: number;
         };
       };
       transactions: {

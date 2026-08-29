@@ -10,7 +10,7 @@
 // and the price are themselves buttons — tapping either opens the editor.
 // =============================================
 
-import { Minus, Plus, X, Tag } from "lucide-react";
+import { Minus, Plus, X, Tag, SlidersHorizontal } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatLL, formatUSD } from "@/lib/utils/format";
 import CartQuantityInput from "@/components/pos/CartQuantityInput";
@@ -89,6 +89,20 @@ export default function ProCartRow({
   onEditModifiers,
   editor,
 }: ProCartRowProps) {
+  /**
+   * Menu mode. The parent only supplies onEditModifiers when the store has
+   * `menu_items` on, so its presence IS the signal.
+   *
+   * In menu mode the NAME opens the modifier sheet, not the price editor.
+   * On a snack till "change this sandwich" is the common action and
+   * "reprice it" is the rare one, and modifying is allowed with `pos` while
+   * repricing needs `inventory` — so a cashier who cannot reprice must still
+   * be able to take "no ketchup, add hummus".
+   *
+   * The price editor is still reachable from the line total, unchanged.
+   */
+  const canModify = !!onEditModifiers;
+
   const isOneOff = item.line_kind === "one_off";
   const hasDiscount = item.discount_percentage > 0;
   const edited = item.is_price_overridden || item.is_name_overridden;
@@ -144,8 +158,10 @@ export default function ProCartRow({
 
         {/* ---- Name + unit price. Both open the editor. ---- */}
         <Field
-          canEdit={canEdit}
-          onClick={() => onOpenEditor(lineKey(item))}
+          canEdit={canModify || canEdit}
+          onClick={() =>
+            canModify ? onEditModifiers!(item) : onOpenEditor(lineKey(item))
+          }
           className="min-w-0 flex-1 rounded-xl px-2 py-1 text-left"
         >
           <span className="flex items-center gap-1.5">
@@ -160,19 +176,18 @@ export default function ProCartRow({
             {edited && (
               <Tag className="h-3 w-3 flex-none text-primary" aria-label="Edited" />
             )}
+            {/* A hidden tap target is not a feature. On a snack till the row
+                says it can be changed, so a cashier does not have to discover
+                it by guessing. */}
+            {canModify && (
+              <SlidersHorizontal
+                className="h-3.5 w-3.5 flex-none text-muted-foreground"
+                aria-hidden
+              />
+            )}
           </span>
           {modifierChips.length > 0 && (
-            <span
-              className="mt-1 flex flex-wrap gap-1"
-              onClick={(e) => {
-                if (!onEditModifiers) return;
-                // The name field around this opens the PRICE editor; the chips
-                // open the modifier sheet. Stop the outer handler so tapping a
-                // chip does not do both.
-                e.stopPropagation();
-                onEditModifiers(item);
-              }}
-            >
+            <span className="mt-1 flex flex-wrap gap-1">
               {modifierChips.map((chip) => (
                 <span
                   key={chip.key}

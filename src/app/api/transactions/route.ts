@@ -125,7 +125,8 @@ export async function GET(request: Request) {
           unit_price,
           total_price,
           currency,
-          modifiers
+          modifiers,
+          note
         )
       `)
       .eq("store_id", store_id)
@@ -295,7 +296,8 @@ export async function POST(request: Request) {
           unit_price,
           total_price,
           currency,
-          modifiers
+          modifiers,
+          note
         )
       `)
       .eq("id", existingTxn.id)
@@ -372,7 +374,8 @@ export async function POST(request: Request) {
           unit_price,
           total_price,
           currency,
-          modifiers
+          modifiers,
+          note
         )
       `)
       .eq("store_id", store_id)
@@ -401,6 +404,7 @@ export async function POST(request: Request) {
         // `?? null`, never `|| null`: [] is meaningful (a menu line with
         // nothing changed) and is what the kitchen board filters tickets on.
         modifiers: item.modifiers ?? null,
+        note: item.note ?? null,
       }));
 
       const { error: itemsError } = await supabase

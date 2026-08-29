@@ -87,6 +87,13 @@ export default function TicketCard({
                   ))}
                 </span>
               )}
+              {/* A note is an instruction, not an ingredient — it gets its own
+                  line so a cook cannot mistake it for one. */}
+              {item.note && (
+                <span className="mt-0.5 block text-xs italic text-muted-foreground">
+                  “{item.note}”
+                </span>
+              )}
             </span>
           </li>
         ))}

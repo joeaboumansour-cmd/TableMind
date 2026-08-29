@@ -62,6 +62,7 @@ interface Validated {
   category_id: string | null;
   kind: string;
   stock_unit: string;
+  serving_qty: number;
 }
 
 function readStoreId(request: Request): string | null {
@@ -188,6 +189,16 @@ function validate(body: JsonBody | null, storeId: string): Validated | string {
     if (trimmed) stockUnit = trimmed;
   }
 
+  // One portion of an ingredient, in its own stock_unit. Must be positive —
+  // a zero or negative serving would deduct nothing or ADD stock on a sale.
+  let servingQty = 1;
+  if (body.serving_qty !== null && body.serving_qty !== undefined && body.serving_qty !== "") {
+    const n = Number(body.serving_qty);
+    if (!Number.isFinite(n) || n <= 0) return "serving_qty must be greater than zero";
+    if (n > 1_000_000) return "serving_qty is out of range";
+    servingQty = n;
+  }
+
   return {
     id,
     // From the header, never from the body — the caller does not get to pick
@@ -205,6 +216,7 @@ function validate(body: JsonBody | null, storeId: string): Validated | string {
     category_id: categoryId,
     kind,
     stock_unit: stockUnit,
+    serving_qty: servingQty,
   };
 }
 

@@ -323,7 +323,7 @@ export const useCartStore = create<CartStore>()(
          *    becomes currency 'LL', because a line carrying LL add-ons is no
          *    longer tracking the rate and the field should say so.
          */
-        addConfiguredItem: (product: Product, modifiers: CartLineModifier[], quantity = 1) => {
+        addConfiguredItem: (product: Product, modifiers: CartLineModifier[], quantity = 1, note?: string) => {
           const { items } = get();
           const qty = quantity > 0 ? quantity : 1;
           const uid = newLineUid();
@@ -368,6 +368,7 @@ export const useCartStore = create<CartStore>()(
             catalog_unit_price: baseLl,
             line_uid: uid,
             modifiers,
+            note: note?.trim() || undefined,
           };
 
           commitItems([newItem, ...items], {
@@ -395,10 +396,26 @@ export const useCartStore = create<CartStore>()(
          * INCLUDING the current add-ons, so removing one afterwards drops that
          * delta off the typed price rather than resurrecting the catalogue one.
          */
-        updateItemModifiers: (lineId: string, modifiers: CartLineModifier[]) => {
+        updateItemModifiers: (lineId: string, modifiers: CartLineModifier[], note?: string) => {
           const { items } = get();
           const before = items.find(item => lineKey(item) === lineId);
           if (!before) return;
+
+          const trimmedNote = note?.trim() || undefined;
+
+          /**
+           * A plain product line that is being customised becomes a configured
+           * one, and needs its own identity so a SECOND of the same product can
+           * be customised differently.
+           *
+           * Minting the uid here is safe: addItem is idempotent, so a plain
+           * line's product_id is unique in the cart and cannot collide with
+           * another line. The React key changes, which remounts that one row —
+           * acceptable for a deliberate user action.
+           */
+          const nextUid =
+            before.line_uid ??
+            (modifiers.length > 0 || trimmedNote ? newLineUid() : undefined);
 
           commitItems(
             items.map((item) => {
@@ -419,6 +436,8 @@ export const useCartStore = create<CartStore>()(
                 {
                   ...item,
                   modifiers,
+                  note: trimmedNote,
+                  ...(nextUid ? { line_uid: nextUid, line_kind: 'configured' as const } : {}),
                   unit_price: unitPriceLl,
                   unit_price_usd: unitPriceUsd,
                   original_unit_price: originalUnitPriceLl,
@@ -433,9 +452,11 @@ export const useCartStore = create<CartStore>()(
               target: before.product_name,
               details: {
                 product_id: before.product_id,
-                line_uid: before.line_uid,
+                line_uid: nextUid ?? before.line_uid,
                 removed: modifiers.filter(m => m.state === 'removed').map(m => m.name),
                 added: modifiers.filter(m => m.state === 'extra').map(m => m.name),
+                adhoc: modifiers.filter(m => m.is_adhoc && m.state !== 'removed').map(m => m.name),
+                note: trimmedNote ?? null,
                 price_from_ll: before.unit_price,
               },
             }

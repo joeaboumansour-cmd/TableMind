@@ -30,6 +30,8 @@ interface PublicReceiptItem {
   currency: "LL" | "USD";
   /** Made-to-order choices as sold. Null on every ordinary line. */
   modifiers?: CartLineModifier[] | null;
+  /** Free-text instruction for this line. */
+  note?: string | null;
 }
 
 interface PublicReceipt {
@@ -370,6 +372,11 @@ export default function PublicReceiptPage() {
                           {label}
                         </span>
                       ))}
+                      {item.note && (
+                        <span className="block text-xs font-normal italic text-muted-foreground">
+                          “{item.note}”
+                        </span>
+                      )}
                     </div>
                     <div className="col-span-2 text-right text-muted-foreground">
                       {item.quantity}

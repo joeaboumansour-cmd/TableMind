@@ -45,6 +45,7 @@ export interface ProductWriteInput {
   category_id?: string | null;
   kind?: string | null;
   stock_unit?: string | null;
+  serving_qty?: number | null;
 }
 
 export interface ProductWriteResult {
@@ -69,6 +70,7 @@ function toCachedProduct(id: string, input: ProductWriteInput): CachedProduct {
     category_id: input.category_id ?? null,
     kind: input.kind || "sellable",
     stock_unit: input.stock_unit || "unit",
+    serving_qty: input.serving_qty ?? 1,
     parent_id: null,
     variant_name: null,
     updated_at: new Date().toISOString(),
@@ -319,6 +321,7 @@ export async function repriceProduct(opts: {
     category_id: existing.category_id ?? null,
     kind: existing.kind || "sellable",
     stock_unit: existing.stock_unit || "unit",
+    serving_qty: existing.serving_qty ?? 1,
   });
 
   // Emitted in addition to the catalog.product_update above, because a reprice
