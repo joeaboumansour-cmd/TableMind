@@ -50,7 +50,7 @@ import {
 import { useConfirm } from "@/components/ConfirmDialog";
 import { toast } from "@/lib/toast";
 import { formatDateTime } from "@/lib/utils/format";
-import { SECTIONS, SectionKey } from "@/lib/auth/permissions";
+import { SECTIONS, SectionKey, getDefaultPermissions } from "@/lib/auth/permissions";
 import { FEATURES, FEATURE_PRESETS, FeatureKey, getDefaultFeaturesForPreset, mergeFeaturesWithDefaults } from "@/lib/features";
 
 const supabase = createClient();
@@ -77,7 +77,17 @@ interface StoreFeatures {
 }
 
 // Section toggle order for display
-const SECTION_KEYS: SectionKey[] = ["pos", "inventory", "transactions", "receipts", "cash_register"];
+/**
+ * DERIVED from SECTIONS, never listed by hand.
+ *
+ * This used to be a literal array, and adding the `kitchen` section did not
+ * reach it — so the toggle simply never appeared and no employee could be
+ * granted kitchen access at all. Same failure as the three hand-written
+ * permission parsers that used to live in AuthContext: a copy of SECTIONS that
+ * a new section does not reach fails SILENTLY, by withholding a permission
+ * nobody can then find.
+ */
+const SECTION_KEYS = Object.keys(SECTIONS) as SectionKey[];
 
 export default function AdminPage() {
   const router = useRouter();
@@ -307,13 +317,9 @@ export default function AdminPage() {
     setEmpPassword("");
     setShowEmpPassword(false);
     setEditingEmployee(null);
-    setEmpPermissions({
-      pos: false,
-      inventory: false,
-      transactions: false,
-      receipts: false,
-      cash_register: false,
-    });
+    // getDefaultPermissions() is also derived from SECTIONS — a new section
+    // arrives here as false automatically rather than as undefined.
+    setEmpPermissions(getDefaultPermissions());
   };
 
   const openAddEmployeeForm = () => {
