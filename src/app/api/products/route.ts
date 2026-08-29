@@ -59,6 +59,7 @@ interface Validated {
   discount_percentage: number;
   stock_quantity: number;
   min_stock_threshold: number;
+  category_id: string | null;
 }
 
 function readStoreId(request: Request): string | null {
@@ -161,6 +162,18 @@ function validate(body: JsonBody | null, storeId: string): Validated | string {
   const minStock = wholeNumber(body.min_stock_threshold, "min_stock_threshold");
   if (typeof minStock === "string") return minStock;
 
+  // The database enforces that the category belongs to THIS store, via the
+  // composite FK (category_id, store_id) added in migration 029 — so there is
+  // no ownership lookup to pay for here. A category from another tenant fails
+  // the insert rather than being silently accepted.
+  let categoryId: string | null = null;
+  if (body.category_id !== null && body.category_id !== undefined && body.category_id !== "") {
+    if (typeof body.category_id !== "string" || !UUID_RE.test(body.category_id)) {
+      return "category_id must be a UUID";
+    }
+    categoryId = body.category_id;
+  }
+
   return {
     id,
     // From the header, never from the body — the caller does not get to pick
@@ -175,6 +188,7 @@ function validate(body: JsonBody | null, storeId: string): Validated | string {
     discount_percentage: discount,
     stock_quantity: stock,
     min_stock_threshold: minStock,
+    category_id: categoryId,
   };
 }
 

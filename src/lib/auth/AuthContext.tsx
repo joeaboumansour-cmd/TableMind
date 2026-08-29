@@ -107,14 +107,26 @@ function saveLegacyAuthToStorage(storeId: string, username: string, licenseExpir
   );
 }
 
+/**
+ * Per-store display caches that must not survive a logout.
+ *
+ * The cash snapshot holds one store's drawer figures for instant rendering,
+ * and the category list holds one store's rail. Clear both on logout so the
+ * next person to sign in on this device — plausibly a different store,
+ * certainly a different shift — cannot be shown the last one's data before the
+ * first fetch returns.
+ */
+const CLEAR_ON_LOGOUT_PREFIXES = [
+  "goldensquirrel_cash_snapshot_",
+  "store_categories_",
+];
+
 function clearUserFromStorage() {
-  // The cash snapshot holds one store's drawer figures for instant rendering.
-  // Clear it on logout so the next person to sign in on this device — plausibly
-  // a different store, certainly a different shift — cannot be shown the last
-  // one's takings before the first fetch returns.
   try {
     for (const key of Object.keys(localStorage)) {
-      if (key.startsWith("goldensquirrel_cash_snapshot_")) localStorage.removeItem(key);
+      if (CLEAR_ON_LOGOUT_PREFIXES.some((prefix) => key.startsWith(prefix))) {
+        localStorage.removeItem(key);
+      }
     }
   } catch {
     /* a storage we cannot read is a storage with nothing to leak */

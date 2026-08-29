@@ -42,6 +42,7 @@ export interface ProductWriteInput {
   discount_percentage?: number;
   stock_quantity?: number;
   min_stock_threshold?: number;
+  category_id?: string | null;
 }
 
 export interface ProductWriteResult {
@@ -63,6 +64,7 @@ function toCachedProduct(id: string, input: ProductWriteInput): CachedProduct {
     discount_percentage: input.discount_percentage ?? 0,
     stock_quantity: input.stock_quantity ?? 0,
     min_stock_threshold: input.min_stock_threshold ?? 0,
+    category_id: input.category_id ?? null,
     parent_id: null,
     variant_name: null,
     updated_at: new Date().toISOString(),
@@ -307,6 +309,9 @@ export async function repriceProduct(opts: {
     discount_percentage: preview.discountPercentage,
     stock_quantity: existing.stock_quantity,
     min_stock_threshold: existing.min_stock_threshold,
+    // Carried through deliberately: updateProduct rewrites the whole row, so
+    // dropping this would silently un-categorise the product on every reprice.
+    category_id: existing.category_id ?? null,
   });
 
   // Emitted in addition to the catalog.product_update above, because a reprice

@@ -53,6 +53,12 @@ export interface CachedProduct {
   discount_percentage: number;
   stock_quantity: number;
   min_stock_threshold: number;
+  /**
+   * product_categories.id. OPTIONAL because rows cached by a build from
+   * before categories existed do not have it — treat `undefined` as
+   * "uncategorised", never as a reason to hide the product.
+   */
+  category_id?: string | null;
   parent_id?: string | null;
   variant_name?: string | null;
   updated_at: string;

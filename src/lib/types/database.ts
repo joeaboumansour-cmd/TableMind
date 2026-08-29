@@ -38,6 +38,32 @@ export interface Database {
           created_at?: string;
         };
       };
+      product_categories: {
+        Row: {
+          id: string;
+          store_id: string;
+          name: string;
+          sort_order: number;
+          color: string | null;
+          is_active: boolean;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          store_id: string;
+          name: string;
+          sort_order?: number;
+          color?: string | null;
+          is_active?: boolean;
+        };
+        Update: {
+          name?: string;
+          sort_order?: number;
+          color?: string | null;
+          is_active?: boolean;
+        };
+      };
       products: {
         Row: {
           id: string;
@@ -51,6 +77,7 @@ export interface Database {
           discount_percentage: number;
           stock_quantity: number;
           min_stock_threshold: number;
+          category_id: string | null;
         };
         Insert: {
           id?: string;
@@ -64,6 +91,7 @@ export interface Database {
           discount_percentage?: number;
           stock_quantity?: number;
           min_stock_threshold?: number;
+          category_id?: string | null;
         };
         Update: {
           id?: string;
@@ -77,6 +105,7 @@ export interface Database {
           discount_percentage?: number;
           stock_quantity?: number;
           min_stock_threshold?: number;
+          category_id?: string | null;
         };
       };
       transactions: {

@@ -12,6 +12,8 @@ export interface Product {
   discount_percentage: number;
   stock_quantity: number;
   min_stock_threshold: number;
+  /** product_categories.id, or null/undefined when uncategorised. */
+  category_id?: string | null;
   parent_id?: string;
   variant_name?: string;
 }
@@ -26,6 +28,7 @@ export interface ProductInput {
   discount_percentage?: number;
   stock_quantity?: number;
   min_stock_threshold?: number;
+  category_id?: string | null;
 }
 
 export interface ProductUpdate {
@@ -38,6 +41,7 @@ export interface ProductUpdate {
   discount_percentage?: number;
   stock_quantity?: number;
   min_stock_threshold?: number;
+  category_id?: string | null;
 }
 
 export type ProductCategory =
