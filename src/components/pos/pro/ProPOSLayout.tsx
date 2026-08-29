@@ -50,9 +50,9 @@ import ProTotalsPanel from "./ProTotalsPanel";
 import QuickGrid from "./QuickGrid";
 import MenuBrowser from "./MenuBrowser";
 import ModifierSheet from "./ModifierSheet";
+import { useMenuSheet } from "./useMenuSheet";
 import type { Category } from "@/lib/categories/types";
 import type { RecipeMap } from "@/lib/recipes/types";
-import type { CartLineModifier } from "@/lib/types/cart";
 import PanelResizer, { usePanelWidth } from "./PanelResizer";
 import { useScanFocus } from "./useScanFocus";
 
@@ -108,8 +108,6 @@ export default function ProPOSLayout({
   const switchLane = useCartStore((s) => s.switchLane);
   const switchLaneByPosition = useCartStore((s) => s.switchLaneByPosition);
   const addOneOffItem = useCartStore((s) => s.addOneOffItem);
-  const addConfiguredItem = useCartStore((s) => s.addConfiguredItem);
-  const updateItemModifiers = useCartStore((s) => s.updateItemModifiers);
   const updateLine = useCartStore((s) => s.updateLine);
   const incrementQuantity = useCartStore((s) => s.incrementQuantity);
   const decrementQuantity = useCartStore((s) => s.decrementQuantity);
@@ -125,14 +123,6 @@ export default function ProPOSLayout({
 
   // ---- Local UI state ----
   const [editingLineId, setEditingLineId] = useState<string | null>(null);
-  /**
-   * The modifier sheet's subject. `lineId` null = building a NEW line;
-   * set = editing the choices on an existing one.
-   */
-  const [configuring, setConfiguring] = useState<{
-    product: Product;
-    lineId: string | null;
-  } | null>(null);
   const [unknownBarcode, setUnknownBarcode] = useState<string | null>(null);
   const [isResolving, setIsResolving] = useState(false);
   const [isWriting, setIsWriting] = useState(false);
@@ -158,6 +148,21 @@ export default function ProPOSLayout({
   // The single gate for every price-setting affordance on this screen. Also
   // requires the store to have the inventory feature at all — with it off
   // there is nowhere to manage what would be created.
+  // One rule, shared with the mobile menu page — see useMenuSheet.
+  const {
+    configuring,
+    setConfiguring,
+    handleTileAdd,
+    handleEditModifiers,
+    handleConfirm,
+    sheetProps,
+  } = useMenuSheet({
+    recipes,
+    products,
+    enabled: isEnabled("menu_items"),
+    onPlainAdd: onProductAdd,
+  });
+
   const canEditInventory = isEnabled("inventory") && canAccess("inventory");
 
   // Focus belongs to the scan field unless something else legitimately owns the
@@ -526,31 +531,6 @@ export default function ProPOSLayout({
    */
   const menuMode = isEnabled("product_categories") && categories.length > 0;
 
-  /**
-   * A tile was tapped. An item with a recipe opens the sheet; anything else
-   * goes straight into the cart, exactly as before.
-   */
-  const handleTileAdd = useCallback(
-    (product: Product) => {
-      const components = recipes[product.id];
-      if (isEnabled("menu_items") && components && components.length > 0) {
-        setConfiguring({ product, lineId: null });
-        return;
-      }
-      onProductAdd(product);
-    },
-    [recipes, isEnabled, onProductAdd]
-  );
-
-  /** Reopen the sheet for a line already in the cart. */
-  const handleEditModifiers = useCallback(
-    (item: CartItem) => {
-      const product = products.find((p) => p.id === item.product_id);
-      if (!product) return;
-      setConfiguring({ product, lineId: lineKey(item) });
-    },
-    [products]
-  );
 
   const editingItem = editingLineId
     ? items.find((i) => lineKey(i) === editingLineId)
@@ -792,27 +772,13 @@ export default function ProPOSLayout({
       </div>
 
       <ModifierSheet
-        open={configuring !== null}
+        {...sheetProps}
         onOpenChange={(open) => {
           if (!open) setConfiguring(null);
         }}
-        product={configuring?.product ?? null}
-        components={configuring ? recipes[configuring.product.id] || [] : []}
         ingredientNames={ingredientNames}
-        initial={
-          configuring?.lineId
-            ? items.find((i) => lineKey(i) === configuring.lineId)?.modifiers ?? null
-            : null
-        }
-        onConfirm={(modifiers: CartLineModifier[]) => {
-          if (!configuring) return;
-          if (configuring.lineId) {
-            updateItemModifiers(configuring.lineId, modifiers);
-          } else {
-            addConfiguredItem(configuring.product, modifiers);
-            playSuccessSound();
-          }
-          setConfiguring(null);
+        onConfirm={(modifiers) => {
+          handleConfirm(modifiers);
           searchInputRef.current?.focus();
         }}
       />

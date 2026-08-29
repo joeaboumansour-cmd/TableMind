@@ -40,6 +40,9 @@ import type { Category } from "@/lib/categories/types";
 import { getCachedRecipes, refreshRecipes } from "@/lib/recipes/load";
 import type { RecipeMap } from "@/lib/recipes/types";
 import ProPOSLayout from "@/components/pos/pro/ProPOSLayout";
+import MenuBrowser from "@/components/pos/pro/MenuBrowser";
+import ModifierSheet from "@/components/pos/pro/ModifierSheet";
+import { useMenuSheet } from "@/components/pos/pro/useMenuSheet";
 
 // BarcodeScanner statically imports @zxing/library (~420KB) plus the camera
 // pipeline. It is only ever rendered when the scanner is open, so loading it
@@ -627,10 +630,34 @@ export default function POSPage() {
   const sellableProducts = useMemo(() => products.filter(isSellable), [products]);
 
   /**
+   * The mobile till's modifier sheet. Same hook the desktop layout uses, so the
+   * "recipe -> open the sheet, otherwise add straight to the cart" rule has one
+   * implementation rather than one per layout.
+   */
+  const {
+    setConfiguring: setMobileConfiguring,
+    handleTileAdd,
+    handleConfirm: handleMobileConfirm,
+    sheetProps: mobileSheetProps,
+  } = useMenuSheet({
+    recipes,
+    products: sellableProducts,
+    enabled: isEnabled("menu_items"),
+    onPlainAdd: handleProductAdd,
+  });
+
+  /**
    * Ingredient names for the modifier sheet. Built from the FULL catalogue,
    * not from sellableProducts — the ingredients are exactly the rows that list
    * excludes, and a sheet that cannot name them is useless.
    */
+  /**
+   * Menu mode: the mobile till browses a menu instead of pointing a camera.
+   * A rail with no categories behind it is worse than the camera it replaces,
+   * hence the length check as well as the flag — same rule as ProPOSLayout.
+   */
+  const menuMode = isEnabled("product_categories") && categories.length > 0;
+
   const ingredientNames = useMemo(() => {
     const map = new Map<string, string>();
     for (const product of products) map.set(product.id, product.name);
@@ -754,6 +781,17 @@ export default function POSPage() {
         }}
       />
 
+      {/* Mobile only: the desktop layout mounts its own via ProPOSLayout. */}
+      {!isDesktopMode && (
+        <ModifierSheet
+          {...mobileSheetProps}
+          onOpenChange={(open) => {
+            if (!open) setMobileConfiguring(null);
+          }}
+          ingredientNames={ingredientNames}
+          onConfirm={handleMobileConfirm}
+        />
+      )}
     </>
   );
 
@@ -764,9 +802,29 @@ export default function POSPage() {
   if (!isDesktopMode) {
     return (
       <div ref={posSurfaceRef} className="relative h-full w-full overflow-hidden bg-black">
-        {/* ---- Camera layer ---- */}
+        {/* ---- Camera layer, or the menu ---- */}
+        {/*
+          A snack shop has no barcodes, so a camera is the wrong page for it:
+          the menu takes the camera's place and everything floating over it —
+          header, search pill, cart sheet — is untouched.
+
+          Note BarcodeScanner is NOT MOUNTED in menu mode, so ZXing's ~420KB
+          dynamic chunk is never fetched for these stores. That is a real bundle
+          win, not just a layout change.
+
+          The scanner switch stays in the header, so the odd barcoded bottle can
+          still be scanned by turning it on.
+        */}
         <div className="absolute inset-0">
-          {isScannerActive ? (
+          {menuMode && !isScannerActive ? (
+            <div className="absolute inset-0 bg-background pb-[var(--pos-sheet-peek,0px)]">
+              <MenuBrowser
+                products={sellableProducts}
+                categories={categories}
+                onAdd={handleTileAdd}
+              />
+            </div>
+          ) : isScannerActive ? (
             /* Unmounted (not merely deactivated) when off. Unmount runs the
                scanner's stopEverything() cleanup — stop all MediaStream
                tracks, reset ZXing, tear down Quagga — and removes the <video>
