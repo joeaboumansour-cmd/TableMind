@@ -38,6 +38,7 @@ import {
    MoreHorizontal,
    WifiOff,
    Tags,
+   QrCode,
   } from "lucide-react";
  import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
@@ -79,6 +80,7 @@ import { getCachedRecipes, refreshRecipes, saveRecipe } from "@/lib/recipes/load
 import type { RecipeMap } from "@/lib/recipes/types";
 import RecipeEditor, { type DraftComponent, type IngredientOption } from "@/components/inventory/RecipeEditor";
 import CategoryManagerDialog from "@/components/inventory/CategoryManagerDialog";
+import MenuQrDialog from "@/components/inventory/MenuQrDialog";
 
 interface Product {
   id: string;
@@ -165,6 +167,7 @@ function StoreProductsPageContent() {
   // Import / export / refresh / sign out, kept out of the header.
   const [showMore, setShowMore] = useState(false);
   const [showCategories, setShowCategories] = useState(false);
+  const [showMenuQr, setShowMenuQr] = useState(false);
   // True while a network refresh runs BEHIND an already-painted list. Distinct
   // from isLoading, which means "there is nothing to show yet".
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -1901,6 +1904,12 @@ function StoreProductsPageContent() {
       </Dialog>
 
       {/* ---- More actions ---- */}
+      <MenuQrDialog
+        open={showMenuQr}
+        onOpenChange={setShowMenuQr}
+        storeName={user?.displayName || user?.username || "Our menu"}
+      />
+
       <CategoryManagerDialog
         open={showCategories}
         onOpenChange={setShowCategories}
@@ -1940,6 +1949,22 @@ function StoreProductsPageContent() {
               <RefreshCw className="h-4 w-4 text-muted-foreground" />
               Refresh from server
             </button>
+            {/* Publishing a menu needs the catalogue to be worth publishing,
+                so it rides with menu_items rather than being always on. */}
+            <FeatureFlagGuard feature="menu_items">
+              <button
+                type="button"
+                disabled={isOffline}
+                onClick={() => {
+                  setShowMore(false);
+                  setShowMenuQr(true);
+                }}
+                className="tap flex w-full items-center gap-3 rounded-xl px-4 py-3 text-left text-[15px] font-semibold hover:bg-muted/50 disabled:pointer-events-none disabled:opacity-40"
+              >
+                <QrCode className="h-4 w-4 text-muted-foreground" />
+                Menu &amp; QR code
+              </button>
+            </FeatureFlagGuard>
             <FeatureFlagGuard feature="product_categories">
               <button
                 type="button"
