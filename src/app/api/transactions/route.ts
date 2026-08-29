@@ -1,5 +1,6 @@
 import { createServiceRoleClient } from "@/lib/supabase/server";
 import { NextResponse } from "next/server";
+import { resolveCaller, readAuthHeader, canAccessSection } from "@/lib/auth/apiCaller";
 
 // History is browsed newest-first and the client loads more on demand, so a
 // page needs to cover a screen or two, not the whole store's lifetime.
@@ -45,6 +46,17 @@ export async function GET(request: Request) {
 
     if (!store_id) {
       return NextResponse.json({ error: "Unauthorized - No store_id in auth data" }, { status: 401 });
+    }
+
+    // Hiding the History link is not a guard — enforce the section here too.
+    // A cashier with transactions:false who knows this URL used to get every
+    // sale in the store, and the analytics route used to hand them the profit.
+    const caller = await resolveCaller(supabase, store_id, readAuthHeader(request).userId);
+    if (!caller) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    if (!canAccessSection(caller, "transactions")) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
     // Get store retention settings first

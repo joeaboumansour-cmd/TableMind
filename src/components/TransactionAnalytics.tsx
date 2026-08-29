@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { buildAuthHeaders } from "@/lib/auth/apiHeaders";
 import { Button } from "@/components/ui/button";
 import { HourlySalesChart } from "@/components/charts/HourlySalesChart";
 import { DayOfWeekChart } from "@/components/charts/DayOfWeekChart";
@@ -118,7 +119,9 @@ export function TransactionAnalytics({
     setError(null);
 
     try {
-      const authData = localStorage.getItem("goldensquirrel_auth");
+      // Must carry user_id so the server can enforce the transactions section.
+      const authHeaders = buildAuthHeaders();
+      const authData = authHeaders["x-auth-data"];
       if (!authData) {
         throw new Error("No auth data");
       }
@@ -128,7 +131,7 @@ export function TransactionAnalytics({
         `/api/transactions/analytics?${analyticsQuery(dateFilter)}`,
         {
           headers: {
-            "x-auth-data": authData,
+            ...authHeaders,
           },
         }
       );

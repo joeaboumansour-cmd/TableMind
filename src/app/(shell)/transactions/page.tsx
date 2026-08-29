@@ -52,6 +52,11 @@ import {
 } from "@/lib/utils/format";
 import { toast } from "@/lib/toast";
 import { useAuth } from "@/lib/auth/AuthContext";
+import { PermissionGuard } from "@/lib/auth/guards";
+// buildAuthHeaders, not the raw goldensquirrel_auth blob: that blob carries no
+// user_id, so the server cannot tell WHO is asking — which is what the
+// transactions section check needs.
+import { buildAuthHeaders } from "@/lib/auth/apiHeaders";
 import { useFeatureFlags } from "@/hooks/useFeatureFlags";
 import { cn } from "@/lib/utils";
 import { vibrate } from "@/lib/feedback";
@@ -192,7 +197,26 @@ function timeLabel(iso: string): string {
   });
 }
 
+/**
+ * `transactions` is a section permission and this route had no check on it.
+ *
+ * The nav hides History from anyone without it, but hiding a link is not a
+ * guard: typing /transactions rendered the whole page — every sale, the day's
+ * takings, and PROFIT — to a POS-only cashier. Found by signing in as a real
+ * employee with transactions:false; the owner account that everything else was
+ * tested on holds all five sections, so nothing exercised the denial.
+ *
+ * Same shape as the inventory guard on the products page.
+ */
 export default function TransactionHistoryPage() {
+  return (
+    <PermissionGuard section="transactions">
+      <TransactionHistoryPageContent />
+    </PermissionGuard>
+  );
+}
+
+function TransactionHistoryPageContent() {
   const router = useRouter();
   const { user } = useAuth();
   const { isEnabled } = useFeatureFlags();
@@ -277,15 +301,15 @@ export default function TransactionHistoryPage() {
 
       // Then try to fetch fresh data from API if online AND we have a store_id
       if (connectivity.isOnline && store_id) {
-        const authData = localStorage.getItem("goldensquirrel_auth");
+        const authHeaders = buildAuthHeaders(user);
 
-        if (authData) {
+        if (authHeaders["x-auth-data"]) {
           try {
             // First page only. Older history is loaded on demand via
             // loadMoreTransactions() — the endpoint used to return the store's
             // entire history (and was silently truncated at 1000 rows).
             const response = await fetch(`/api/transactions?limit=${PAGE_SIZE}`, {
-              headers: { "x-auth-data": authData },
+              headers: authHeaders,
             });
 
             if (!response.ok) {
@@ -495,15 +519,15 @@ export default function TransactionHistoryPage() {
       setRangeProfit(null);
       return;
     }
-    const authData = localStorage.getItem("goldensquirrel_auth");
+    const authHeaders = buildAuthHeaders(user);
 
-    if (connectivity.isOnline && authData) {
+    if (connectivity.isOnline && authHeaders["x-auth-data"]) {
       try {
         // analyticsQuery carries the window start resolved in THIS device's
         // timezone, so "today" means the shop's midnight rather than the
         // server's.
         const res = await fetch(`/api/transactions/analytics?${analyticsQuery(dateFilter)}`, {
-          headers: { "x-auth-data": authData },
+          headers: authHeaders,
         });
         if (!res.ok) throw new Error(String(res.status));
         const data = await res.json();
@@ -515,7 +539,7 @@ export default function TransactionHistoryPage() {
     }
 
     setRangeProfit(await computeLocalProfit(filteredRef.current));
-  }, [dateFilter, isEnabled, computeLocalProfit]);
+  }, [dateFilter, isEnabled, computeLocalProfit, user]);
 
   /**
    * Append the next page of older transactions.
@@ -540,7 +564,7 @@ export default function TransactionHistoryPage() {
     try {
       const response = await fetch(
         `/api/transactions?limit=${PAGE_SIZE}&cursor=${encodeURIComponent(nextCursor)}`,
-        { headers: { "x-auth-data": authData } }
+        { headers: buildAuthHeaders(user) }
       );
       if (!response.ok) throw new Error(`Failed to load more: ${response.status}`);
 
@@ -563,7 +587,7 @@ export default function TransactionHistoryPage() {
     } finally {
       setIsLoadingMore(false);
     }
-  }, [nextCursor, isLoadingMore]);
+  }, [nextCursor, isLoadingMore, user]);
 
   useEffect(() => {
     fetchTransactions().then(loadPendingTransactions);

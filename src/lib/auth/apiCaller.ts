@@ -41,6 +41,11 @@ export interface Caller {
   userId: string | null;
   name: string;
   hasCashRegisterPerm: boolean;
+  /**
+   * The caller's section permissions, as stored on `store_users.permissions`.
+   * Empty for the owner, who is allowed everything by `isOwner` instead.
+   */
+  permissions: Record<string, boolean>;
 }
 
 export interface AuthHeader {
@@ -95,6 +100,7 @@ export async function resolveCaller(
       userId: null,
       name: store.username,
       hasCashRegisterPerm: true,
+      permissions: {},
     };
   }
 
@@ -125,10 +131,29 @@ export async function resolveCaller(
     userId: emp.id,
     name: emp.display_name || emp.username,
     hasCashRegisterPerm: perms.cash_register === true,
+    permissions: perms,
   };
 }
 
 /** May this caller open/close shifts and manage registers? */
 export function canManageRegister(caller: Caller): boolean {
   return caller.isOwner || caller.hasCashRegisterPerm;
+}
+
+/**
+ * May this caller read/act on a whole section (`pos`, `inventory`,
+ * `transactions`, `receipts`, `cash_register`)?
+ *
+ * Hiding a nav link is not a guard. `/transactions` shipped with no check at
+ * all on either side: a cashier with transactions:false who typed the URL got
+ * the full History page, and `GET /api/transactions` plus
+ * `/api/transactions/analytics` served them every sale and the store's PROFIT.
+ * Found by signing in as a real POS-only employee — the owner account holds all
+ * five sections, so nothing else exercised a denial.
+ *
+ * The owner is allowed everything; they have no `store_users` row to carry
+ * permissions on.
+ */
+export function canAccessSection(caller: Caller, section: string): boolean {
+  return caller.isOwner || caller.permissions[section] === true;
 }
