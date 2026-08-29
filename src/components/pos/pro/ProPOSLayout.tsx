@@ -47,6 +47,7 @@ import ProCartRow from "./ProCartRow";
 import CartLineEditor, { type EditScope, type LineEditPatch } from "./CartLineEditor";
 import ProTotalsPanel from "./ProTotalsPanel";
 import QuickGrid from "./QuickGrid";
+import PanelResizer, { usePanelWidth } from "./PanelResizer";
 import { useScanFocus } from "./useScanFocus";
 
 /** How often the WAITING badges recompute. */
@@ -119,6 +120,14 @@ export default function ProPOSLayout({
   // device and nowhere else, and nothing will retry them.
   const [failedWrites, setFailedWrites] = useState<string[]>([]);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
+
+  // ---- Cart / quick-grid split ----
+  // Remembered per device. The panel's width is applied inline so the drag can
+  // write straight to the DOM without re-rendering the grid; commitWidth is the
+  // only thing that touches React state.
+  const splitRef = useRef<HTMLDivElement | null>(null);
+  const sidePanelRef = useRef<HTMLDivElement | null>(null);
+  const { width: panelWidth, commitWidth } = usePanelWidth();
 
   // ---- Permissions ----
   // The single gate for every price-setting affordance on this screen. Also
@@ -498,9 +507,9 @@ export default function ProPOSLayout({
         onClose={requestCloseLane}
       />
 
-      <div className="flex min-h-0 flex-1 gap-4 overflow-hidden p-4">
+      <div ref={splitRef} className="flex min-h-0 flex-1 gap-4 overflow-hidden p-4">
         {/* ================= LEFT: scan + cart ================= */}
-        <div className="flex min-w-0 flex-[62] flex-col overflow-hidden">
+        <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
           <div className="flex-shrink-0">
             {failedWrites.length > 0 && (
               <div className="mb-2 flex items-start gap-3 rounded-2xl border border-destructive/40 bg-destructive/10 p-3">
@@ -671,8 +680,21 @@ export default function ProPOSLayout({
           </div>
         </div>
 
+        {/* The split is the cashier's to set — see PanelResizer. */}
+        <PanelResizer
+          panelRef={sidePanelRef}
+          containerRef={splitRef}
+          width={panelWidth}
+          onCommit={commitWidth}
+          onDragEnd={() => searchInputRef.current?.focus()}
+        />
+
         {/* ================= RIGHT: totals + quick grid ================= */}
-        <div className="flex w-[380px] flex-none flex-col overflow-hidden">
+        <div
+          ref={sidePanelRef}
+          style={{ width: panelWidth }}
+          className="flex flex-none flex-col overflow-hidden"
+        >
           <div className="flex-shrink-0 rounded-3xl border bg-card">
             <ProTotalsPanel
               total={getTotal()}
