@@ -395,6 +395,9 @@ export async function POST(request: Request) {
         unit_price: item.unit_price,
         total_price: item.total_price,
         currency: item.currency || 'LL',
+        // `?? null`, never `|| null`: [] is meaningful (a menu line with
+        // nothing changed) and is what the kitchen board filters tickets on.
+        modifiers: item.modifiers ?? null,
       }));
 
       const { error: itemsError } = await supabase
@@ -410,16 +413,54 @@ export async function POST(request: Request) {
       // This ensures stock is decremented exactly once per transaction,
       // whether the transaction was created online or synced from offline.
       // Uses the service role client (bypasses RLS) so the RPC works reliably.
-      for (const item of body.items) {
-        if (!item.product_id) continue;
+      //
+      // ## Where the list comes from
+      //
+      // The client sends `stock_decrements` when it knows better than `items`
+      // does — a made-to-order line consumes its INGREDIENTS, and `items` only
+      // names the sandwich. It is computed on the client because the recipe AT
+      // THE TIME OF SALE is the right one: a sandwich sold offline on Monday
+      // and synced Wednesday must deduct what Monday's recipe said.
+      //
+      // The `else` branch is the COMPATIBILITY HINGE and must not be removed.
+      // It reproduces exactly today's behaviour for: every ordinary sale, every
+      // sale already sitting in a device's offline_queue, and any client that
+      // has not updated yet.
+      //
+      // This does not widen the attack surface — the client already dictates
+      // `items`, which already drives these decrements, through the same
+      // unsigned header (audit P0-1). decrement_stock's p_store_id makes a
+      // foreign product_id a no-op UPDATE.
+      type Decrement = { product_id: string; quantity: number };
+      const isValidDecrement = (value: unknown): value is Decrement => {
+        if (!value || typeof value !== "object") return false;
+        const d = value as Record<string, unknown>;
+        const quantity = Number(d.quantity);
+        return (
+          typeof d.product_id === "string" &&
+          Number.isFinite(quantity) &&
+          quantity > 0
+        );
+      };
+
+      const decrements: Decrement[] = Array.isArray(body.stock_decrements)
+        ? (body.stock_decrements as unknown[]).filter(isValidDecrement)
+        : (body.items as Array<{ product_id: string | null; quantity: number }>)
+            .filter((item) => !!item.product_id)
+            .map((item) => ({
+              product_id: item.product_id as string,
+              quantity: item.quantity,
+            }));
+
+      for (const decrement of decrements) {
         const { error: stockError } = await supabase.rpc("decrement_stock", {
-          product_id: item.product_id,
-          quantity: item.quantity,
+          product_id: decrement.product_id,
+          quantity: decrement.quantity,
           p_store_id: store_id,
         });
 
         if (stockError) {
-          console.error(`[API] Stock decrement failed for product ${item.product_id}:`, stockError);
+          console.error(`[API] Stock decrement failed for product ${decrement.product_id}:`, stockError);
           // Don't fail the transaction — log and continue.
           // The transaction is already created; stock can be reconciled later.
         }

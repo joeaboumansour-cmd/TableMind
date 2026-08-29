@@ -375,6 +375,20 @@ function CheckoutContent() {
       // payload and the offline queue payload below cannot disagree about it.
       const lineItems = buildTransactionItems(items);
 
+      // What this sale takes out of stock. Computed ONCE, here, and attached to
+      // BOTH payloads below.
+      //
+      // A menu line decrements its INGREDIENTS, not itself. The server falls
+      // back to deriving decrements from `items` when this is absent, which is
+      // right for an ordinary sale and for anything queued before this existed
+      // — but for a menu line `items` names the sandwich, so that fallback
+      // would decrement the sandwich instead of the bread and pickles.
+      //
+      // Both payloads must carry it. If the OFFLINE one does not, a sale rung
+      // up during an outage deducts the wrong product when it syncs: silent,
+      // and invisible until a stock take.
+      const stockDecrements = buildStockDecrements(items);
+
       // Payload for POST /api/transactions (server field names).
       const transactionData: any = {
         transaction_number: txnNumber,
@@ -389,6 +403,7 @@ function CheckoutContent() {
         usd_amount_paid: effectivePaidUsd,
         usd_change_given: calcChangeUsd,
         items: lineItems,
+        stock_decrements: stockDecrements,
         ...userInfo,
       };
 
@@ -410,6 +425,7 @@ function CheckoutContent() {
         amount_paid_usd: effectivePaidUsd,
         change_given_usd: calcChangeUsd,
         items: lineItems,
+        stock_decrements: stockDecrements,
         created_at: new Date().toISOString(),
         ...userInfo,
       };
@@ -495,8 +511,9 @@ function CheckoutContent() {
       pushSaleInBackground({
         queuedId,
         payload: transactionData,
-        // One-off lines have no catalogue row, so no stock to move.
-        stockDecrements: buildStockDecrements(items),
+        // The same array that went into both payloads — never recomputed, so
+        // the local cache decrement cannot disagree with what the server was told.
+        stockDecrements,
       });
     } catch (error) {
       console.error("Error processing payment:", error);

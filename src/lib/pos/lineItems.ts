@@ -15,7 +15,7 @@
  * so the rule cannot drift between the online and offline paths.
  */
 
-import type { CartItem } from "@/lib/types/cart";
+import type { CartItem, CartLineModifier } from "@/lib/types/cart";
 
 /** Marks a cart key as local-only. Never valid as a UUID, by construction. */
 const ONE_OFF_PREFIX = "oneoff:";
@@ -45,6 +45,13 @@ export interface SaleLineItem {
   currency: string;
   unit_price_usd: number;
   total_price_usd: number;
+  /**
+   * Made-to-order choices, as sold.
+   *
+   * NULL for an ordinary line; [] for a menu line where nothing was changed.
+   * The distinction is what the kitchen board filters on — see migration 032.
+   */
+  modifiers?: CartLineModifier[] | null;
 }
 
 /**
@@ -60,20 +67,78 @@ export function buildTransactionItems(items: CartItem[]): SaleLineItem[] {
     currency: item.currency,
     unit_price_usd: item.unit_price_usd,
     total_price_usd: item.total_price_usd,
+    // `?? null`, never `|| null`: an empty array is a MEANINGFUL value here
+    // (a menu line with no changes) and must not be collapsed to null, which
+    // means "not a food order at all".
+    modifiers: item.modifiers ?? null,
   }));
 }
 
+/** A product id and how much of it this sale consumes. */
+export interface StockDecrement {
+  product_id: string;
+  quantity: number;
+}
+
 /**
- * Which products to decrement locally. One-off lines have no stock to move,
- * so they are dropped rather than passed along with a key nothing can match.
+ * What this sale takes out of stock.
+ *
+ * Three rules, in order:
+ *
+ *  1. A one-off line has no catalogue row, so nothing to decrement.
+ *  2. A line WITH components decrements its COMPONENTS, not itself. A menu
+ *     item's own stock_quantity is meaningless — selling a sandwich consumes
+ *     bread and pickles, not "one sandwich".
+ *  3. A line with no components decrements itself, exactly as it always did.
+ *     A bottle of Coke in a snack shop is an ordinary product.
+ *
+ * Rule 2's condition IS `modifiers.length > 0`; no extra flag is needed.
+ *
+ * ## Rounding
+ *
+ * Integerised ONCE, at the whole line: round(qty_per_unit * count * line_qty),
+ * never per unit. round(2.5 * 4) = 10, not round(2.5) * 4 = 12. Same principle
+ * as the cart's total-only rounding, for the same reason — per-unit rounding
+ * compounds and drifts.
+ *
+ * ## Removed components
+ *
+ * state === "removed" contributes nothing. That is the whole of "no pickles",
+ * and it is why the state lives on the line rather than being re-derived from
+ * the recipe at sale time.
+ *
+ * Results are aggregated by product id: two sandwiches that both use bread
+ * produce one decrement of the sum. The RPC is additive so two calls would also
+ * be correct, but the server loop is serial awaits and halving them is free.
  */
 export function buildStockDecrements(
-  items: Array<Pick<CartItem, "product_id" | "line_kind" | "quantity">>
-): Array<{ product_id: string; quantity: number }> {
-  const out: Array<{ product_id: string; quantity: number }> = [];
+  items: Array<
+    Pick<CartItem, "product_id" | "line_kind" | "quantity"> & {
+      modifiers?: CartLineModifier[];
+    }
+  >
+): StockDecrement[] {
+  const byProduct = new Map<string, number>();
+
+  const add = (productId: string, quantity: number) => {
+    if (quantity <= 0) return;
+    byProduct.set(productId, (byProduct.get(productId) || 0) + quantity);
+  };
+
   for (const item of items) {
     if (isOneOffLine(item)) continue;
-    out.push({ product_id: item.product_id, quantity: item.quantity });
+
+    const modifiers = item.modifiers;
+    if (modifiers && modifiers.length > 0) {
+      for (const m of modifiers) {
+        if (m.state === "removed") continue;
+        add(m.ingredient_product_id, Math.round(m.ingredient_qty * m.count * item.quantity));
+      }
+      continue;
+    }
+
+    add(item.product_id, item.quantity);
   }
-  return out;
+
+  return Array.from(byProduct, ([product_id, quantity]) => ({ product_id, quantity }));
 }

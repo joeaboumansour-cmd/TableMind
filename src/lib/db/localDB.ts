@@ -4,6 +4,8 @@
 // ===
 
 import Dexie, { type EntityTable } from "dexie";
+import type { CartLineModifier } from "@/lib/types/cart";
+import type { StockDecrement } from "@/lib/pos/lineItems";
 
 // ---- Types ----
 
@@ -88,6 +90,23 @@ export interface QueuedTransaction {
   user_id?: string;
   user_name?: string;
   items: QueuedTransactionItem[];
+  /**
+   * What this sale takes out of stock, computed at CHECKOUT time.
+   *
+   * ⚠️ This field is why an offline menu sale deducts the right thing.
+   *
+   * The server falls back to deriving decrements from `items` when this is
+   * absent — correct for every ordinary sale and for every row queued before
+   * this existed. But for a MENU line, `items` names the sandwich, so that
+   * fallback would decrement the sandwich instead of its ingredients: silent,
+   * offline-only, and invisible until a stock take.
+   *
+   * Computed here rather than on the server on purpose: the recipe AT THE TIME
+   * OF SALE is the right recipe. A sandwich sold offline on Monday and synced
+   * on Wednesday must deduct what Monday's recipe said, not what the owner
+   * changed it to on Tuesday.
+   */
+  stock_decrements?: StockDecrement[];
   created_at: string;
   /** Sync attempts so far. Absent on rows queued before this field existed. */
   retry_count?: number;
@@ -133,6 +152,12 @@ export interface QueuedTransactionItem {
   currency: string;
   unit_price_usd: number;
   total_price_usd: number;
+  /**
+   * Made-to-order choices as sold. NULL = an ordinary line; [] = a menu line
+   * with nothing changed. Mirrors SaleLineItem exactly so the online and
+   * offline payloads cannot disagree.
+   */
+  modifiers?: CartLineModifier[] | null;
 }
 
 export interface PendingWrite {
