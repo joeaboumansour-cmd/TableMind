@@ -28,6 +28,7 @@
  */
 
 import type { QueuedTransaction } from "@/lib/db/localDB";
+import { connectivity } from "@/lib/connectivity";
 
 /** Bodies at or above this size cannot use `keepalive` (spec limit is 64KB). */
 const KEEPALIVE_BODY_LIMIT = 60_000;
@@ -77,8 +78,12 @@ export function pushSaleInBackground(opts: {
       console.warn("[Sale] Failed to update cached stock:", e);
     }
 
-    if (!navigator.onLine) {
+    if (!connectivity.isOnline) {
       // Offline: the sync engine owns this row from here.
+      //
+      // The heartbeat, not navigator.onLine — the latter reports true on a
+      // wifi network with no internet behind it, so this guard used to let the
+      // push run anyway and wait out a request that could not succeed.
       return;
     }
 

@@ -58,6 +58,7 @@ import {
 import { StorageFullError } from "@/lib/db/localDB";
 import { cn } from "@/lib/utils";
 import { logActivity, flushActivity } from "@/lib/activity/logger";
+import { connectivity } from "@/lib/connectivity";
 
 /** Which amount the keypad is typing into. Both are always displayed. */
 type PayField = "LL" | "USD";
@@ -415,7 +416,14 @@ function CheckoutContent() {
 
       // Make the sale durable BEFORE showing a receipt for it. IndexedDB
       // write, single-digit ms. Everything slow happens after this point.
-      const wasOffline = !navigator.onLine;
+      // connectivity, NOT navigator.onLine. navigator.onLine reports true for a
+      // device joined to a wifi network with no internet behind it — which is
+      // the outage a shop actually has, and the whole reason the heartbeat
+      // exists. Verified on production: with every request failing,
+      // navigator.onLine still read true, so the sale queued correctly but the
+      // cashier was told nothing about it and got a QR pointing at a receipt
+      // the server had never seen.
+      const wasOffline = !connectivity.isOnline;
       await queueCompletedSale(offlineTxnData);
 
       // NOTE: Stock decrements are handled server-side in the /api/transactions

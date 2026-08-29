@@ -1,31 +1,42 @@
 // Cash Register - Drawer Math (shared utility)
 // Single source of truth for expected drawer and variance
-import { RETURN_RATE, roundToNearest5k } from "./utils/format";
+import { SELL_RATE, roundToNearest5k } from "./utils/format";
 import type { CashShift, CashAdjustment, ShiftSummary } from "./cash/types";
 
 /**
  * Combine LL and USD amounts into a single LL-equivalent total.
- *
- * RETURN_RATE, because this values physical dollars SITTING IN A DRAWER, and
- * a drawer's dollars got there by being handed over the counter.
- *
- * This used to use SELL_RATE, and that quietly broke the one number the count
- * exists to produce. Cash-from-sales is derived from `amount_paid`, which
- * already contains USD tender valued at RETURN_RATE (see summariseShift below).
- * Valuing the same dollars at SELL_RATE when they are counted back out credits
- * them 1,000 LL more on the way out than they were booked for on the way in,
- * so a perfectly counted drawer reports a surplus of roughly 1,000 LL per
- * dollar taken — biasing every variance in one direction, on the one figure a
- * supervisor is meant to be able to trust.
- *
- * Worked example ($10 tendered against a 500,000 LL sale, drawer counted
- * exactly right): SELL_RATE reports +10,000 LL over. RETURN_RATE reports 0.
- *
+ * USD is converted at the store's SELL_RATE.
  * The USD→LL conversion is rounded to the nearest 5,000 LL so that all
  * cash-register totals stay on real bill denominations.
+ *
+ * ## Why this is SELL_RATE, and why that is not obviously right
+ *
+ * There is a real inconsistency here, and it was briefly "fixed" the wrong way.
+ * Cash-from-sales comes from `amount_paid`, which already contains USD tender
+ * valued at RETURN_RATE (see summariseShift below). So a dollar taken across
+ * the counter is booked in at 89,000 and counted back out at 90,000, which on
+ * paper invents ~1,000 LL of surplus per dollar received.
+ *
+ * Switching this constant to RETURN_RATE was tried against production and made
+ * things WORSE, for a reason the arithmetic above does not capture: real shifts
+ * are counted by people who convert dollars in their head at the sell rate and
+ * type the result into the LL field. One live shift opened with 2,500,000 LL
+ * + $50 and closed with 7,000,000 LL + $0 — the $50 counted back as LL at
+ * 90,000. Under SELL_RATE it reconciled exactly; under RETURN_RATE the opening
+ * float fell by 50 x 1,000 while the count did not, turning a balanced drawer
+ * into a 50,000 LL overage. Store-wide cumulative variance moved 1,240,000 ->
+ * 1,390,000.
+ *
+ * So DO NOT simply flip this constant. Fixing it properly means:
+ *   1. stamping the rate on the shift, so a closed shift keeps the valuation it
+ *      was actually counted under and history does not move under people; and
+ *   2. making the close dialog insist dollars are entered in the USD field
+ *      rather than pre-converted into the LL one.
+ * Until both exist, SELL_RATE is what the people doing the counting use, and
+ * matching them is what makes the variance figure mean anything.
  */
 export function combineCurrencyTotals(ll: number, usd: number): number {
-  return (ll || 0) + roundToNearest5k((usd || 0) * RETURN_RATE);
+  return (ll || 0) + roundToNearest5k((usd || 0) * SELL_RATE);
 }
 
 /**
