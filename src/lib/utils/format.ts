@@ -80,7 +80,16 @@ export function convertLlToUsd(llAmount: number): number {
  * Format amount as Lebanese Pounds (LL)
  */
 export function formatLL(amount: number): string {
-  return `${amount.toLocaleString('en-US')} LL`;
+  // Always a whole number of pounds. The Lebanese Pound has no sub-unit, so a
+  // fractional LL figure is never a real amount — it is always an artefact of
+  // a division that happened upstream. Rounding here rather than at each call
+  // site is deliberate: this is the one function that decides how an LL amount
+  // is written, so no screen can print "671,666.667 LL" (which the History
+  // "Avg. sale" tile did, being total / count straight into this function).
+  //
+  // This is presentation only. It does NOT replace roundToNearest5k(), which
+  // is a different rule about what a customer can physically pay.
+  return `${Math.round(amount || 0).toLocaleString('en-US')} LL`;
 }
 
 /**

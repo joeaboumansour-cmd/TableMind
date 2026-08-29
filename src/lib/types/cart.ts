@@ -120,7 +120,15 @@ export interface CartActions {
   updateLine: (productId: string, patch: CartLinePatch) => void;
   incrementQuantity: (productId: string) => boolean;
   decrementQuantity: (productId: string) => void;
-  clearCart: () => void;
+  /**
+   * Empty the active lane.
+   *
+   * `reason` only colours the activity log: "manual" is a cashier pressing
+   * Clear, "sale_committed" is checkout emptying the lane once the sale is
+   * durable. They must stay distinguishable in the trail — an automatic clear
+   * after every sale would otherwise look like cashiers constantly wiping carts.
+   */
+  clearCart: (reason?: "manual" | "sale_committed") => void;
   setStoreId: (storeId: string) => void;
   // ---- Lanes ----
   openLane: () => string | null;

@@ -4,7 +4,9 @@ import React, { useState, useRef, useEffect, useCallback, useMemo } from "react"
 import { Input } from "@/components/ui/input";
 import { Search, X } from "lucide-react";
 import { Product } from "@/lib/types/product";
-import { formatLL, formatUSD, convertLlToUsdForReturn, SELL_RATE } from "@/lib/utils/format";
+// convertUsdToLl, never a raw `* SELL_RATE` — the helper is where the 5,000 LL
+// rounding lives, and this list must quote the same price the cart charges.
+import { formatLL, formatUSD, convertLlToUsdForReturn, convertUsdToLl } from "@/lib/utils/format";
 import { cn } from "@/lib/utils";
 
 /** Most results the dropdown will render at once. */
@@ -281,8 +283,7 @@ export default function ProductSearchBar({
                     </p>
                     <p className="text-xs text-muted-foreground tnum">
                       {product.currency === "USD"
-                        ? formatLL(product.selling_price * SELL_RATE)
-
+                        ? formatLL(convertUsdToLl(product.selling_price))
                         : formatUSD(convertLlToUsdForReturn(product.selling_price))}
                     </p>
                   </div>

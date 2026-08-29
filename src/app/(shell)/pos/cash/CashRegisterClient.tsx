@@ -287,7 +287,15 @@ export function CashRegisterPage() {
       if (!opts?.silent) setIsRefreshing(true);
       try {
         const headers = buildAuthHeaders(user);
-        const res = await fetch("/api/cash-shifts", { headers });
+        // The unassigned-takings figure is scoped to "today", and today is the
+        // shop's, not the server's — Vercel runs in UTC and the shop does not.
+        // The till is the only party that knows the local day boundary.
+        const dayStart = new Date();
+        dayStart.setHours(0, 0, 0, 0);
+        const res = await fetch(
+          `/api/cash-shifts?from=${encodeURIComponent(dayStart.toISOString())}`,
+          { headers }
+        );
         if (!res.ok) {
           const err = await res.json().catch(() => ({}));
           throw new Error(err.error || "Failed to load");
@@ -956,12 +964,22 @@ export function CashRegisterPage() {
                 register · {formatLL(unassigned.total)}
               </p>
               <p className="mt-0.5 text-xs text-muted-foreground">
-                A till has no register selected, or was selling while its register had no shift
-                open. The money is recorded — it just is not attributed to a drawer. Use
-                &ldquo;Use on this device&rdquo; on the till in question.
+                Nobody was on a drawer when these went through — either no shift was open, or
+                the person selling was not assigned to one. The money is recorded and safe; it
+                just is not attributed to a register. Open a shift and assign the cashier, and
+                anything they sell from then on lands on that drawer.
               </p>
             </div>
           </div>
+        )}
+
+        {/* Not the same as zero. If the figure could not be computed, saying
+            "nothing unaccounted" would be the one answer that stops anybody
+            looking — so say plainly that we do not know. */}
+        {unassigned === null && !isLoading && !isStale && (
+          <p className="px-1 text-xs text-muted-foreground">
+            Unassigned takings could not be checked just now. Refresh to try again.
+          </p>
         )}
 
         {/* ── Registers ────────────────────────────────────────────────── */}

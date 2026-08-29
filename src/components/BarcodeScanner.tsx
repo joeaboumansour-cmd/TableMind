@@ -719,13 +719,24 @@ function BarcodeScanner({ onScan, onClose, isActive = true, desktopMode = false,
           </div>
         )}
 
+        {/* Sits in the UPPER part of the viewfinder, not its centre.
+            The search field and the cart sheet are overlaid across the bottom
+            of this same area, so a vertically centred message was rendered
+            underneath them — clipped and unreadable, which is a poor way to
+            explain why the camera is not working. The panel background keeps
+            it legible against whatever the camera left on screen. */}
         {error && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center px-8 text-center">
-            <Camera className="mb-4 h-10 w-10 text-zinc-600" />
-            <p className="mb-4 text-sm text-zinc-300">{error}</p>
-            <Button onClick={() => window.location.reload()} className="rounded-xl">
-              Retry
-            </Button>
+          <div className="absolute inset-x-0 top-0 flex flex-col items-center px-8 pt-[18%] text-center">
+            <div className="w-full max-w-xs rounded-2xl bg-black/70 px-5 py-5 backdrop-blur-sm">
+              <Camera className="mx-auto mb-3 h-9 w-9 text-zinc-500" />
+              <p className="mb-1 text-sm font-semibold text-zinc-100">{error}</p>
+              <p className="mb-4 text-xs leading-relaxed text-zinc-400">
+                You can still sell — type or scan a barcode into the field below.
+              </p>
+              <Button onClick={() => window.location.reload()} className="rounded-xl">
+                Retry
+              </Button>
+            </div>
           </div>
         )}
       </div>

@@ -278,8 +278,16 @@ export default function CartSheet({
               )}
             >
               <div className="min-w-0 flex-1">
-                <p className="truncate text-[15px] font-semibold leading-tight">
-                  {item.product_name}
+                <p className="flex items-center gap-1.5 text-[15px] font-semibold leading-tight">
+                  <span className="truncate">{item.product_name}</span>
+                  {/* A one-off has no catalogue row behind it — it was named and
+                      priced at the till. The desktop cart says so; on mobile it
+                      was indistinguishable from a real product. */}
+                  {item.line_kind === "one_off" && (
+                    <span className="flex-none rounded bg-primary/15 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-primary">
+                      One-off
+                    </span>
+                  )}
                 </p>
                 <p className="mt-0.5 truncate text-xs text-muted-foreground tnum">
                   {item.discount_percentage > 0 ? (

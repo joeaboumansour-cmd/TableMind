@@ -85,8 +85,25 @@ export async function GET(request: Request) {
     const supabase = await createServiceRoleClient();
     const { storeId, userId } = readAuthHeader(request);
 
+    // "Today" has to mean the SHOP's today, not the server's.
+    //
+    // This used to be `new Date(); setHours(0,0,0,0)` evaluated on Vercel,
+    // which runs in UTC, against a store in UTC+3 — so the window sat three
+    // hours off the shop's day, precisely around the hours a drawer is counted
+    // and closed. The till knows its own timezone, so it sends its local
+    // midnight and the server trusts it only as far as it is sane: a real
+    // date, and within a day either side of the server's own idea of now.
     const startOfToday = new Date();
     startOfToday.setHours(0, 0, 0, 0);
+
+    const fromParam = new URL(request.url).searchParams.get("from");
+    if (fromParam) {
+      const parsed = new Date(fromParam);
+      const skewMs = Math.abs(parsed.getTime() - startOfToday.getTime());
+      if (!Number.isNaN(parsed.getTime()) && skewMs <= 36 * 60 * 60 * 1000) {
+        startOfToday.setTime(parsed.getTime());
+      }
+    }
 
     // ── Wave 1 ───────────────────────────────────────────────────────────────
     // Auth runs alongside the store-scoped reads rather than in front of them.
@@ -135,11 +152,28 @@ export async function GET(request: Request) {
     // Sales today that reached no shift — a cashier selling with nothing
     // assigned to them. Surfaced because a non-zero figure means a person is
     // misconfigured, not that money is missing.
-    const unassignedRow = (unassignedRes.data as Array<{ txn_count: number; total: number }> | null)?.[0];
-    const unassigned = {
-      count: Number(unassignedRow?.txn_count) || 0,
-      total: Number(unassignedRow?.total) || 0,
-    };
+    //
+    // `null` means "could not be computed", and is NOT the same as zero. This
+    // used to be `Number(row?.txn_count) || 0`, which turned an RPC failure
+    // into a confident "nothing unaccounted" — the one answer that stops
+    // anybody looking. A figure whose whole job is to say money went astray
+    // must never fail closed and silent.
+    let unassigned: { count: number; total: number } | null = null;
+    if (unassignedRes.error) {
+      console.error(
+        "Cash shifts GET (get_unassigned_totals):",
+        unassignedRes.error.message
+      );
+    } else {
+      const unassignedRow = (unassignedRes.data as Array<{
+        txn_count: number;
+        total: number;
+      }> | null)?.[0];
+      unassigned = {
+        count: Number(unassignedRow?.txn_count) || 0,
+        total: Number(unassignedRow?.total) || 0,
+      };
+    }
 
     const pendingByRegister: Record<string, number> = {};
     for (const r of (pendingRes.data || []) as Array<{ register_id: string }>) {

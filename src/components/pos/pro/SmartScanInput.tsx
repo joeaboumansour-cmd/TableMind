@@ -16,7 +16,10 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { ScanLine } from "lucide-react";
 import { Product } from "@/lib/types/product";
-import { formatLL, formatUSD, convertLlToUsdForReturn, SELL_RATE } from "@/lib/utils/format";
+// convertUsdToLl, never a raw `* SELL_RATE`: the helper exists to apply the
+// 5,000 LL rounding, and the search dropdown must quote the same price the
+// QuickGrid tile and the cart do.
+import { formatLL, formatUSD, convertLlToUsdForReturn, convertUsdToLl } from "@/lib/utils/format";
 import { cn } from "@/lib/utils";
 
 /** Most results the dropdown will render at once. */
@@ -301,7 +304,7 @@ export default function SmartScanInput({
                     </p>
                     <p className="text-xs text-muted-foreground tnum">
                       {product.currency === "USD"
-                        ? formatLL(product.selling_price * SELL_RATE)
+                        ? formatLL(convertUsdToLl(product.selling_price))
                         : formatUSD(convertLlToUsdForReturn(product.selling_price))}
                     </p>
                   </div>

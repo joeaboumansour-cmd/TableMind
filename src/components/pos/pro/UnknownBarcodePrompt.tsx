@@ -31,6 +31,18 @@ interface UnknownBarcodePromptProps {
   ) => void;
 }
 
+/**
+ * Thousands separators for the raw digits held in state, integer part only.
+ * Display-only: the field's onChange strips non-digits straight back out, so
+ * what is parsed and submitted is never the grouped string.
+ */
+function groupLlDigits(raw: string): string {
+  if (!raw) return "";
+  const [whole, ...rest] = raw.split(".");
+  const grouped = whole ? Number(whole).toLocaleString("en-US") : "";
+  return rest.length > 0 ? `${grouped}.${rest.join("")}` : grouped;
+}
+
 export default function UnknownBarcodePrompt({
   barcode,
   busy = false,
@@ -134,7 +146,12 @@ export default function UnknownBarcodePrompt({
           <input
             type="text"
             inputMode="numeric"
-            value={price}
+            // Grouped as you type, the way the checkout LL field is. An
+            // unseparated "196200" is genuinely hard to read at a counter, and
+            // this is the field that decides what a customer is charged.
+            // State stays raw digits; the separators are display only, and the
+            // onChange strips them straight back out.
+            value={groupLlDigits(price)}
             disabled={busy}
             onChange={(e) => setPrice(e.target.value.replace(/[^0-9.]/g, ""))}
             placeholder="0"
@@ -148,7 +165,7 @@ export default function UnknownBarcodePrompt({
             type="button"
             onClick={() => submit("inventory")}
             disabled={!canSubmit}
-            className="tap flex h-12 flex-none items-center gap-2 rounded-xl bg-primary px-4 text-sm font-bold text-primary-foreground disabled:cursor-not-allowed disabled:opacity-40"
+            className="tap flex h-12 flex-none items-center gap-2 rounded-xl bg-primary px-4 text-sm font-bold text-primary-foreground disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground disabled:opacity-70"
           >
             {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
             Save &amp; add
@@ -159,7 +176,7 @@ export default function UnknownBarcodePrompt({
           type="button"
           onClick={() => submit("sale")}
           disabled={!canSubmit}
-          className="tap h-12 flex-none rounded-xl border border-white/[0.12] px-4 text-sm font-bold text-foreground hover:bg-muted/40 disabled:cursor-not-allowed disabled:opacity-40"
+          className="tap h-12 flex-none rounded-xl border border-white/[0.12] px-4 text-sm font-bold text-foreground hover:bg-muted/40 disabled:cursor-not-allowed disabled:border-white/[0.04] disabled:text-muted-foreground disabled:opacity-60"
         >
           This sale only
         </button>

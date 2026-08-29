@@ -1,16 +1,31 @@
 // Cash Register - Drawer Math (shared utility)
 // Single source of truth for expected drawer and variance
-import { SELL_RATE, roundToNearest5k } from "./utils/format";
+import { RETURN_RATE, roundToNearest5k } from "./utils/format";
 import type { CashShift, CashAdjustment, ShiftSummary } from "./cash/types";
 
 /**
  * Combine LL and USD amounts into a single LL-equivalent total.
- * USD is converted at the store's SELL_RATE.
+ *
+ * RETURN_RATE, because this values physical dollars SITTING IN A DRAWER, and
+ * a drawer's dollars got there by being handed over the counter.
+ *
+ * This used to use SELL_RATE, and that quietly broke the one number the count
+ * exists to produce. Cash-from-sales is derived from `amount_paid`, which
+ * already contains USD tender valued at RETURN_RATE (see summariseShift below).
+ * Valuing the same dollars at SELL_RATE when they are counted back out credits
+ * them 1,000 LL more on the way out than they were booked for on the way in,
+ * so a perfectly counted drawer reports a surplus of roughly 1,000 LL per
+ * dollar taken — biasing every variance in one direction, on the one figure a
+ * supervisor is meant to be able to trust.
+ *
+ * Worked example ($10 tendered against a 500,000 LL sale, drawer counted
+ * exactly right): SELL_RATE reports +10,000 LL over. RETURN_RATE reports 0.
+ *
  * The USD→LL conversion is rounded to the nearest 5,000 LL so that all
  * cash-register totals stay on real bill denominations.
  */
 export function combineCurrencyTotals(ll: number, usd: number): number {
-  return (ll || 0) + roundToNearest5k((usd || 0) * SELL_RATE);
+  return (ll || 0) + roundToNearest5k((usd || 0) * RETURN_RATE);
 }
 
 /**

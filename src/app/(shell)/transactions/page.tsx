@@ -44,7 +44,10 @@ import {
   formatLL,
   formatDateTime,
   formatUSD,
-  convertLlToUsdForSale,
+  // The USD equivalent of an LL amount owed/taken uses RETURN_RATE, the same
+  // rate the till and checkout quote. History used to use SELL_RATE, so one
+  // sale read $11.02 on the till and $10.89 here.
+  convertLlToUsdForReturn,
   formatLLParts,
 } from "@/lib/utils/format";
 import { toast } from "@/lib/toast";
@@ -123,6 +126,13 @@ interface TransactionWithChange extends Transaction {
    */
   syncState?: "queued" | "failed";
 }
+
+/**
+ * How close together two identical-looking sales have to be before History
+ * points them out. Long enough to catch a basket rung twice by mistake, short
+ * enough not to nag a busy counter selling the same thing repeatedly.
+ */
+const DUPLICATE_WINDOW_MS = 5 * 60 * 1000;
 
 const DATE_FILTERS: { key: DateFilter; short: string; long: string }[] = [
   { key: "today", short: "Today", long: "Today" },
@@ -628,7 +638,7 @@ export default function TransactionHistoryPage() {
 
   // Takings for the visible range, plus the same figures per day for the
   // group headers. One pass, not four.
-  const { rangeTotal, rangeCount, avgSale, itemsSold, groups } = useMemo(() => {
+  const { rangeTotal, rangeCount, avgSale, itemsSold, groups, duplicateIds } = useMemo(() => {
     let total = 0;
     let items = 0;
     const byDay = new Map<string, { label: string; total: number; rows: TransactionWithChange[] }>();
@@ -647,12 +657,44 @@ export default function TransactionHistoryPage() {
       bucket.rows.push(t);
     }
 
+    // Sales that look like the same basket rung twice: identical total, identical
+    // unit count, minutes apart. Not proof — a shop legitimately sells two
+    // identical baskets in a row — so this only marks them for a human to check,
+    // and never hides or blocks anything.
+    const duplicateIds = new Set<string>();
+    for (const [, bucket] of byDay) {
+      const bySignature = new Map<string, TransactionWithChange[]>();
+      for (const t of bucket.rows) {
+        const units = t.transaction_items.reduce((n, i) => n + i.quantity, 0);
+        const key = `${t.total_amount}|${units}`;
+        const list = bySignature.get(key);
+        if (list) list.push(t);
+        else bySignature.set(key, [t]);
+      }
+      for (const [, list] of bySignature) {
+        if (list.length < 2) continue;
+        const sorted = [...list].sort(
+          (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+        );
+        for (let i = 1; i < sorted.length; i++) {
+          const gapMs =
+            new Date(sorted[i].created_at).getTime() -
+            new Date(sorted[i - 1].created_at).getTime();
+          if (gapMs <= DUPLICATE_WINDOW_MS) {
+            duplicateIds.add(sorted[i].id);
+            duplicateIds.add(sorted[i - 1].id);
+          }
+        }
+      }
+    }
+
     return {
       rangeTotal: total,
       rangeCount: filteredTransactions.length,
       avgSale: filteredTransactions.length > 0 ? total / filteredTransactions.length : 0,
       itemsSold: items,
       groups: Array.from(byDay.entries()).sort((a, b) => (a[0] < b[0] ? 1 : -1)),
+      duplicateIds,
     };
   }, [filteredTransactions]);
 
@@ -785,7 +827,7 @@ export default function TransactionHistoryPage() {
                     </p>
                   )}
                   <p className="text-sm text-muted-foreground tnum">
-                    {formatUSD(convertLlToUsdForSale(rangeTotal))}
+                    {formatUSD(convertLlToUsdForReturn(rangeTotal))}
                   </p>
                 </div>
 
@@ -942,6 +984,17 @@ export default function TransactionHistoryPage() {
                                       {t.syncState === "failed" ? "Sync failed" : "Not synced"}
                                     </span>
                                   )}
+                                  {/* Same total, same unit count, minutes apart.
+                                      A prompt to look, not a verdict — two
+                                      identical baskets in a row is legitimate. */}
+                                  {duplicateIds.has(t.id) && (
+                                    <span
+                                      className="flex-none rounded-md bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-400"
+                                      title="Another sale today has the same total and the same number of units, within five minutes. Worth checking it was not rung twice."
+                                    >
+                                      Check duplicate
+                                    </span>
+                                  )}
                                 </span>
                               </span>
 
@@ -955,7 +1008,7 @@ export default function TransactionHistoryPage() {
                                   {formatLLParts(t.total_amount).value}
                                 </span>
                                 <span className="block text-xs text-muted-foreground tnum">
-                                  {formatUSD(convertLlToUsdForSale(t.total_amount))}
+                                  {formatUSD(convertLlToUsdForReturn(t.total_amount))}
                                 </span>
                               </span>
                             </button>

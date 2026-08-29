@@ -131,7 +131,26 @@ export function useFeatureFlags(): {
   // Initialize
   useEffect(() => {
     if (!storeId) {
-      setState({ flags: {}, storeType: "general", isLoading: false });
+      // "No store yet" is NOT an answer — it is the absence of one, and it must
+      // not be reported as finished loading with nothing enabled.
+      //
+      // On a cold direct load of a guarded route (opening /pos/cash from a
+      // bookmark, a refresh, or the PWA icon) AuthContext has not hydrated the
+      // user from localStorage yet, so storeId is briefly undefined. This used
+      // to set isLoading:false with flags:{}, which reads as "loading finished,
+      // nothing is enabled". The route guard runs on the very next render —
+      // user is now present, flagsLoading is already false, flags are still
+      // empty — and bounces the cashier to /pos claiming the feature is not
+      // enabled for a store that has it switched on. Reaching the same page by
+      // clicking through worked, because the flags were loaded by then.
+      //
+      // Same rule as evaluateReconcile(): never act destructively on unknown.
+      // A guard may only deny once the flags have actually been resolved.
+      setState((prev) =>
+        prev.isLoading && Object.keys(prev.flags).length === 0
+          ? prev
+          : { flags: {}, storeType: "general", isLoading: true }
+      );
       return;
     }
 

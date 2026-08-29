@@ -413,13 +413,14 @@ export const useCartStore = create<CartStore>()(
           }
         },
 
-        clearCart: () => {
+        clearCart: (reason: 'manual' | 'sale_committed' = 'manual') => {
           const { items } = get();
           commitItems([], {
             action: 'cart.clear',
             details: {
               cleared_lines: items.length,
               cleared_units: items.reduce((sum, i) => sum + i.quantity, 0),
+              reason,
             },
           });
         },
@@ -555,8 +556,21 @@ export const useCartStore = create<CartStore>()(
 
         getTotal: () => totalOf(get().items),
 
+        // The USD equivalent of the amount actually CHARGED, which means it has
+        // to be derived from the rounded LL total.
+        //
+        // This used to return getSubtotalUsd() — the sum of the per-line USD
+        // figures — so the LL side rounded at the total and the USD side never
+        // followed it. The two headline numbers on the till contradicted each
+        // other (980,000 LL beside $11.02, when 980,000 LL is $11.01), the same
+        // figure was persisted as usd_total_amount on every sale, and USD
+        // accumulated exactly the per-line drift the LL side is built to avoid.
+        //
+        // RETURN_RATE, not SELL_RATE: this answers "how many dollars instead?",
+        // and checkout values incoming USD tender at RETURN_RATE, so that is
+        // what the customer would actually have to hand over.
         getTotalUsd: () => {
-          return get().getSubtotalUsd();
+          return convertLlToUsdForReturn(get().getTotal());
         },
 
         // The difference between the rounded total (charged) and the exact subtotal.

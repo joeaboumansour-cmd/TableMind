@@ -44,7 +44,10 @@ import ProductRow from "@/components/pos/ProductRow";
 import type { InventoryProduct } from "@/components/pos/ProductRow";
 import { useAuth } from "@/lib/auth/AuthContext";
 import { PermissionGuard } from "@/lib/auth/guards";
-import { formatLL, formatUSD, convertLlToUsdForSale, SELL_RATE, RETURN_RATE, convertLlToUsdForReturn } from "@/lib/utils/format";
+// Named helpers only. A raw `* SELL_RATE` skips the 5,000 LL rounding that
+// convertUsdToLl exists to apply, and a raw `/ RETURN_RATE` duplicates a rule
+// that is supposed to live in exactly one file.
+import { formatLL, formatUSD, convertUsdToLl, convertLlToUsdForReturn } from "@/lib/utils/format";
 import dynamic from "next/dynamic";
 // See the POS page: the scanner drags in @zxing/library, so it is loaded on
 // demand and the beep comes from the standalone feedback module instead.
@@ -1386,7 +1389,7 @@ function StoreProductsPageContent() {
               }}
               disabled={isOffline}
               aria-label="Add product"
-              className="tap flex h-11 w-11 items-center justify-center gap-2 rounded-2xl bg-primary text-sm font-semibold text-primary-foreground disabled:opacity-40 md:w-auto md:px-4"
+              className="tap flex h-11 w-11 items-center justify-center gap-2 rounded-2xl bg-primary text-sm font-semibold text-primary-foreground disabled:bg-muted disabled:text-muted-foreground disabled:opacity-70 md:w-auto md:px-4"
             >
               <Plus className="h-5 w-5 md:h-4 md:w-4" />
               <span className="hidden md:inline">Add product</span>
@@ -1637,8 +1640,8 @@ function StoreProductsPageContent() {
                   </p>
                   <p className="text-xs text-muted-foreground tnum">
                     {detailProduct.currency === "USD"
-                      ? formatLL(detailProduct.selling_price * SELL_RATE)
-                      : formatUSD(detailProduct.selling_price / RETURN_RATE)}
+                      ? formatLL(convertUsdToLl(detailProduct.selling_price))
+                      : formatUSD(convertLlToUsdForReturn(detailProduct.selling_price))}
                   </p>
                 </div>
                 <div className="rounded-2xl bg-muted/40 px-3 py-2.5">
@@ -1709,7 +1712,7 @@ function StoreProductsPageContent() {
                     setDetailProduct(null);
                     handleEditProduct(target);
                   }}
-                  className="tap flex h-12 items-center justify-center gap-1.5 rounded-2xl bg-primary text-sm font-bold text-primary-foreground disabled:opacity-40"
+                  className="tap flex h-12 items-center justify-center gap-1.5 rounded-2xl bg-primary text-sm font-bold text-primary-foreground disabled:bg-muted disabled:text-muted-foreground disabled:opacity-70"
                 >
                   <Edit className="h-4 w-4" />
                   Edit
@@ -2002,11 +2005,11 @@ function StoreProductsPageContent() {
               <p className="text-xs text-muted-foreground tnum">
                 {currency === "LL" ? (
                   <>
-                    ≈ {formatUSD((parseFloat(sellingPrice) || 0) / RETURN_RATE)} for the
+                    ≈ {formatUSD(convertLlToUsdForReturn(parseFloat(sellingPrice) || 0))} for the
                     customer
                   </>
                 ) : (
-                  <>≈ {formatLL((parseFloat(sellingPrice) || 0) * SELL_RATE)} for the customer</>
+                  <>≈ {formatLL(convertUsdToLl(parseFloat(sellingPrice) || 0))} for the customer</>
                 )}
               </p>
             </div>

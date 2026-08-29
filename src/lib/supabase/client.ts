@@ -111,9 +111,6 @@ export function createClient() {
     } as unknown as ReturnType<typeof createBrowserClient>;
   }
 
-  // DEBUG: Log restaurant ID
-  console.log("[Supabase Client] Creating client - will read restaurant ID from localStorage on each request");
-
   // Create real client with DYNAMIC header injection
   // Use custom fetch to ensure fresh restaurant_id header on EVERY request
   const options: any = {
@@ -123,8 +120,6 @@ export function createClient() {
         
         // Read restaurant ID FRESH from localStorage on every request
         const restaurantId = getRestaurantIdFromStorage();
-        
-        console.log("[Supabase Client] Fetch with Restaurant ID:", restaurantId, "URL:", url.toString().slice(0, 100));
         
         // Create new headers with fresh restaurant_id
         const headers = new Headers(config.headers || {});
@@ -156,7 +151,6 @@ export function createClientWithAuth() {
     throw new Error("Supabase credentials not configured");
   }
 
-  console.log("[Supabase Client] createClientWithAuth - will read restaurant ID from localStorage on each request");
 
   // Use custom fetch to ensure fresh restaurant_id header on EVERY request
   const options: any = {
@@ -167,7 +161,6 @@ export function createClientWithAuth() {
         // Read restaurant ID FRESH from localStorage on every request
         const restaurantId = getRestaurantIdFromStorage();
         
-        console.log("[Supabase Client] createClientWithAuth fetch with Restaurant ID:", restaurantId);
         
         // Create new headers with fresh restaurant_id
         const headers = new Headers(config.headers || {});

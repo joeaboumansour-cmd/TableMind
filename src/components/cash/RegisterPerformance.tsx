@@ -240,8 +240,15 @@ export default function RegisterPerformance({
                   icon={TrendingUp}
                   label="Takings"
                   value={formatLL(r.revenue)}
+                  // "of registers", not "of store". The denominator is the sum
+                  // of what the REGISTERS took; sales that reached no drawer are
+                  // not in it. Calling a register's slice of that "100% of
+                  // store" told a shop with unassigned takings that it had seen
+                  // all its money, which is exactly backwards.
                   hint={
-                    storeRevenue > 0 ? `${formatPercent(r.shareOfRevenue, 0)} of store` : undefined
+                    storeRevenue > 0
+                      ? `${formatPercent(r.shareOfRevenue, 0)} of registers`
+                      : undefined
                   }
                 />
                 <MetricTile
@@ -263,10 +270,14 @@ export default function RegisterPerformance({
                 <MetricTile
                   icon={TrendingUp}
                   label="Throughput"
-                  value={r.salesPerHour !== null ? `${r.salesPerHour.toFixed(1)}/h` : "—"}
+                  value={r.salesPerHour !== null ? `${r.salesPerHour.toFixed(1)} sales/h` : "—"}
+                  // formatLLCompact drops the "LL" on purpose — it exists for
+                  // chart axis ticks. Used bare here it read as "404/h" sitting
+                  // under "0.0/h", two different quantities wearing the same
+                  // suffix and one of them with no unit at all.
                   hint={
                     r.revenuePerHour !== null
-                      ? `${formatLLCompact(r.revenuePerHour)}/h`
+                      ? `${formatLLCompact(r.revenuePerHour)} LL/h`
                       : "no closed shifts yet"
                   }
                 />

@@ -10,7 +10,8 @@ import {
   formatLLParts,
   formatPercent,
   formatUSD,
-  convertLlToUsdForSale,
+  // RETURN_RATE, matching the till and History. See transactions/page.tsx.
+  convertLlToUsdForReturn,
 } from "@/lib/utils/format";
 import { cn } from "@/lib/utils";
 import { toast } from "@/lib/toast";
@@ -196,7 +197,7 @@ export function TransactionAnalytics({
         <Stat
           label="Revenue"
           value={formatLLParts(summary.totalRevenue).value}
-          sub={formatUSD(convertLlToUsdForSale(summary.totalRevenue))}
+          sub={formatUSD(convertLlToUsdForReturn(summary.totalRevenue))}
           tone="primary"
         />
         <Stat

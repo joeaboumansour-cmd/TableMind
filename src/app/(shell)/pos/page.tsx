@@ -651,7 +651,12 @@ export default function POSPage() {
     }
   };
 
-  if (isLoading || authLoading) {
+  // `!user` matters as much as the loading flags: once authLoading flips false
+  // with no user, the redirect to /login is only *scheduled* — an effect that
+  // runs after this render. Without this the till rendered in the meantime,
+  // which mounted the camera scanner and asked a signed-out stranger for
+  // camera permission on their way to the login screen.
+  if (isLoading || authLoading || !user) {
     return (
       <div className="flex h-full items-center justify-center bg-background">
         <div className="flex flex-col items-center gap-3">

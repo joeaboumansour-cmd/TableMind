@@ -311,7 +311,7 @@ export default function CartLineEditor({
           type="button"
           onClick={commit}
           disabled={!canSave}
-          className="tap flex h-11 flex-none items-center gap-2 rounded-xl bg-primary px-4 text-sm font-bold text-primary-foreground disabled:cursor-not-allowed disabled:opacity-40"
+          className="tap flex h-11 flex-none items-center gap-2 rounded-xl bg-primary px-4 text-sm font-bold text-primary-foreground disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground disabled:opacity-70"
         >
           {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
           Save

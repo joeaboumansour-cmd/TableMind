@@ -29,6 +29,7 @@ import {
 import {
   ArrowLeft,
   Check,
+  CloudOff,
   Copy,
   Delete,
   Loader2,
@@ -88,6 +89,11 @@ function CheckoutContent() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [transactionComplete, setTransactionComplete] = useState(false);
   const [transactionNumber, setTransactionNumber] = useState<string>("");
+  // The receipt's own copy of the sale. The lane is cleared the instant the
+  // sale is durable (see handleProcessPayment), so from that point on the cart
+  // is NOT a safe place to read the figures we just charged.
+  const [completedTotal, setCompletedTotal] = useState<number>(0);
+  const [completedOffline, setCompletedOffline] = useState(false);
   const [paidAmount, setPaidAmount] = useState<number>(0);
   const [changeGiven, setChangeGiven] = useState<number>(0);
   const [changeUsd, setChangeUsd] = useState<number>(0);
@@ -144,6 +150,11 @@ function CheckoutContent() {
   // Balance calculation
   const difference = totalPaid - total;
   const isChangeDue = difference > 0;
+
+  // How much is still missing, but only once the cashier has started entering
+  // a tender. With nothing entered the button keeps its normal label, because
+  // that is the state the F4 exact-payment shortcut is for.
+  const shortfall = totalPaid > 0 && totalPaid < total ? total - totalPaid : 0;
   const displayChangeLL = Math.abs(difference);
 
   // Determine the rate to use for showing USD equivalent of change
@@ -419,12 +430,28 @@ function CheckoutContent() {
       setPaidAmount(effectiveTotalPaid);
       setChangeGiven(calculatedChangeGiven);
       setChangeUsd(calcChangeUsd);
+      setCompletedTotal(total);
+      setCompletedOffline(wasOffline);
       // The sale-finished chime. It used to belong to the POS "Done" button,
       // which no longer exists — checkout is the only way a sale ends now, so
       // the sound follows it here. Cashiers work by ear at a busy counter and
       // ending a sale in silence reads as "did that go through?".
       playCompleteSound();
       setTransactionComplete(true);
+      // Empty the lane NOW, not on "New sale".
+      //
+      // The money has been taken and the sale is durable in offline_queue, so
+      // the basket is spent. It used to survive until the cashier pressed
+      // "New sale", which meant every other way of leaving this screen — the
+      // tab bar, browser back, closing and reopening the tab, a crash, a
+      // service-worker reload — handed the till back with the previous
+      // customer's paid-for shopping still in it, ready to be charged again.
+      //
+      // Ordered after setTransactionComplete(true) on purpose: the
+      // empty-cart effect above bails out once that flag is set, so this
+      // cannot bounce the cashier to /pos instead of showing their receipt.
+      // Everything below reads the captured `items` closure, not the store.
+      clearCart('sale_committed');
       // The money event. Logged AFTER the sale is durable in offline_queue, so
       // it can never appear for a sale that was not actually saved — and, like
       // every other log call, never awaited.
@@ -587,10 +614,27 @@ function CheckoutContent() {
             #{transactionNumber}
           </p>
 
+          {/* An offline sale used to look identical to a synced one. The
+              cashier could not tell the sale was still sitting on this one
+              device, and the customer walked away with a QR pointing at a
+              receipt the server had never heard of. */}
+          {completedOffline && (
+            <div className="mt-4 flex items-start gap-2.5 rounded-2xl border border-amber-500/25 bg-amber-500/10 px-4 py-3">
+              <CloudOff className="mt-0.5 h-4 w-4 flex-none text-amber-400" />
+              <p className="text-xs leading-relaxed text-amber-200/90">
+                <span className="font-semibold">Saved on this device.</span> The sale
+                is recorded and safe, and uploads by itself once this device is back
+                online. The receipt link below only works after that.
+              </p>
+            </div>
+          )}
+
           <div className="mt-6 space-y-2 rounded-3xl bg-card px-5 py-4 text-sm">
             <div className="flex justify-between">
               <span className="text-muted-foreground">Total</span>
-              <span className="font-bold tnum">{formatLL(total)}</span>
+              {/* completedTotal, not getTotal() — the lane was emptied the
+                  moment this sale became durable. */}
+              <span className="font-bold tnum">{formatLL(completedTotal)}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-muted-foreground">Paid</span>
@@ -812,8 +856,19 @@ function CheckoutContent() {
             so a split payment can be checked against the notes in hand. */}
         <div className="mt-2 flex items-baseline justify-between gap-3 px-0.5 text-xs">
           <span className="min-w-0 truncate text-muted-foreground tnum">
+            {/* "=" only when it genuinely is one. $12 @ 89,000 is 1,068,000,
+                and the 5k rounding makes it 1,070,000 — writing that with an
+                equals sign put an equation on a money screen that does not
+                compute, while the amount-due line right above discloses its
+                own rounding. Same screen, same rule, so say it the same way. */}
             {paidUSD > 0
-              ? `${formatUSD(paidUSD)} @ ${formatLL(RETURN_RATE)}/$ = ${formatLL(usdAsLl)}`
+              ? usdAsLl === paidUSD * RETURN_RATE
+                ? `${formatUSD(paidUSD)} @ ${formatLL(RETURN_RATE)}/$ = ${formatLL(usdAsLl)}`
+                : `${formatUSD(paidUSD)} @ ${formatLL(RETURN_RATE)}/$ = ${formatLL(
+                    paidUSD * RETURN_RATE
+                  )} → ${formatLL(usdAsLl)} (rounded ${
+                    usdAsLl > paidUSD * RETURN_RATE ? "+" : "−"
+                  }${formatLL(Math.abs(usdAsLl - paidUSD * RETURN_RATE))})`
               : "Tap a field, then use the keypad"}
           </span>
           <span className="flex-none font-semibold tnum">
@@ -964,13 +1019,23 @@ function CheckoutContent() {
           type="button"
           onClick={() => handleProcessPayment()}
           disabled={isProcessing || totalPaid < total}
-          className="tap flex h-14 w-full items-center justify-center gap-2 rounded-2xl bg-primary text-base font-bold text-primary-foreground disabled:pointer-events-none disabled:opacity-40"
+          // A disabled control on this dark theme needs more than opacity to
+          // read as disabled — at 40% the gold fill still looks live, which is
+          // exactly the wrong thing on the button that takes money. Drop the
+          // fill entirely and desaturate, so "not yet" is unmistakable at a
+          // glance across a counter.
+          className="tap flex h-14 w-full items-center justify-center gap-2 rounded-2xl bg-primary text-base font-bold text-primary-foreground transition-colors disabled:pointer-events-none disabled:bg-muted disabled:text-muted-foreground disabled:opacity-70"
         >
           {isProcessing ? (
             <>
               <Loader2 className="h-5 w-5 animate-spin" />
               Processing…
             </>
+          ) : shortfall > 0 ? (
+            // Say what is missing, not what the sale costs. The old label
+            // repeated the total while refusing to take it, which tells the
+            // cashier nothing about why nothing is happening.
+            <span className="tnum">{formatLL(shortfall)} still needed</span>
           ) : (
             <>
               <Check className="h-5 w-5" />
@@ -979,6 +1044,17 @@ function CheckoutContent() {
             </>
           )}
         </button>
+        {/* The fastest path on the till, and it had no affordance at all: F4
+            with nothing entered records the exact amount and finishes. */}
+        {!isProcessing && totalPaid === 0 && items.length > 0 && (
+          <p className="mt-2 text-center text-xs text-muted-foreground">
+            Exact money? Press{" "}
+            <kbd className="rounded border border-white/[0.12] bg-white/[0.04] px-1.5 py-0.5 text-[10px] font-bold">
+              F4
+            </kbd>{" "}
+            to finish without entering an amount.
+          </p>
+        )}
       </div>
 
       </div>{/* /entry column */}
