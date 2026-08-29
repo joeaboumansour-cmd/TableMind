@@ -416,6 +416,37 @@ unbounded select at 1000 rows, which would under-report exactly the busiest
 shift. Both return raw LL/USD components so the exchange rate keeps its single
 definition in `format.ts`.
 
+### The page must load fast, and work offline
+
+Both were fixed together; the mechanisms are the same ones history and inventory
+already use.
+
+- **`GET /api/cash-shifts` is three parallel waves, not ten serial `await`s.**
+  It paid full network latency ten times over before rendering anything, which
+  was most of an eight-second load. Only two real dependencies exist: register
+  ids before their shifts, shift ids before their totals. **Add a new query to
+  the wave whose inputs it needs — never as another serial await.**
+- **`resolveCaller()` is one query, not two.** The `stores` existence check was
+  redundant for employees (`store_users.store_id` is a foreign key). It runs on
+  every cash request.
+- **The page paints from `src/lib/cash/snapshot.ts` first**, then revalidates —
+  the "ALWAYS load cached first" pattern from the transactions page. The
+  snapshot is a display convenience, never a source of truth, and is cleared on
+  logout so the next person cannot see the last one's takings.
+- **Aggregate in Postgres, never by summing a select.** `get_unassigned_totals`
+  exists because the route used to pull up to 1000 rows over the wire to add two
+  columns, for a figure that is almost always zero.
+- **Analytics loads after the drawer figures**, not alongside them — a 30-day
+  range scan was holding up the numbers people came to read.
+
+**Offline:** opening a shift, counting and closing it, adjustments, and creating
+a register all queue through `pending_writes`. Register creation generates its
+**id on the client**, so a queued `cash_shift_open` referring to it is valid
+before the register reaches the server; `register_create` is sorted to the front
+of the cash queue for the same reason, and the POST is an idempotent upsert that
+disambiguates a clashing name rather than dropping the drawer. Deciding an
+approval request stays online-only.
+
 ### A sale is never blocked by cash-register state
 
 No register, no shift, no assignment, a failed lookup — the sale completes and

@@ -107,6 +107,18 @@ function saveLegacyAuthToStorage(storeId: string, username: string, licenseExpir
 }
 
 function clearUserFromStorage() {
+  // The cash snapshot holds one store's drawer figures for instant rendering.
+  // Clear it on logout so the next person to sign in on this device — plausibly
+  // a different store, certainly a different shift — cannot be shown the last
+  // one's takings before the first fetch returns.
+  try {
+    for (const key of Object.keys(localStorage)) {
+      if (key.startsWith("goldensquirrel_cash_snapshot_")) localStorage.removeItem(key);
+    }
+  } catch {
+    /* a storage we cannot read is a storage with nothing to leak */
+  }
+
   localStorage.removeItem("goldensquirrel_user");
   localStorage.removeItem("goldensquirrel_auth"); // legacy cleanup
   // NOTE: Do NOT clear cached credentials here.

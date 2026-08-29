@@ -47,6 +47,12 @@ import { useReloadGuard } from "@/lib/pwa/useReloadGuard";
 import { logActivity } from "@/lib/activity/logger";
 import { buildAuthHeaders } from "@/lib/auth/apiHeaders";
 import { isOverdue } from "@/lib/cash/types";
+import {
+  readCashSnapshot,
+  writeCashSnapshot,
+  snapshotAgeMinutes,
+  type CashSnapshot,
+} from "@/lib/cash/snapshot";
 import type {
   CashRegister,
   CashShift,
@@ -113,19 +119,45 @@ export function CashRegisterPage() {
   const { user, isLoading: authLoading, canAccess } = useAuth();
   const { isEnabled, isLoading: flagsLoading } = useFeatureFlags();
 
-  const [isLoading, setIsLoading] = useState(true);
+  // Read the last-known state during the FIRST render, not from an effect.
+  // This is the whole difference between a spinner and an instant page: the
+  // markup below has real registers in it before any network call starts.
+  const seed = useRef<CashSnapshot | null>(
+    typeof window === "undefined" ? null : readCashSnapshot(user?.storeId)
+  ).current;
+
+  // Only ever a blocking spinner when there is genuinely nothing to show.
+  const [isLoading, setIsLoading] = useState(!seed);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isOnline, setIsOnline] = useState(true);
+  const [snapshotAt, setSnapshotAt] = useState<number | null>(seed?.at ?? null);
+  /** True until live data replaces the seeded snapshot. */
+  const [isStale, setIsStale] = useState(!!seed);
 
-  const [registers, setRegisters] = useState<CashRegister[]>([]);
-  const [shifts, setShifts] = useState<CashShift[]>([]);
-  const [totals, setTotals] = useState<Record<string, ShiftTotalsRow>>({});
-  const [adjustments, setAdjustments] = useState<Record<string, CashAdjustment[]>>({});
-  const [pendingByRegister, setPendingByRegister] = useState<Record<string, number>>({});
-  const [unassigned, setUnassigned] = useState<{ count: number; total: number } | null>(null);
+  const [registers, setRegisters] = useState<CashRegister[]>(
+    (seed?.registers as CashRegister[]) || []
+  );
+  const [shifts, setShifts] = useState<CashShift[]>((seed?.shifts as CashShift[]) || []);
+  const [totals, setTotals] = useState<Record<string, ShiftTotalsRow>>(
+    (seed?.totals as Record<string, ShiftTotalsRow>) || {}
+  );
+  const [adjustments, setAdjustments] = useState<Record<string, CashAdjustment[]>>(
+    (seed?.adjustments as Record<string, CashAdjustment[]>) || {}
+  );
+  const [pendingByRegister, setPendingByRegister] = useState<Record<string, number>>(
+    seed?.pendingByRegister || {}
+  );
+  const [unassigned, setUnassigned] = useState<{ count: number; total: number } | null>(
+    seed?.unassigned ?? null
+  );
+
+  /** Shift opens/closes/adjustments made offline and not yet pushed. */
+  const [queuedCashWrites, setQueuedCashWrites] = useState(0);
 
   const [requests, setRequests] = useState<RegisterRequest[]>([]);
-  const [employees, setEmployees] = useState<StoreEmployee[]>([]);
+  const [employees, setEmployees] = useState<StoreEmployee[]>(
+    (seed?.employees as StoreEmployee[]) || []
+  );
 
   const [performance, setPerformance] = useState<{
     registers: RegisterPerformanceRow[];
@@ -243,6 +275,9 @@ export function CashRegisterPage() {
       if (!user?.storeId) return;
 
       if (!connectivity.isOnline) {
+        // Offline is not an error state here. Whatever was last seen stays on
+        // screen and every write below still queues, so a shift can be opened,
+        // counted and closed during an outage.
         setIsOnline(false);
         setIsLoading(false);
         return;
@@ -266,6 +301,19 @@ export function CashRegisterPage() {
         setAdjustments(data.adjustments || {});
         setPendingByRegister(data.pendingByRegister || {});
         setUnassigned(data.unassigned || null);
+        setIsStale(false);
+        setSnapshotAt(Date.now());
+
+        // Paint instantly next time, and let this screen open at all offline.
+        writeCashSnapshot(user.storeId, {
+          registers: data.registers || [],
+          employees: data.employees || [],
+          shifts: data.shifts || [],
+          totals: data.totals || {},
+          adjustments: data.adjustments || {},
+          pendingByRegister: data.pendingByRegister || {},
+          unassigned: data.unassigned || null,
+        });
       } catch (error) {
         console.error("Cash register load error:", error);
         if (!opts?.silent) toast.error(errorMessage(error, "Failed to load cash registers"));
@@ -276,6 +324,31 @@ export function CashRegisterPage() {
     },
     [user]
   );
+
+  /**
+   * How many cash actions are sitting in the offline queue.
+   *
+   * Worth showing because the drawer figures on this page come from the server
+   * and therefore do NOT include anything still queued. Without this, a
+   * supervisor who counted a drawer during an outage sees the shift still open
+   * and reasonably concludes the count was lost.
+   */
+  const countQueuedCashWrites = useCallback(async () => {
+    try {
+      const { getPendingWrites } = await import("@/lib/db/localDB");
+      const writes = await getPendingWrites();
+      setQueuedCashWrites(
+        writes.filter(
+          (w) =>
+            w.type === "cash_shift_open" ||
+            w.type === "cash_shift_close" ||
+            w.type === "cash_adjustment"
+        ).length
+      );
+    } catch {
+      // A queue we cannot read is reported as empty rather than as an error.
+    }
+  }, []);
 
   const loadPerformance = useCallback(async () => {
     if (!user?.storeId || !connectivity.isOnline) return;
@@ -315,12 +388,18 @@ export function CashRegisterPage() {
   }, [user]);
 
   useEffect(() => {
-    if (user?.storeId) {
-      loadData();
+    if (!user?.storeId) return;
+
+    // The drawer figures first; the 30-day performance RPC afterwards.
+    //
+    // Firing all three at once made them compete for connections and for the
+    // database, so the slowest one (a range scan over a month of sales) held up
+    // the one people actually came here to read. Requests ride along with the
+    // main payload because they are cheap and drive a badge on every card.
+    Promise.all([loadData(), loadRequests(), countQueuedCashWrites()]).finally(() => {
       loadPerformance();
-      loadRequests();
-    }
-  }, [user, loadData, loadPerformance, loadRequests]);
+    });
+  }, [user, loadData, loadPerformance, loadRequests, countQueuedCashWrites]);
 
   // ── Approval-request poll ──────────────────────────────────────────────────
   // Plain polling. There is no Supabase realtime anywhere in this app and this
@@ -406,28 +485,56 @@ export function CashRegisterPage() {
       toast.error("Enter the opening float");
       return;
     }
-    if (!connectivity.isOnline && !openValues.registerId) {
-      toast.error("Creating a register needs a connection. Pick an existing one.");
-      return;
-    }
-
     setIsOpening(true);
     try {
       const headers = buildAuthHeaders(user);
       let registerId = openValues.registerId;
 
-      // A brand-new register is created first, online only: two offline devices
-      // both inventing "Front Counter" would produce two drawers to merge later.
+      // ── A brand-new register ─────────────────────────────────────────────
+      // The id is generated HERE, not by the server, so the shift opened on it
+      // below has a valid reference whether or not the register has reached the
+      // server yet. That is what lets this whole flow work during an outage.
       if (!registerId) {
-        const res = await fetch("/api/cash-registers", {
-          method: "POST",
-          headers,
-          body: JSON.stringify({ name: openValues.newRegisterName.trim() }),
+        const newName = openValues.newRegisterName.trim();
+        registerId = crypto.randomUUID();
+
+        if (connectivity.isOnline) {
+          const res = await fetch("/api/cash-registers", {
+            method: "POST",
+            headers,
+            body: JSON.stringify({ id: registerId, name: newName }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(data.error || "Failed to create register");
+          registerId = data.register.id;
+        } else {
+          const { queueRegisterCreate } = await import("@/lib/db/localDB");
+          await queueRegisterCreate({
+            store_id: user!.storeId,
+            register_id: registerId,
+            name: newName,
+          });
+
+          // Show it immediately. The server has never heard of this drawer, so
+          // the next refresh cannot return it — without this the supervisor
+          // would open a shift onto a register that is not on screen.
+          setRegisters((prev) => [
+            ...prev,
+            {
+              id: registerId!,
+              store_id: user!.storeId,
+              name: newName,
+              is_active: true,
+              sort_order: prev.length,
+              created_at: new Date().toISOString(),
+            },
+          ]);
+        }
+
+        logActivity("cash.register_create", {
+          target: newName,
+          details: { online: connectivity.isOnline },
         });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(data.error || "Failed to create register");
-        registerId = data.register.id;
-        logActivity("cash.register_create", { target: data.register.name });
       }
 
       logActivity("cash.shift_open", {
@@ -457,6 +564,7 @@ export function CashRegisterPage() {
           user_name: user!.displayName || user!.username,
         });
         toast.info("Shift opening queued — will sync when online");
+        countQueuedCashWrites();
       } else {
         const res = await fetch("/api/cash-shifts", {
           method: "POST",
@@ -518,6 +626,7 @@ export function CashRegisterPage() {
           user_name: user!.displayName || user!.username,
         });
         toast.info("Shift closing queued — will sync when online");
+        countQueuedCashWrites();
       } else {
         const res = await fetch("/api/cash-shifts", {
           method: "POST",
@@ -590,6 +699,7 @@ export function CashRegisterPage() {
           reason: adjValues.reason.trim(),
         });
         toast.info("Adjustment queued — will sync when online");
+        countQueuedCashWrites();
       } else {
         const res = await fetch("/api/cash-adjustments", {
           method: "POST",
@@ -736,6 +846,7 @@ export function CashRegisterPage() {
                   loadData();
                   loadPerformance();
                   loadRequests();
+                  countQueuedCashWrites();
                 }}
                 disabled={isRefreshing}
                 aria-label="Refresh"
@@ -760,11 +871,45 @@ export function CashRegisterPage() {
       </header>
 
       <div className="no-scrollbar container mx-auto min-h-0 max-w-5xl flex-1 space-y-4 overflow-y-auto px-4 py-6">
-        {!isOnline && (
-          <div className="flex items-center gap-2 rounded-lg bg-muted/50 p-3 text-sm text-muted-foreground">
-            <WifiOff className="h-4 w-4 shrink-0" />
-            Offline — register figures below may be stale. Opening and closing shifts still
-            works and will sync when the connection returns.
+        {/* Offline, or showing a snapshot while live figures load. Both mean
+            the same thing to the reader — these numbers are not current — so
+            they share one line rather than competing for attention. */}
+        {(!isOnline || (isStale && snapshotAt !== null)) && (
+          <div className="flex items-start gap-2 rounded-lg bg-muted/50 p-3 text-sm text-muted-foreground">
+            <WifiOff className="mt-0.5 h-4 w-4 shrink-0" />
+            <div>
+              {!isOnline ? (
+                <>
+                  <span className="font-medium text-foreground">Offline.</span> Showing the last
+                  known figures
+                  {snapshotAt !== null && snapshotAgeMinutes({ at: snapshotAt } as CashSnapshot) > 0
+                    ? ` from ${snapshotAgeMinutes({ at: snapshotAt } as CashSnapshot)} min ago`
+                    : ""}
+                  . Opening, counting and closing shifts all still work — they queue and sync
+                  when the connection returns.
+                </>
+              ) : (
+                <>Showing the last known figures while today&rsquo;s load&hellip;</>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Queued cash actions are NOT in the server figures above. Said plainly,
+            because a supervisor who counted a drawer during an outage would
+            otherwise see the shift still open and think the count was lost. */}
+        {queuedCashWrites > 0 && (
+          <div className="flex items-start gap-2 rounded-lg bg-primary/10 p-3 text-sm">
+            <RefreshCw className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+            <div>
+              <span className="font-medium">
+                {queuedCashWrites} cash action{queuedCashWrites !== 1 ? "s" : ""} waiting to sync
+              </span>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                Shift opens, counts and adjustments made offline. They are saved on this device
+                and are not reflected in the figures below until they reach the server.
+              </p>
+            </div>
           </div>
         )}
 
@@ -911,7 +1056,7 @@ export function CashRegisterPage() {
         onChange={setOpenValues}
         onSubmit={handleOpenShift}
         isSubmitting={isOpening}
-        canCreateRegister={canEdit && isOnline}
+        canCreateRegister={canEdit}
       />
 
       <CloseShiftDialog

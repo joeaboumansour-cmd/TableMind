@@ -63,154 +63,172 @@ interface ShiftTotalsRow {
 }
 
 // ── GET /api/cash-shifts ────────────────────────────────────────────────────
-// Returns every active register with its current shift, that shift's sales
-// totals and adjustments, plus the store's unassigned sales for today.
+// Every active register with its current shift, that shift's sales totals and
+// adjustments, the pending approval counts, the assignable employees, and the
+// store's unassigned takings for today.
+//
+// ## Why this is written as three waves
+//
+// It used to be ten `await`s in a row. Each one is a separate round trip to
+// Supabase, so the page paid the full network latency ten times over before it
+// could render anything — and the cash page fires two other requests alongside
+// this one. That was most of an eight-second load.
+//
+// There are only two genuine data dependencies here: you need the register ids
+// before you can ask about their shifts, and the shift ids before you can total
+// their sales. Everything else is independent and now runs concurrently.
+//
+// Keep it that way. If you add a query, put it in the wave whose inputs it
+// actually needs rather than appending another serial await.
 export async function GET(request: Request) {
   try {
     const supabase = await createServiceRoleClient();
     const { storeId, userId } = readAuthHeader(request);
 
-    const caller = await resolveCaller(supabase, storeId, userId);
+    const startOfToday = new Date();
+    startOfToday.setHours(0, 0, 0, 0);
+
+    // ── Wave 1 ───────────────────────────────────────────────────────────────
+    // Auth runs alongside the store-scoped reads rather than in front of them.
+    // Nothing is returned until the caller is confirmed below; this only
+    // overlaps the latency. All of these are already scoped to storeId, so a
+    // failed auth discards them without ever having read another tenant.
+    const [caller, registersRes, employeesRes, pendingRes, unassignedRes] = await Promise.all([
+      resolveCaller(supabase, storeId, userId),
+      supabase
+        .from("cash_registers")
+        .select("*")
+        .eq("store_id", storeId)
+        .eq("is_active", true)
+        .order("sort_order", { ascending: true })
+        .order("created_at", { ascending: true }),
+      // The people a shift can be assigned to, for the Open Shift dialog.
+      // password_hash is NOT selected. It must never leave the database.
+      supabase
+        .from("store_users")
+        .select("id, username, display_name, permissions")
+        .eq("store_id", storeId)
+        .eq("is_active", true)
+        .order("display_name", { ascending: true }),
+      supabase
+        .from("register_requests")
+        .select("register_id")
+        .eq("store_id", storeId)
+        .eq("status", "pending"),
+      supabase.rpc("get_unassigned_totals", {
+        p_store_id: storeId,
+        p_from: startOfToday.toISOString(),
+      }),
+    ]);
+
     if (!caller) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const { data: registers, error: regErr } = await supabase
-      .from("cash_registers")
-      .select("*")
-      .eq("store_id", storeId)
-      .eq("is_active", true)
-      .order("sort_order", { ascending: true })
-      .order("created_at", { ascending: true });
-
-    if (regErr) {
-      console.error("Cash shifts GET (registers):", regErr.message);
+    if (registersRes.error) {
+      console.error("Cash shifts GET (registers):", registersRes.error.message);
       return NextResponse.json({ error: "Failed to load registers" }, { status: 500 });
     }
 
-    const registerList = registers || [];
+    const registerList = (registersRes.data || []) as Array<{ id: string }>;
+
+    // Sales today that reached no shift — a cashier selling with nothing
+    // assigned to them. Surfaced because a non-zero figure means a person is
+    // misconfigured, not that money is missing.
+    const unassignedRow = (unassignedRes.data as Array<{ txn_count: number; total: number }> | null)?.[0];
+    const unassigned = {
+      count: Number(unassignedRow?.txn_count) || 0,
+      total: Number(unassignedRow?.total) || 0,
+    };
+
+    const pendingByRegister: Record<string, number> = {};
+    for (const r of (pendingRes.data || []) as Array<{ register_id: string }>) {
+      pendingByRegister[r.register_id] = (pendingByRegister[r.register_id] || 0) + 1;
+    }
+
     if (registerList.length === 0) {
-      return NextResponse.json({ registers: [], shifts: [], totals: {}, adjustments: {}, unassigned: null });
-    }
-
-    const registerIds = registerList.map((r: { id: string }) => r.id);
-
-    // The current shift per register: every open one, plus the most recent
-    // closed one so a register that has finished still shows its final count.
-    const { data: openShifts } = await supabase
-      .from("cash_shifts")
-      .select("*")
-      .eq("store_id", storeId)
-      .eq("status", "open")
-      .in("register_id", registerIds);
-
-    const { data: recentClosed } = await supabase
-      .from("cash_shifts")
-      .select("*")
-      .eq("store_id", storeId)
-      .eq("status", "closed")
-      .in("register_id", registerIds)
-      .order("closed_at", { ascending: false })
-      .limit(registerIds.length * 3);
-
-    const openByRegister = new Map<string, ShiftRow>();
-    for (const s of openShifts || []) openByRegister.set(s.register_id, s);
-
-    const shifts: ShiftRow[] = [...(openShifts || [])];
-    const seenClosed = new Set<string>();
-    for (const s of recentClosed || []) {
-      if (openByRegister.has(s.register_id)) continue; // an open shift wins
-      if (seenClosed.has(s.register_id)) continue; // only the latest
-      seenClosed.add(s.register_id);
-      shifts.push(s);
-    }
-
-    const shiftIds = shifts.map((s) => s.id);
-
-    // Aggregate sales in Postgres. Summing in JS would silently truncate at
-    // PostgREST's 1000-row cap and under-report a busy shift's drawer.
-    const totals: Record<string, ShiftTotalsRow> = {};
-    if (shiftIds.length > 0) {
-      const { data: totalRows, error: totalsErr } = await supabase.rpc("get_shift_totals", {
-        p_store_id: storeId,
-        p_shift_ids: shiftIds,
+      return NextResponse.json({
+        registers: [],
+        employees: employeesRes.data || [],
+        shifts: [],
+        totals: {},
+        adjustments: {},
+        pendingByRegister,
+        unassigned,
       });
-      if (totalsErr) {
-        console.error("Cash shifts GET (totals):", totalsErr.message);
-        return NextResponse.json({ error: "Failed to total shift sales" }, { status: 500 });
-      }
-      for (const row of (totalRows as ShiftTotalsRow[]) || []) {
-        totals[row.shift_id] = row;
-      }
     }
 
-    // Adjustments for the shifts on screen.
-    const adjustments: Record<string, AdjustmentRow[]> = {};
-    if (shiftIds.length > 0) {
-      const { data: adjRows } = await supabase
-        .from("cash_adjustments")
+    const registerIds = registerList.map((r) => r.id);
+
+    // ── Wave 2 ───────────────────────────────────────────────────────────────
+    // Needs the register ids. The current shift per register: every open one,
+    // plus recent closed ones so a finished register still shows its last count.
+    const [openRes, closedRes] = await Promise.all([
+      supabase
+        .from("cash_shifts")
         .select("*")
         .eq("store_id", storeId)
-        .in("shift_id", shiftIds)
-        .order("created_at", { ascending: true });
+        .eq("status", "open")
+        .in("register_id", registerIds),
+      supabase
+        .from("cash_shifts")
+        .select("*")
+        .eq("store_id", storeId)
+        .eq("status", "closed")
+        .in("register_id", registerIds)
+        .order("closed_at", { ascending: false })
+        .limit(registerIds.length * 3),
+    ]);
 
-      for (const a of adjRows || []) {
+    const openShifts = (openRes.data || []) as ShiftRow[];
+    const openByRegister = new Map<string, ShiftRow>();
+    for (const sh of openShifts) openByRegister.set(sh.register_id, sh);
+
+    const shifts: ShiftRow[] = [...openShifts];
+    const seenClosed = new Set<string>();
+    for (const sh of (closedRes.data || []) as ShiftRow[]) {
+      if (openByRegister.has(sh.register_id)) continue; // an open shift wins
+      if (seenClosed.has(sh.register_id)) continue; // only the latest
+      seenClosed.add(sh.register_id);
+      shifts.push(sh);
+    }
+
+    const shiftIds = shifts.map((sh) => sh.id);
+
+    const totals: Record<string, ShiftTotalsRow> = {};
+    const adjustments: Record<string, AdjustmentRow[]> = {};
+
+    if (shiftIds.length > 0) {
+      // ── Wave 3 ─────────────────────────────────────────────────────────────
+      // Needs the shift ids. Sales are aggregated in Postgres: summing a select
+      // in JS would silently stop at PostgREST's 1000-row cap and under-report
+      // exactly the busiest shift.
+      const [totalsRes, adjRes] = await Promise.all([
+        supabase.rpc("get_shift_totals", { p_store_id: storeId, p_shift_ids: shiftIds }),
+        supabase
+          .from("cash_adjustments")
+          .select("*")
+          .eq("store_id", storeId)
+          .in("shift_id", shiftIds)
+          .order("created_at", { ascending: true }),
+      ]);
+
+      if (totalsRes.error) {
+        console.error("Cash shifts GET (totals):", totalsRes.error.message);
+        return NextResponse.json({ error: "Failed to total shift sales" }, { status: 500 });
+      }
+
+      for (const row of (totalsRes.data as ShiftTotalsRow[]) || []) {
+        totals[row.shift_id] = row;
+      }
+      for (const a of (adjRes.data || []) as AdjustmentRow[]) {
         (adjustments[a.shift_id] ||= []).push(a);
       }
     }
 
-    // Pending approval requests, counted per register for the card badges.
-    const pendingByRegister: Record<string, number> = {};
-    const { data: pendingRows } = await supabase
-      .from("register_requests")
-      .select("register_id")
-      .eq("store_id", storeId)
-      .eq("status", "pending");
-    for (const r of pendingRows || []) {
-      pendingByRegister[r.register_id] = (pendingByRegister[r.register_id] || 0) + 1;
-    }
-
-    // Sales today that reached no shift — a device with no register configured,
-    // or one selling while its register had nothing open. Surfaced because a
-    // non-zero figure here means a till is misconfigured, not that money is
-    // missing.
-    const startOfToday = new Date();
-    startOfToday.setHours(0, 0, 0, 0);
-
-    const { data: unassignedRows } = await supabase
-      .from("transactions")
-      .select("amount_paid, change_given")
-      .eq("store_id", storeId)
-      .is("shift_id", null)
-      .gte("created_at", startOfToday.toISOString())
-      .limit(1000);
-
-    const unassigned = {
-      count: (unassignedRows || []).length,
-      total: (unassignedRows || []).reduce(
-        (s: number, t: { amount_paid: number | null; change_given: number | null }) =>
-          s + (t.amount_paid || 0) - (t.change_given || 0),
-        0
-      ),
-      /** True when the 1000-row cap may have clipped the list — display hint only. */
-      truncated: (unassignedRows || []).length >= 1000,
-    };
-
-    // The people a shift can be assigned to. Sent with the page rather than
-    // from a second endpoint because the Open Shift dialog always needs it and
-    // a store's employee list is a handful of rows.
-    //
-    // password_hash is NOT selected. It must never leave the database.
-    const { data: employees } = await supabase
-      .from("store_users")
-      .select("id, username, display_name, permissions")
-      .eq("store_id", storeId)
-      .eq("is_active", true)
-      .order("display_name", { ascending: true });
-
     return NextResponse.json({
-      registers: registerList,
-      employees: employees || [],
+      registers: registersRes.data || [],
+      employees: employeesRes.data || [],
       shifts,
       totals,
       adjustments,

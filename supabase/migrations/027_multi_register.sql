@@ -534,3 +534,42 @@ $perf$;
 REVOKE ALL ON FUNCTION get_register_performance(UUID, TIMESTAMPTZ, TIMESTAMPTZ) FROM PUBLIC;
 REVOKE ALL ON FUNCTION get_register_performance(UUID, TIMESTAMPTZ, TIMESTAMPTZ) FROM anon;
 GRANT EXECUTE ON FUNCTION get_register_performance(UUID, TIMESTAMPTZ, TIMESTAMPTZ) TO service_role;
+
+
+-- ============================================================================
+-- UNASSIGNED TAKINGS — sales that reached no drawer
+-- ============================================================================
+-- A non-zero result means a cashier is selling with no shift assigned to them,
+-- so their takings are recorded but attributed to nothing. The cash page shows
+-- it as a diagnosis, not as missing money.
+--
+-- An RPC because the route previously pulled up to 1000 rows across the wire
+-- to add two columns together — the slowest query on a page whose whole job is
+-- to load fast, for a figure that is almost always zero.
+
+CREATE OR REPLACE FUNCTION get_unassigned_totals(p_store_id UUID, p_from TIMESTAMPTZ)
+RETURNS TABLE (txn_count BIGINT, total DECIMAL(14,2))
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $unassigned$
+BEGIN
+  RETURN QUERY
+  SELECT
+    COUNT(*)::BIGINT,
+    COALESCE(SUM(COALESCE(t.amount_paid, 0) - COALESCE(t.change_given, 0)), 0)::DECIMAL(14,2)
+  FROM transactions t
+  WHERE t.store_id = p_store_id
+    AND t.shift_id IS NULL
+    AND t.created_at >= p_from;
+END
+$unassigned$;
+
+REVOKE ALL ON FUNCTION get_unassigned_totals(UUID, TIMESTAMPTZ) FROM PUBLIC;
+REVOKE ALL ON FUNCTION get_unassigned_totals(UUID, TIMESTAMPTZ) FROM anon;
+GRANT EXECUTE ON FUNCTION get_unassigned_totals(UUID, TIMESTAMPTZ) TO service_role;
+
+-- Supports the lookup above, which is otherwise a scan for a figure that is
+-- normally zero.
+CREATE INDEX IF NOT EXISTS idx_transactions_unassigned
+  ON transactions(store_id, created_at DESC) WHERE shift_id IS NULL;

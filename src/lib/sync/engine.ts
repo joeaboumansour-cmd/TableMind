@@ -527,8 +527,17 @@ class SyncEngine {
       ...(write.type === "cash_shift_open" ? { action: "open", register_id: p.register_id, assigned_user_id: p.assigned_user_id, label: p.label, business_date: p.business_date, opening_ll: p.opening_ll, opening_usd: p.opening_usd, user_id: p.user_id, user_name: p.user_name } : {}),
       ...(write.type === "cash_shift_close" ? { action: "close", shift_id: p.shift_id, closing_ll: p.closing_ll, closing_usd: p.closing_usd, notes: p.notes, user_id: p.user_id, user_name: p.user_name } : {}),
       ...(write.type === "cash_adjustment" ? { shift_id: p.shift_id, adjustment_type: p.adjustment_type, amount_ll: p.amount_ll, amount_usd: p.amount_usd, reason: p.reason, user_id: p.user_id, user_name: p.user_name } : {}),
+      // The id was generated on the client and is the row's real primary key,
+      // so the queued shift that points at it stays valid. Sending it also
+      // makes this push idempotent.
+      ...(write.type === "register_create" ? { id: p.register_id, name: p.name } : {}),
     });
-    const url = write.type === "cash_shift_open" || write.type === "cash_shift_close" ? "/api/cash-shifts" : "/api/cash-adjustments";
+    const url =
+      write.type === "register_create"
+        ? "/api/cash-registers"
+        : write.type === "cash_shift_open" || write.type === "cash_shift_close"
+          ? "/api/cash-shifts"
+          : "/api/cash-adjustments";
     const r = await fetch(url, { method: "POST", headers: h, body });
     if (!r.ok) throw new Error(`${write.type} failed (${r.status})`);
   }
@@ -628,7 +637,11 @@ class SyncEngine {
       (w) => w.type === "stock_decrement"
     );
     const cashWrites = pendingWrites.filter(
-      (w) => w.type === "cash_shift_open" || w.type === "cash_shift_close" || w.type === "cash_adjustment"
+      (w) =>
+        w.type === "register_create" ||
+        w.type === "cash_shift_open" ||
+        w.type === "cash_shift_close" ||
+        w.type === "cash_adjustment"
     );
     // Products named at the till during an outage.
     const catalogueWrites = pendingWrites.filter((w) => w.type === "product_upsert");
@@ -702,7 +715,17 @@ class SyncEngine {
 
     const supabase = createClient();
 
-    // Process cash operations first (order matters)
+    // Process cash operations first (order matters).
+    //
+    // Within them, a register_create must be pushed BEFORE the cash_shift_open
+    // that refers to it, or the shift insert fails its foreign key. Queue order
+    // already achieves this — the register is queued first — but sort
+    // defensively so a reordered or partially-drained queue cannot break it.
+    cashWrites.sort(
+      (a, b) =>
+        (a.type === "register_create" ? 0 : 1) - (b.type === "register_create" ? 0 : 1)
+    );
+
     for (const write of cashWrites) {
       // Cash writes incremented retry_count but never checked it, so a
       // permanently-failing shift open/close retried every 30s forever.

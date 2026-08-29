@@ -102,31 +102,73 @@ export async function POST(request: Request) {
       );
     }
 
-    const { data, error } = await supabase
-      .from("cash_registers")
-      .insert({
-        store_id: storeId,
-        name,
-        sort_order: count ?? 0,
-        created_by: caller.userId,
-        created_by_name: caller.name,
-      })
-      .select()
-      .single();
+    // The client may supply the id. That is how a register created during an
+    // outage keeps its identity: a queued cash_shift_open already refers to
+    // this id, so the shift's reference must still be valid once the register
+    // lands. It also makes this call idempotent — a retried push finds the row
+    // already there instead of creating a second drawer.
+    const clientId = typeof body?.id === "string" && body.id ? body.id : null;
 
-    if (error) {
+    if (clientId) {
+      const { data: already } = await supabase
+        .from("cash_registers")
+        .select("*")
+        .eq("id", clientId)
+        .eq("store_id", storeId)
+        .maybeSingle();
+
+      if (already) {
+        return NextResponse.json({ register: already, duplicated: true });
+      }
+    }
+
+    // A name collision must not lose the drawer. Two supervisors offline can
+    // both invent "Front Counter", and the second one's register still holds a
+    // real shift with real money pointing at it — so it is admitted under a
+    // disambiguated name for someone to rename later, rather than rejected.
+    //
+    // An interactive create (no client id) still gets a plain 409: there is a
+    // person watching who can simply pick another name.
+    let finalName = name;
+
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const { data, error } = await supabase
+        .from("cash_registers")
+        .insert({
+          ...(clientId && { id: clientId }),
+          store_id: storeId,
+          name: finalName,
+          sort_order: count ?? 0,
+          created_by: caller.userId,
+          created_by_name: caller.name,
+        })
+        .select()
+        .single();
+
+      if (!error) {
+        return NextResponse.json({ register: data }, { status: 201 });
+      }
+
       // Partial unique index on (store_id, lower(name)) where is_active.
-      if (error.code === "23505") {
+      if (error.code !== "23505") {
+        console.error("Cash register create error:", error.message);
+        return NextResponse.json({ error: "Failed to create register" }, { status: 500 });
+      }
+
+      if (!clientId) {
         return NextResponse.json(
           { error: `There is already a register called "${name}"` },
           { status: 409 }
         );
       }
-      console.error("Cash register create error:", error.message);
-      return NextResponse.json({ error: "Failed to create register" }, { status: 500 });
+
+      finalName = `${name} (${attempt + 2})`;
     }
 
-    return NextResponse.json({ register: data }, { status: 201 });
+    return NextResponse.json(
+      { error: `Could not find a free name for "${name}"` },
+      { status: 409 }
+    );
   } catch (error) {
     console.error("Cash register POST error:", errorMessage(error));
     return NextResponse.json({ error: "Failed to create register" }, { status: 500 });

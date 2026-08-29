@@ -124,7 +124,7 @@ export interface QueuedTransactionItem {
 
 export interface PendingWrite {
   id: string;
-  type: "transaction" | "stock_decrement" | "favorite_add" | "favorite_remove" | "cash_shift_open" | "cash_shift_close" | "cash_adjustment" | "product_upsert";
+  type: "transaction" | "stock_decrement" | "favorite_add" | "favorite_remove" | "cash_shift_open" | "cash_shift_close" | "cash_adjustment" | "product_upsert" | "register_create";
   payload: unknown;
   created_at: string;
   retry_count: number;
@@ -974,6 +974,43 @@ export interface CashAdjustmentPayload {
   reason: string;
   user_id?: string;
   user_name?: string;
+}
+
+export interface RegisterCreatePayload {
+  store_id: string;
+  /**
+   * Generated on the CLIENT, and the row's real primary key.
+   *
+   * This is what makes offline register creation safe: a queued
+   * `cash_shift_open` refers to this id, so the shift's reference is already
+   * valid before the register reaches the server. If the id were assigned
+   * server-side the queued shift would point at nothing.
+   *
+   * It also makes the server call an idempotent upsert rather than an insert
+   * that could run twice — the same reasoning as products/write.ts.
+   */
+  register_id: string;
+  name: string;
+}
+
+/**
+ * Queue a register creation for later sync.
+ *
+ * Rare — a register is set up once and kept — but a supervisor opening a new
+ * drawer during an outage should not be told to come back later, and the shift
+ * they open on it has to have something to point at.
+ */
+export async function queueRegisterCreate(payload: RegisterCreatePayload): Promise<void> {
+  const pendingWrite: PendingWrite = {
+    id: crypto.randomUUID(),
+    type: "register_create",
+    payload,
+    created_at: new Date().toISOString(),
+    retry_count: 0,
+    last_error: null,
+  };
+  await db.pending_writes.add(pendingWrite);
+  console.log(`[LocalDB] Queued register create "${payload.name}"`);
 }
 
 /**

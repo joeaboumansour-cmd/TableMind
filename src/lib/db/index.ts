@@ -37,6 +37,7 @@ export {
   queueStockDecrement,
   queueStockDecrementsForTransaction,
   decrementCachedStock,
+  queueRegisterCreate,
   queueCashShiftOpen,
   queueCashShiftClose,
   queueCashAdjustment,

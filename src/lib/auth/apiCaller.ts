@@ -75,20 +75,21 @@ export async function resolveCaller(
 ): Promise<Caller | null> {
   if (!storeId) return null;
 
-  const { data: store } = await supabase
-    .from("stores")
-    .select("id, username")
-    .eq("id", storeId)
-    .maybeSingle();
-
-  if (!store) return null;
-
   // A missing user_id used to mean "owner". It now means "unidentified".
   if (!userId) return null;
 
-  // The owner's session id is the store id. This is a positive check against a
-  // value the server just loaded, not an inference from an absent field.
+  // ── Owner ────────────────────────────────────────────────────────────────
+  // The owner's session id IS the store id. One query, and it doubles as the
+  // "does this store exist" check.
   if (userId === storeId) {
+    const { data: store } = await supabase
+      .from("stores")
+      .select("id, username")
+      .eq("id", storeId)
+      .maybeSingle();
+
+    if (!store) return null;
+
     return {
       isOwner: true,
       userId: null,
@@ -97,9 +98,15 @@ export async function resolveCaller(
     };
   }
 
+  // ── Employee ─────────────────────────────────────────────────────────────
+  // Also ONE query. The separate `stores` existence check that used to run
+  // first was redundant: store_users.store_id is a foreign key, so a row
+  // matching this store_id proves the store exists. Dropping it halves the
+  // auth cost of every request, and this runs on every call to every cash
+  // route — three of which the cash page fires at once.
   const { data: emp } = await supabase
     .from("store_users")
-    .select("id, store_id, display_name, username, is_active, permissions")
+    .select("id, display_name, username, is_active, permissions")
     .eq("id", userId)
     .eq("store_id", storeId) // tenancy scoping: an employee of another store is not a caller here
     .maybeSingle();
