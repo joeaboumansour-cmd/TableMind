@@ -823,7 +823,7 @@ these three it is achievable only in a real shop, on one store, watched.
 | P-2 confirm 025 + 037 applied | DONE | | | | **Both applied.** Do NOT run 025 — see note below |
 | 0.1 harness env switch + prod-URL guard | DONE | e8b8792 | | | Guard + `.env.test` + harness tenant. 6 guard cases verified |
 | 0.2 field measurement events | DONE | | | | 4 events live through real ingest. Client emitters wired, not yet observed firing — see note |
-| 0.3 local trace baselines | PARTIAL | | see below | | Bundle half DONE (`npm run baseline`). Runtime traces need a signed-in session |
+| 0.3 local trace baselines | DONE | | see below | | Bundles + request structure + real API latency. CPU/network throttling unavailable — see caveats |
 | 0.4 budget gates | NOT STARTED | | | | Permanent |
 | 1.1 fixtures & seeding | NOT STARTED | | | | |
 | 1.2 pure-logic characterization | NOT STARTED | | | | |
@@ -963,6 +963,69 @@ main-thread long tasks. Every Tier 1 and Tier 2 screen is behind auth. The
 `perf.*` events from 0.2 will supply the field version of these from real
 devices, which is the better number anyway; local traces remain useful for
 attributing a regression to a specific change.
+
+### 0.3 baseline — runtime (2026-08-30)
+
+Captured on the **production build** (`npm run start`, not `next dev` — dev
+serves unminified code with on-demand compilation and its numbers mean
+nothing), signed in as store **`daoud`**: **2,280 products, 93 transactions**.
+A later run is only comparable against the same store.
+
+> **Read the asymmetry before reading the numbers.** Static assets came from
+> **localhost** — no network latency, warm HTTP cache (`transferKB` reads 0
+> throughout, which is the tell). Those paint timings are a floor no shop will
+> ever see. But the **API and Supabase calls went to the real remote project**,
+> so *those* latencies are real. The request-structure and API columns are the
+> trustworthy part of this table; FCP/LCP are useful only for detecting a
+> regression under identical conditions.
+
+| Route | requests | depth | API calls | API depth | FCP | LCP |
+|---|---:|---:|---:|---:|---:|---:|
+| `/pos` | 73 | 34 | 4 | 2 | 28 | 68 |
+| `/pos/products` | 59 | 35 | 4 | 2 | 80 | 136 |
+| `/pos/cash` | 61 | 34 | 4 | 2 | 24 | **1460** |
+| `/checkout` | 60 | 33 | 1 | 1 | 56 | 140 |
+| `/transactions` | 59 | 32 | 4 | 2 | 88 | 776 |
+
+**The `/pos` boot chain, with real remote latency:**
+
+| # | start | dur | call |
+|---|---:|---:|---|
+| 1 | 82 | 310 | `/api/admin/stores/features` |
+| 2 | 102 | **599** | `/api/my-shift` |
+| 3 | 150 | 291 | `product_favorites` |
+| 4 | 154 | 313 | `products` (catalogue delta) |
+| 5 | **468** | 299 | `products?select=id` (reconcile id set) |
+
+**Four findings worth acting on:**
+
+1. **Call 5 is serial behind call 4.** It starts at 468 ms, and call 4 ended at
+   467 ms. The reconcile id-set fetch waits for the delta pull, so the boot
+   chain is ~767 ms of API time where ~470 ms would do. This is the single
+   clearest Phase 3 target on the till, and it is invisible in any
+   localhost-only measurement because it is a *dependency*, not a slow query.
+2. **`/api/my-shift` is the slowest call at boot (599 ms)** and it gates
+   nothing a cashier needs in order to scan. Phase 5 candidate: move it off the
+   boot path entirely.
+3. **`/pos/cash` LCP is 1460 ms even with zero asset latency** — 10× to 20×
+   every other route. Probably the analytics chart, which CLAUDE.md says loads
+   *after* the drawer figures deliberately, so this may be correct behaviour
+   rather than a defect. **Confirm which before touching it**; if the drawer
+   numbers paint early and only the chart is late, this is working as designed.
+4. **Request depth is 32–35 on every route** while API depth is only 1–2. The
+   depth is script chunks loading in sequence, not data — which points at the
+   same weak code splitting the bundle numbers showed, and at Phase 7 rather
+   than Phase 2.
+
+**Not measured, and why:**
+
+- **CPU 4× and Slow 4G throttling** — the browser tooling here exposes no CDP
+  throttling. The `perf.*` events from 0.2 are the intended answer: real
+  devices on real connections beat any emulation.
+- **Main-thread long tasks** — the `longtask` PerformanceObserver **never fires
+  in this browser**, confirmed with a control that deliberately blocked the
+  main thread for 200 ms and still produced zero entries. Recording 0 would
+  have been a fabricated number, so the metric is dropped rather than reported.
 
 ### 0.2 notes (2026-08-30)
 
