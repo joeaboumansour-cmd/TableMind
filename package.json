@@ -15,7 +15,10 @@
     "baseline": "node scripts/measure-baseline.mjs",
     "harness:guard": "node harness/guard/assert-not-production.mjs",
     "verify:budgets": "node scripts/verify-budgets.mjs",
-    "baseline:update": "node scripts/measure-baseline.mjs --update"
+    "baseline:update": "node scripts/measure-baseline.mjs --update",
+    "harness:seed": "node harness/fixtures/seed.mjs",
+    "harness:seed:down": "node harness/fixtures/seed.mjs --down",
+    "harness:verify": "node harness/fixtures/verify.mjs"
   },
   "dependencies": {
     "@ducanh2912/next-pwa": "^10.2.9",

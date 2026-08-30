@@ -825,7 +825,7 @@ these three it is achievable only in a real shop, on one store, watched.
 | 0.2 field measurement events | DONE | | | | 4 events live through real ingest. Client emitters wired, not yet observed firing — see note |
 | 0.3 local trace baselines | DONE | | see below | | Bundles + request structure + real API latency. CPU/network throttling unavailable — see caveats |
 | 0.4 budget gates | DONE | | | | `verify:budgets` in `npm run build`. Permanent — survives Phase 9. API-depth budget deferred to Phase 1 |
-| 1.1 fixtures & seeding | NOT STARTED | | | | |
+| 1.1 fixtures & seeding | DONE | | | | 2,492 products / 300 txns. Determinism + tenant isolation both proven |
 | 1.2 pure-logic characterization | NOT STARTED | | | | |
 | 1.3 API contract snapshots | NOT STARTED | | | | |
 | 1.4 E2E golden flows | NOT STARTED | | | | |
@@ -963,6 +963,40 @@ main-thread long tasks. Every Tier 1 and Tier 2 screen is behind auth. The
 `perf.*` events from 0.2 will supply the field version of these from real
 devices, which is the better number anyway; local traces remain useful for
 attributing a regression to a specific change.
+
+### 1.1 fixtures (2026-08-31)
+
+`npm run harness:seed` / `harness:verify` / `harness:seed:down`.
+`harness/README.md` is written and is the entry point for anyone adding a case.
+
+**Contents:** 2,492 products (USD-priced, zero-cost, one above the old
+`DECIMAL(10,2)` ceiling, discounted, a variant pair, 4 ingredients in grams, a
+menu item, a combo), 5 categories, a 4-component recipe, 2 store users with
+*different* permissions (one full, one `pos`-only — `inventory` is the pricing
+permission and the till behaves materially differently without it), 1 register,
+1 closed + 1 open shift, and 300 transactions / 592 line items spanning the
+**2026-03-29 Beirut DST boundary**.
+
+**Two properties were proven rather than assumed:**
+
+1. **Determinism.** Every table was fingerprinted (SHA over ordered rows),
+   re-seeded, and fingerprinted again — **byte-identical**. Ids are derived,
+   prices come from a seeded PRNG, timestamps from fixed anchors. Without this
+   every contract and visual snapshot in Phase 1 would be meaningless.
+2. **Tenant isolation held.** After seeding, the other stores still have
+   exactly their pre-existing **4,999 products, 118 transactions, 5 stores**.
+   This is asserted in `verify.mjs` on every run, because the service-role key
+   bypasses RLS and the harness's own filtering is the only thing enforcing it.
+
+`verify.mjs` runs 17 assertions including the trigger-computed
+`profit_percentage` (zero-cost → 0, no divide-by-zero; discounted row matches
+the formula), the 150,000,000 LL price surviving, sales on both sides of the
+DST boundary, and retail lines carrying `modifiers` NULL rather than `[]`.
+
+> **PostgREST rejects a bulk insert whose objects differ in shape**
+> ("All object keys must match") — it builds one multi-row INSERT with a fixed
+> column list. `uniformKeys()` pads the union with nulls. Worth knowing before
+> adding a column to only some fixture rows.
 
 ### 0.4 budget gates (2026-08-30)
 
