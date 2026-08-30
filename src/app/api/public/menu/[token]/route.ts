@@ -12,6 +12,10 @@
 // column list for that reason — `select("*")` on any of these tables would
 // leak margins onto a poster.
 //
+// Stock is not read here AT ALL. The menu never marks anything sold out —
+// a shop's counted stock is not what is actually in the kitchen, and telling
+// a customer an item is finished when it is not loses the sale outright.
+//
 // The store id is deliberately NOT in the response either. Knowing it is
 // currently most of what you need to forge owner identity (audit P0-1), which
 // is the whole reason this route is keyed by a token — see migration 035.
@@ -78,7 +82,7 @@ export async function GET(
     await Promise.all([
       supabase
         .from("products")
-        .select("id, name, selling_price, currency, discount_percentage, stock_quantity, category_id, updated_at")
+        .select("id, name, selling_price, currency, discount_percentage, category_id, updated_at")
         .eq("store_id", storeId)
         .or("kind.is.null,kind.neq.ingredient")
         // A variant is a way of selling its parent, not a separate menu line.
@@ -171,9 +175,6 @@ export async function GET(
       price_ll: priceLl,
       contains,
       extras,
-      // An item built from a recipe has no meaningful stock of its own, so it
-      // is always available; only a plain product can sell out.
-      available: components.length > 0 || Number(product.stock_quantity) > 0,
     };
 
     const key = (product.category_id as string) || UNCATEGORISED_SECTION_ID;

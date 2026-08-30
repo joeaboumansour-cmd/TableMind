@@ -14,6 +14,8 @@
 //   * compact item cards: name and price share one line and everything else is
 //     secondary, so a section fits on a screen instead of one item filling it
 //   * prices in LL with USD underneath, because both are used in Lebanon
+//   * every item shown plainly — NOTHING on this page is tied to stock, and
+//     nothing is ever marked sold out (see the note in lib/menu/types.ts)
 //   * no images — the catalogue has none, and a menu of grey placeholders
 //     looks broken rather than minimal
 //
@@ -29,7 +31,7 @@ import { use, useEffect, useMemo, useRef, useState } from "react";
 import { formatLL, formatUSD, convertLlToUsdForReturn } from "@/lib/utils/format";
 import type { PublicMenu } from "@/lib/menu/types";
 
-/** Height of the sticky category bar. One number, used by every offset below. */
+/** Height of the sticky category bar. One number, used by every offset here. */
 const BAR_H = 56;
 
 export default function PublicMenuPage({
@@ -219,20 +221,13 @@ export default function PublicMenuPage({
             {section.items.map((item) => (
               <li
                 key={item.id}
-                className={`rounded-xl border border-border bg-card px-3 py-2.5 ${
-                  item.available ? "" : "opacity-50"
-                }`}
+                className="rounded-xl border border-border bg-card px-3 py-2.5"
               >
                 {/* Name and price share one line — the price is what the eye
                     scans for down the right edge. */}
                 <div className="flex items-baseline justify-between gap-3">
                   <h3 className="min-w-0 text-[15px] font-semibold leading-snug">
                     {item.name}
-                    {!item.available && (
-                      <span className="ml-1.5 rounded bg-muted px-1 py-0.5 align-middle text-[9px] font-bold uppercase tracking-wide text-muted-foreground">
-                        Sold out
-                      </span>
-                    )}
                   </h3>
                   <div className="flex-none text-right leading-none">
                     <span className="block text-[15px] font-bold tabular-nums">

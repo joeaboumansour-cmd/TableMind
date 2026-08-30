@@ -14,9 +14,12 @@ export interface PublicMenuItem {
   contains: string[];
   /** Optional extras the recipe offers, with what each costs. */
   extras: Array<{ name: string; price_ll: number }>;
-  /** False when stock has run out AND the item tracks its own stock. */
-  available: boolean;
 }
+
+// There is deliberately NO availability field. The menu is a printed board,
+// not a live stock display: a shop's counted stock is not what is actually in
+// the kitchen, and telling a customer an item is finished when it is not loses
+// the sale outright. Stock lives on the till, where a person can see it.
 
 export interface PublicMenuSection {
   id: string;
