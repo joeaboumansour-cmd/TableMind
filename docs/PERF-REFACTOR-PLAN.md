@@ -819,9 +819,9 @@ these three it is achievable only in a real shop, on one store, watched.
 
 | Step | Status | Commit | Before | After | Notes |
 |---|---|---|---|---|---|
-| P-1 staging environment (branch + origin + DB) | NOT STARTED | | | | **Blocks everything** |
-| P-2 confirm 025 + 037 applied | NOT STARTED | | | | 025 is urgent — see §2 |
-| 0.1 harness env switch + prod-URL guard | NOT STARTED | | | | Hard `exit(1)`, not a comment |
+| P-1 staging environment (branch + origin + DB) | PARTIAL | e8b8792 | | | Branch `refactor/perf` exists. **Origin + DB still blocked on owner** — see §7.1 |
+| P-2 confirm 025 + 037 applied | BLOCKED | | | | **037 confirmed applied.** 025 UNKNOWN — needs SQL introspection, see note below |
+| 0.1 harness env switch + prod-URL guard | PARTIAL | e8b8792 | | | Guard + `.env.test.example` done and tested. "Harness can write" awaits P-1 |
 | 0.2 field measurement events | NOT STARTED | | | | |
 | 0.3 local trace baselines | NOT STARTED | | | | |
 | 0.4 budget gates | NOT STARTED | | | | Permanent |
@@ -862,6 +862,42 @@ these three it is achievable only in a real shop, on one store, watched.
 | 9.2 final numbers | NOT STARTED | | | | Per platform |
 | 9.3 keep-or-delete decision | NOT STARTED | | | | Branch A expected; tag first either way |
 | 9.4 update CLAUDE.md §8 + audit | NOT STARTED | | | | §8 becomes false if kept |
+
+### P-2 finding (2026-08-30)
+
+**037 is applied.** All seven RPCs it depends on are live on the production
+project: `decrement_stock_batch`, `get_transaction_analytics`,
+`get_shift_totals`, `get_register_performance`, `get_unassigned_totals`,
+`maintain_activity_log_partitions`, and the older `decrement_stock`. So the
+batch decrement and the analytics aggregate are on their fast paths, not their
+fallbacks.
+
+**025 could not be determined, and two plausible-looking methods were wrong.**
+Recorded so nobody burns the time again:
+
+1. *PostgREST's OpenAPI root (`GET /rest/v1/`) reports column `format`.* It
+   reports every numeric column as bare `numeric` — **zero** constrained
+   numeric columns across the whole schema, including `cash_shifts.opening_ll`,
+   which migration 021 unambiguously declares `DECIMAL(12,2)`. The field does
+   not carry precision on this project. An unwary reading of it says "025 was
+   never applied", which is not supported.
+2. *An over-range literal in a `WHERE` filter will raise `22003`.* It does not.
+   `cash_shifts.opening_ll` — known `DECIMAL(12,2)` and never touched by 025 —
+   accepts a 14-digit filter value happily. PostgREST does not cast filter
+   literals to the column type, so the probe is vacuous and its "everything
+   fits" result means nothing.
+
+Settling it needs real schema introspection, which the anon/service-role REST
+API does not expose: run 025's own pre-flight query in the Supabase SQL editor,
+or provide a direct Postgres connection string or a Management API token.
+
+The stake is unchanged and worth restating: if the columns are still
+`DECIMAL(10,2)`, a basket over ~99,999,999.99 LL (~$1,111) throws on insert,
+returns 500, is read by the client as an offline condition, queues, fails every
+retry, and dead-letters — money taken at the till, sale never reaching the
+server. If they are already wide, 025 must **not** be run as written on a live
+POS: it takes an ACCESS EXCLUSIVE lock and rewrites the three largest tables.
+Confirm before acting either way.
 
 ---
 
