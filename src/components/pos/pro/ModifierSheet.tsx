@@ -87,7 +87,7 @@ interface ModifierSheetProps {
  */
 function initialModifiers(
   components: RecipeComponent[],
-  names: Map<string, string>
+  names: Map<string, string>,
 ): CartLineModifier[] {
   return components.map((c) => ({
     component_id: c.id,
@@ -113,7 +113,10 @@ function extrasOf(modifiers: CartLineModifier[]): number {
 }
 
 /** Derive the state a count implies, so the two can never disagree. */
-function stateForCount(count: number, isDefault: boolean): CartLineModifier["state"] {
+function stateForCount(
+  count: number,
+  isDefault: boolean,
+): CartLineModifier["state"] {
   if (count <= 0) return "removed";
   if (isDefault && count === 1) return "included";
   return "extra";
@@ -181,7 +184,7 @@ function ModifierBody({
   const [modifiers, setModifiers] = useState<CartLineModifier[]>(() =>
     initial && initial.length > 0
       ? initial.map((m) => ({ ...m }))
-      : initialModifiers(components, ingredientNames)
+      : initialModifiers(components, ingredientNames),
   );
   const [note, setNote] = useState(initialNote || "");
   const [search, setSearch] = useState("");
@@ -200,9 +203,58 @@ function ModifierBody({
     // 9 is a sane till limit rather than an unbounded stepper.
     recipeRules.get(componentId) ?? { max: 9, removable: true };
 
+  /**
+   * The rows to actually show, grouped.
+   *
+   * A COMBO flattens several products' recipes into one list. Shown flat it is
+   * an undifferentiated heap — the cashier cannot tell the sandwich's pickles
+   * from the drink — so it is grouped under each product of the meal.
+   *
+   * The `:self` rows are dropped: they exist only so a drink with no recipe
+   * still moves stock. There is nothing to change about a canned drink, and
+   * showing it as a removable ingredient invites removing it from a paid meal.
+   *
+   * A non-combo line is one unnamed group, which renders exactly as before.
+   */
+  const groups = useMemo(() => {
+    const visible = modifiers.filter(
+      (m) =>
+        !(m.combo_child_id && m.combo_child_id === m.ingredient_product_id),
+    );
+
+    const isComboLine = visible.some((m) => !!m.combo_child_id);
+    if (!isComboLine)
+      return [{ key: "", title: null as string | null, rows: visible }];
+
+    const order: string[] = [];
+    const byChild = new Map<string, CartLineModifier[]>();
+    for (const m of visible) {
+      const key = m.combo_child_id || "";
+      if (!byChild.has(key)) {
+        byChild.set(key, []);
+        order.push(key);
+      }
+      byChild.get(key)!.push(m);
+    }
+    return order.map((key) => ({
+      key,
+      title: byChild.get(key)![0].combo_child_name || null,
+      rows: byChild.get(key)!,
+    }));
+  }, [modifiers]);
+
+  /** Children of a combo that have nothing to change — shown, but as fact. */
+  const fixedChildren = useMemo(
+    () =>
+      modifiers.filter(
+        (m) => m.combo_child_id && m.combo_child_id === m.ingredient_product_id,
+      ),
+    [modifiers],
+  );
+
   const onLineIds = useMemo(
     () => new Set(modifiers.map((m) => m.ingredient_product_id)),
-    [modifiers]
+    [modifiers],
   );
 
   /** Ingredients not already on this line, filtered by the search box. */
@@ -235,8 +287,10 @@ function ModifierBody({
         // An ad-hoc addition taken to zero is simply gone: it was never part
         // of the item, so "No hummus" would be a meaningless thing to print.
         if (count === 0 && m.is_adhoc) return [];
-        return [{ ...m, count, state: stateForCount(count, m.is_default_component) }];
-      })
+        return [
+          { ...m, count, state: stateForCount(count, m.is_default_component) },
+        ];
+      }),
     );
   };
 
@@ -290,87 +344,122 @@ function ModifierBody({
             In this item
           </h3>
 
+          {fixedChildren.length > 0 && (
+            <ul className="mb-3 space-y-1">
+              {fixedChildren.map((m) => (
+                <li
+                  key={m.component_id}
+                  className="flex items-center gap-2 rounded-xl border border-border bg-muted/30 p-3 text-sm"
+                >
+                  <span className="font-medium">{m.name}</span>
+                  <span className="ml-auto text-xs text-muted-foreground">
+                    Included in the combo
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+
           {modifiers.length === 0 ? (
             <p className="text-sm text-muted-foreground">
               Nothing in it yet. Add something below.
             </p>
           ) : (
-            <ul className="space-y-2">
-              {modifiers.map((m) => {
-                const { max, removable } = rulesFor(m.component_id);
-                const locked = m.is_default_component && !removable && max === 1;
-                const floor = m.is_default_component && !removable ? 1 : 0;
-                const extraUnits = Math.max(
-                  0,
-                  m.count - (m.is_default_component ? 1 : 0)
-                );
+            <div className="space-y-4">
+              {groups.map((group) => (
+                <div key={group.key}>
+                  {group.title && (
+                    <p className="mb-1.5 text-xs font-semibold text-foreground">
+                      {group.title}
+                    </p>
+                  )}
+                  <ul className="space-y-2">
+                    {group.rows.map((m) => {
+                      const { max, removable } = rulesFor(m.component_id);
+                      const locked =
+                        m.is_default_component && !removable && max === 1;
+                      const floor =
+                        m.is_default_component && !removable ? 1 : 0;
+                      const extraUnits = Math.max(
+                        0,
+                        m.count - (m.is_default_component ? 1 : 0),
+                      );
 
-                return (
-                  <li
-                    key={m.component_id}
-                    className={`flex items-center gap-3 rounded-xl border border-border p-3 ${
-                      m.state === "removed" ? "opacity-60" : ""
-                    }`}
-                  >
-                    <div className="min-w-0 flex-1">
-                      <p
-                        className={`text-sm font-medium ${
-                          m.state === "removed" ? "line-through" : ""
-                        }`}
-                      >
-                        {m.name}
-                        {m.is_adhoc && (
-                          <span className="ml-1.5 rounded bg-primary/15 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-primary">
-                            Added
-                          </span>
-                        )}
-                      </p>
-                      <p className="text-xs text-muted-foreground">
-                        {locked
-                          ? "Always included"
-                          : m.state === "removed"
-                            ? "Removed"
-                            : extraUnits > 0 && m.price_delta_ll > 0
-                              ? `+${formatLL(m.price_delta_ll * extraUnits)}`
-                              : m.price_delta_ll > 0
-                                ? `${formatLL(m.price_delta_ll)} each extra`
-                                : m.is_default_component
-                                  ? "Included"
-                                  : "Free"}
-                      </p>
-                    </div>
+                      return (
+                        <li
+                          key={m.component_id}
+                          className={`flex items-center gap-3 rounded-xl border border-border p-3 ${
+                            m.state === "removed" ? "opacity-60" : ""
+                          }`}
+                        >
+                          <div className="min-w-0 flex-1">
+                            <p
+                              className={`text-sm font-medium ${
+                                m.state === "removed" ? "line-through" : ""
+                              }`}
+                            >
+                              {m.name}
+                              {m.is_adhoc && (
+                                <span className="ml-1.5 rounded bg-primary/15 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-primary">
+                                  Added
+                                </span>
+                              )}
+                            </p>
+                            <p className="text-xs text-muted-foreground">
+                              {locked
+                                ? "Always included"
+                                : m.state === "removed"
+                                  ? "Removed"
+                                  : extraUnits > 0 && m.price_delta_ll > 0
+                                    ? `+${formatLL(m.price_delta_ll * extraUnits)}`
+                                    : m.price_delta_ll > 0
+                                      ? `${formatLL(m.price_delta_ll)} each extra`
+                                      : m.is_default_component
+                                        ? "Included"
+                                        : "Free"}
+                            </p>
+                          </div>
 
-                    {locked ? (
-                      <span className="text-xs text-muted-foreground">—</span>
-                    ) : (
-                      <div className="flex flex-none items-center rounded-xl bg-muted/70">
-                        <button
-                          type="button"
-                          aria-label={`Less ${m.name}`}
-                          disabled={m.count <= floor}
-                          onClick={() => setCount(m.component_id, m.count - 1)}
-                          className="tap flex h-11 w-11 items-center justify-center rounded-xl text-muted-foreground disabled:opacity-30"
-                        >
-                          <Minus className="h-4 w-4" />
-                        </button>
-                        <span className="w-6 text-center text-sm font-bold tnum">
-                          {m.count}
-                        </span>
-                        <button
-                          type="button"
-                          aria-label={`More ${m.name}`}
-                          disabled={m.count >= max}
-                          onClick={() => setCount(m.component_id, m.count + 1)}
-                          className="tap flex h-11 w-11 items-center justify-center rounded-xl text-primary disabled:opacity-30"
-                        >
-                          <Plus className="h-4 w-4" />
-                        </button>
-                      </div>
-                    )}
-                  </li>
-                );
-              })}
-            </ul>
+                          {locked ? (
+                            <span className="text-xs text-muted-foreground">
+                              —
+                            </span>
+                          ) : (
+                            <div className="flex flex-none items-center rounded-xl bg-muted/70">
+                              <button
+                                type="button"
+                                aria-label={`Less ${m.name}`}
+                                disabled={m.count <= floor}
+                                onClick={() =>
+                                  setCount(m.component_id, m.count - 1)
+                                }
+                                className="tap flex h-11 w-11 items-center justify-center rounded-xl text-muted-foreground disabled:opacity-30"
+                              >
+                                <Minus className="h-4 w-4" />
+                              </button>
+                              <span className="w-6 text-center text-sm font-bold tnum">
+                                {m.count}
+                              </span>
+                              <button
+                                type="button"
+                                aria-label={`More ${m.name}`}
+                                disabled={m.count >= max}
+                                onClick={() =>
+                                  setCount(m.component_id, m.count + 1)
+                                }
+                                className="tap flex h-11 w-11 items-center justify-center rounded-xl text-primary disabled:opacity-30"
+                              >
+                                <Plus className="h-4 w-4" />
+                              </button>
+                            </div>
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
+              ))}
+            </div>
           )}
         </section>
 
@@ -398,7 +487,9 @@ function ModifierBody({
 
               {addable.length === 0 ? (
                 <p className="text-sm text-muted-foreground">
-                  {search ? "Nothing matches." : "Everything is already on this item."}
+                  {search
+                    ? "Nothing matches."
+                    : "Everything is already on this item."}
                 </p>
               ) : (
                 <ul className="max-h-56 space-y-1 overflow-y-auto">
@@ -457,8 +548,12 @@ function ModifierBody({
           <span className="text-lg font-bold tnum">{formatLL(lineTotal)}</span>
         </div>
         <div className="flex items-baseline justify-between text-xs text-muted-foreground">
-          <span>{extras > 0 ? `includes ${formatLL(extras)} of extras` : ""}</span>
-          <span className="tnum">{formatUSD(convertLlToUsdForReturn(lineTotal))}</span>
+          <span>
+            {extras > 0 ? `includes ${formatLL(extras)} of extras` : ""}
+          </span>
+          <span className="tnum">
+            {formatUSD(convertLlToUsdForReturn(lineTotal))}
+          </span>
         </div>
       </div>
 

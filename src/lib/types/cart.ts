@@ -81,6 +81,20 @@ export interface CartLineModifier {
    */
   count: number;
   /**
+   * On a COMBO line: which of the combo's products this belongs to.
+   *
+   * A meal flattens several products' recipes into one modifier list, and
+   * without this they arrive as one undifferentiated heap — the cashier cannot
+   * tell the sandwich's pickles from the drink. The sheet groups on it.
+   *
+   * When it EQUALS ingredient_product_id, the row is the child product itself
+   * (a canned drink with no recipe). Those exist only so stock moves; there is
+   * nothing about them to change, and the sheet hides them.
+   */
+  combo_child_id?: string;
+  /** The child's name, for the group heading. Denormalised like `name`. */
+  combo_child_name?: string;
+  /**
    * Did the recipe include this by default? Denormalised alongside the rest,
    * because it decides how many counts are FREE: a default gives one away, an
    * add-on charges from the first. Re-deriving it from the recipe at sale time

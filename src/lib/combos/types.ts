@@ -100,28 +100,36 @@ export function resolveCombo(
 
     if (recipe && recipe.length > 0) {
       for (const component of recipe) {
-        // Defaults only. A combo is rung up as the meal as advertised; a
-        // cashier who needs "no pickles" edits the line afterwards, exactly as
-        // they would on a standalone sandwich.
-        if (!component.is_default) continue;
+        // EVERY component, not just the defaults — exactly as a standalone
+        // sandwich opens. A default arrives included; an optional extra
+        // arrives switched off but PRESENT, so the cashier can add it. Dropping
+        // the optional ones meant a sandwich inside a meal silently offered
+        // fewer choices than the same sandwich sold on its own.
         modifiers.push({
           component_id: `${item.item_product_id}:${component.id}`,
           ingredient_product_id: component.ingredient_product_id,
           name: nameOf(component.ingredient_product_id),
-          state: "included",
+          state: component.is_default ? "included" : "removed",
           // Multiplied by how many of that item are in the combo, so a meal
           // with two sandwiches consumes two sandwiches' worth of bread. The
           // line quantity is applied later, once, by buildStockDecrements.
           ingredient_qty: component.quantity * item.quantity,
-          price_delta_ll: 0,
-          count: 1,
-          is_default_component: true,
+          // The meal price covers the standard sandwich; an extra still costs
+          // extra, at the price the recipe authored.
+          price_delta_ll: component.price_delta_ll,
+          count: component.is_default ? 1 : 0,
+          is_default_component: component.is_default,
+          combo_child_id: item.item_product_id,
+          combo_child_name: nameOf(item.item_product_id),
         });
       }
       continue;
     }
 
-    // No recipe: the item itself is the stock that moves.
+    // No recipe: the item itself is the stock that moves. Marked as its own
+    // child (combo_child_id === ingredient_product_id) so the sheet knows to
+    // hide it — there is nothing to change about a canned drink, and showing
+    // it as a removable "ingredient" invites removing it from a paid meal.
     modifiers.push({
       component_id: `${item.item_product_id}:self`,
       ingredient_product_id: item.item_product_id,
@@ -131,6 +139,8 @@ export function resolveCombo(
       price_delta_ll: 0,
       count: 1,
       is_default_component: true,
+      combo_child_id: item.item_product_id,
+      combo_child_name: nameOf(item.item_product_id),
     });
   }
 
