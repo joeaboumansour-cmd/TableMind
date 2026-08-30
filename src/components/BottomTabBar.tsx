@@ -25,6 +25,7 @@ import { useState, useTransition } from "react";
 import { Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { vibrate } from "@/lib/feedback";
+import { markRouteNavStart } from "@/lib/activity/perf";
 import { isTabActive, shouldShowTabList, type Tab } from "./nav/tabs";
 
 export default function BottomTabBar({ tabs }: { tabs: Tab[] }) {
@@ -91,6 +92,10 @@ export default function BottomTabBar({ tabs }: { tabs: Tab[] }) {
                   e.preventDefault();
                   vibrate(15);
                   setPendingHref(tab.href);
+                  // Start the clock at the tap, not at the commit — everything
+                  // before React renders the new screen is the part a person
+                  // actually waits through.
+                  markRouteNavStart(tab.href);
                   startTransition(() => router.push(tab.href));
                 }}
                 aria-current={active ? "page" : undefined}

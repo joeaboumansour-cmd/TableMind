@@ -15,6 +15,7 @@ import { cn } from "@/lib/utils";
 import CartSheet from "@/components/pos/CartSheet";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { useCartStore } from "@/lib/stores/cartStore";
+import { markScanSource, logPerfBoot } from "@/lib/activity/perf";
 import { useAuth } from "@/lib/auth/AuthContext";
 import { Product } from "@/lib/types/product";
 import { useToastManager } from "@/hooks/useToastManager";
@@ -546,7 +547,10 @@ export default function POSPage() {
       if (!trimmed) return null;
 
       const local = barcodeIndex.get(trimmed);
-      if (local) return local;
+      if (local) {
+        markScanSource("local");
+        return local;
+      }
 
       if (!connectivity.isOnline) return null;
 
@@ -565,6 +569,7 @@ export default function POSPage() {
 
         if (error || !data) return null;
 
+        markScanSource("server");
         const cached = mapToCachedProduct(data);
         const mapped = cachedToProduct(cached);
 
@@ -899,6 +904,16 @@ export default function POSPage() {
       toast.success("Cart cleared");
     }
   };
+
+  // Boot is "the till is usable", which is exactly the condition the render
+  // guard below uses — not mount, and not the end of the background sync. The
+  // cache-first path drops `isLoading` as soon as IndexedDB answers, so this
+  // measures what the cashier actually waited for. logPerfBoot() is guarded to
+  // fire once per JS context, so the extra deps here cannot double-count.
+  useEffect(() => {
+    if (isLoading || authLoading || !user) return;
+    logPerfBoot({ products: products.length });
+  }, [isLoading, authLoading, user, products.length]);
 
   // `!user` matters as much as the loading flags: once authLoading flips false
   // with no user, the redirect to /login is only *scheduled* — an effect that

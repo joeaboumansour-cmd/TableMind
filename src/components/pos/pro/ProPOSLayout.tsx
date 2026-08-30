@@ -37,6 +37,7 @@ import { createProduct, repriceProduct } from "@/lib/products/write";
 import { isOneOffLine } from "@/lib/pos/lineItems";
 import { lineKey } from "@/lib/pos/lineKey";
 import { logActivity } from "@/lib/activity/logger";
+import { perfNow, logPerfScan } from "@/lib/activity/perf";
 import type { Product } from "@/lib/types/product";
 import type { CartItem } from "@/lib/types/cart";
 
@@ -282,6 +283,9 @@ export default function ProPOSLayout({
 
   const handleBarcode = useCallback(
     async (barcode: string) => {
+      // Clock starts the moment the code arrives from the wedge/camera and
+      // stops at the paint of whatever the cashier sees next.
+      const scanStartedAt = perfNow();
       setIsResolving(true);
       try {
         const product = await resolveBarcode(barcode);
@@ -298,6 +302,9 @@ export default function ProPOSLayout({
           // Falls straight through to a plain add when there is no recipe, so
           // a retail wedge scanner is unaffected.
           handleTileAdd(product);
+          // `hit` distinguishes this from the miss path below, which ends at a
+          // prompt rather than a cart line and is a different measurement.
+          logPerfScan(scanStartedAt, { outcome: "hit" });
           return;
         }
         // The customer is standing there holding it, so a miss is a prompt,
@@ -310,6 +317,7 @@ export default function ProPOSLayout({
           details: { can_edit_inventory: canEditInventory },
         });
         setUnknownBarcode(barcode);
+        logPerfScan(scanStartedAt, { outcome: "miss" });
       } finally {
         setIsResolving(false);
       }

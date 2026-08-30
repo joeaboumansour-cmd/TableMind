@@ -822,7 +822,7 @@ these three it is achievable only in a real shop, on one store, watched.
 | P-1 staging environment (branch + origin + DB) | DONE | | | | Branch + confined tenant on the main project. **Not a separate origin** — see caveat below |
 | P-2 confirm 025 + 037 applied | DONE | | | | **Both applied.** Do NOT run 025 — see note below |
 | 0.1 harness env switch + prod-URL guard | DONE | e8b8792 | | | Guard + `.env.test` + harness tenant. 6 guard cases verified |
-| 0.2 field measurement events | NOT STARTED | | | | |
+| 0.2 field measurement events | DONE | | | | 4 events live through real ingest. Client emitters wired, not yet observed firing — see note |
 | 0.3 local trace baselines | NOT STARTED | | | | |
 | 0.4 budget gates | NOT STARTED | | | | Permanent |
 | 1.1 fixtures & seeding | NOT STARTED | | | | |
@@ -905,6 +905,36 @@ The lesson generalises past this step: **the REST API cannot answer schema
 questions.** Anything about column types, constraints, indexes or triggers
 needs the SQL editor, a direct Postgres connection, or a Management API
 token. Phase 2.4's `EXPLAIN` work will need one of those three.
+
+### 0.2 notes (2026-08-30)
+
+`perf.boot` / `perf.scan` / `perf.sale` / `perf.route` are in the vocabulary and
+emitted from `src/lib/activity/perf.ts`. Design points worth not undoing:
+
+- **Every duration ends at a PAINT**, via a double-rAF, not at the callback
+  that finished the work. Stopping at the commit reports a number reliably a
+  frame or more optimistic — which is exactly the gap Phase 5 attacks, so
+  measuring it away would hide the work. The emit itself happens inside that
+  post-paint callback, so instrumentation is never inside what it measures.
+- **`performance.now()`, never `Date.now()`.** These tills routinely have wrong
+  clocks; a wall-clock jump would produce negative durations.
+- **`source` on a scan and `measuredFrom` on a route are reported, never
+  inferred.** "It was fast so it must have been a local hit" stops being true
+  on exactly the slow devices this exists to find. The page marks the branch
+  that answered; the tab bar marks the tap. A route with no marker (browser
+  back) is labelled `commit` rather than blended into the same average.
+- `logPerfBoot()` fires once per JS context — returning to `/pos` by
+  client-side nav is a route change, not a boot.
+
+**Verified:** all four accepted by the real `POST /api/activity` (4 accepted,
+0 dropped) and stored in `activity_logs` with the category derived correctly.
+Control run confirms the vocabulary gate actually rejects — `perf.bogus` and
+`totally.made_up` both dropped, and a mixed batch split 1 accepted / 1 dropped.
+Typecheck clean, lint unchanged from baseline, build green.
+
+**Not yet observed:** the client emitters firing from a real interaction, which
+needs a signed-in browser session. The emit path they share is proven, so what
+is unverified is call-site placement, not the pipeline.
 
 ### P-1 resolution (2026-08-30) — and what it does NOT buy
 
