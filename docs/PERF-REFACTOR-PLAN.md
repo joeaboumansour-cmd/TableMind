@@ -819,9 +819,9 @@ these three it is achievable only in a real shop, on one store, watched.
 
 | Step | Status | Commit | Before | After | Notes |
 |---|---|---|---|---|---|
-| P-1 staging environment (branch + origin + DB) | PARTIAL | e8b8792 | | | Branch `refactor/perf` exists. **Origin + DB still blocked on owner** — see §7.1 |
+| P-1 staging environment (branch + origin + DB) | DONE | | | | Branch + confined tenant on the main project. **Not a separate origin** — see caveat below |
 | P-2 confirm 025 + 037 applied | DONE | | | | **Both applied.** Do NOT run 025 — see note below |
-| 0.1 harness env switch + prod-URL guard | PARTIAL | e8b8792 | | | Guard + `.env.test.example` done and tested. "Harness can write" awaits P-1 |
+| 0.1 harness env switch + prod-URL guard | DONE | e8b8792 | | | Guard + `.env.test` + harness tenant. 6 guard cases verified |
 | 0.2 field measurement events | NOT STARTED | | | | |
 | 0.3 local trace baselines | NOT STARTED | | | | |
 | 0.4 budget gates | NOT STARTED | | | | Permanent |
@@ -905,6 +905,43 @@ The lesson generalises past this step: **the REST API cannot answer schema
 questions.** Anything about column types, constraints, indexes or triggers
 needs the SQL editor, a direct Postgres connection, or a Management API
 token. Phase 2.4's `EXPLAIN` work will need one of those three.
+
+### P-1 resolution (2026-08-30) — and what it does NOT buy
+
+Supabase branching needs Pro; this project is on the free plan. The owner
+directed the harness at the **main project** instead, on the grounds that it
+has no real clients. A read-only survey agreed: **5 stores, 4,999 products,
+118 transactions, 174 line items** — demo volume, not a live book of business.
+CLAUDE.md's "serving multiple paying stores" is stale.
+
+The harness is therefore confined to a **dedicated tenant** rather than given
+the run of the database:
+
+| | |
+|---|---|
+| Harness store | `00000000-0000-4000-8000-000000000001` (`__harness__`) |
+| Guard | Refuses the main host unless `HARNESS_ALLOW_PRODUCTION_HOST=yes` **and** `HARNESS_STORE_ID` are both set |
+| Isolation | Every table is store-scoped, so the store id is the isolation |
+
+> **The confinement is a convention, not an enforcement.** Nothing in the
+> database stops a harness query that forgets its `store_id` filter — the
+> service-role key bypasses RLS by design (audit P0-3). Fixtures and teardown
+> must filter on `HARNESS_STORE_ID` every time. Treat an unscoped write in
+> `harness/` as a defect on the same level as a money bug.
+
+**Three things P-1 asked for that this does not deliver**, to be honest about
+rather than discover in Phase 5:
+
+1. **No separate origin.** Service workers, Cache Storage, IndexedDB and
+   `localStorage` are origin-scoped, so the Phase 6 durability drills are only
+   truly clean on their own origin. A Vercel preview deployment of
+   `refactor/perf` gives one for free and should be stood up before Phase 6.
+2. **Schema is shared.** Any migration the refactor adds lands on the same
+   database as the existing stores. Phase 2's RPC work needs care here — it is
+   the one part of the plan that cannot be confined by a `store_id`.
+3. **Not a clean-room.** Row counts, query plans and cache behaviour are all
+   measured next to five other tenants' data. Fine for characterization;
+   remember it when reading Phase 8's scale numbers.
 
 ---
 

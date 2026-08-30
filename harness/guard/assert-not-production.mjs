@@ -98,13 +98,59 @@ export function assertNotProduction({ envFile = resolve(process.cwd(), ".env.tes
   }
 
   if (PRODUCTION_HOSTS.has(host)) {
-    fail([
-      `${host} is the PRODUCTION database.`,
-      `It was picked up from ${found.from}.`,
-      "",
-      "This host serves paying stores. The harness seeds and mutates data;",
-      "one run against it would corrupt real sales with no way back.",
-    ]);
+    // The owner directed the harness at the main project on 2026-08-30, on the
+    // grounds that it has no real clients — a survey agreed: 5 stores and 118
+    // transactions is demo volume, not a live book of business.
+    //
+    // That is allowed, but only as a CONSCIOUS act and only CONFINED to one
+    // tenant. Two keys are required rather than one because they refuse two
+    // different mistakes, and either alone still ends in a bad run:
+    //
+    //   HARNESS_ALLOW_PRODUCTION_HOST  — "I know which database this is"
+    //   HARNESS_STORE_ID               — "and the harness stays inside here"
+    //
+    // The second is the one doing the real work. Every table in this schema is
+    // store-scoped, so a dedicated store_id is the only thing standing between
+    // a seed run and the other stores' catalogues.
+    const allow = readVar("HARNESS_ALLOW_PRODUCTION_HOST", envFile);
+    const storeId = readVar("HARNESS_STORE_ID", envFile);
+
+    if (allow?.value !== "yes") {
+      fail([
+        `${host} is the main project database.`,
+        `It was picked up from ${found.from}.`,
+        "",
+        "The harness seeds and mutates: it writes products, rings up sales,",
+        "and opens and closes cash shifts. None of it is recoverable.",
+        "",
+        "To run against it anyway, set BOTH in .env.test:",
+        "  HARNESS_ALLOW_PRODUCTION_HOST=yes",
+        "  HARNESS_STORE_ID=<a store_id the harness owns exclusively>",
+      ]);
+    }
+
+    if (!storeId?.value) {
+      fail([
+        "HARNESS_ALLOW_PRODUCTION_HOST=yes, but HARNESS_STORE_ID is unset.",
+        "",
+        "Allowing the host does not by itself make a run safe — an unconfined",
+        "harness would seed straight across the other tenants, which is the",
+        "outcome this guard exists to prevent, reached by a different door.",
+        "Refusing.",
+      ]);
+    }
+
+    console.warn("");
+    console.warn("  ##########################################################");
+    console.warn("  #  RUNNING AGAINST THE MAIN PROJECT DATABASE             #");
+    console.warn("  ##########################################################");
+    console.warn(`  host   ${host}`);
+    console.warn(`  store  ${storeId.value}`);
+    console.warn("");
+    console.warn("  Writes must stay inside that store_id. Nothing but the");
+    console.warn("  harness's own scoping protects the other tenants.");
+    console.warn("");
+    return host;
   }
 
   if (EXTRA_HOSTS.has(host)) {
