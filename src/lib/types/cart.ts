@@ -52,11 +52,10 @@ export interface CartLineModifier {
    * True when this ingredient is not part of the product's recipe — something
    * the cashier added at the counter.
    *
-   * An ad-hoc addition is always FREE and always moves NO stock. An
-   * ingredient's own selling_price is never used to price a modifier: that
-   * field may have been set for unrelated reasons, and charging off it is a
-   * mischarge waiting to happen. An add-on costs money only when the owner
-   * AUTHORED it as a priced component of that recipe.
+   * An ad-hoc addition is PRICED from the ingredient's own selling_price — an
+   * owner who typed a price there meant it — but moves NO stock, because the
+   * recipe never said how much of it a portion is. The two halves are decided
+   * separately and on purpose.
    */
   is_adhoc?: boolean;
   /** Denormalised: the name AS SOLD. */
@@ -87,13 +86,19 @@ export interface CartLineModifier {
    * without this they arrive as one undifferentiated heap — the cashier cannot
    * tell the sandwich's pickles from the drink. The sheet groups on it.
    *
-   * When it EQUALS ingredient_product_id, the row is the child product itself
-   * (a canned drink with no recipe). Those exist only so stock moves; there is
-   * nothing about them to change, and the sheet hides them.
+   * Unique PER INSTANCE, not per product: a meal with two sandwiches has two
+   * groups, so one can have no pickles while the other keeps them.
    */
   combo_child_id?: string;
-  /** The child's name, for the group heading. Denormalised like `name`. */
+  /** The child's name for the heading — "Taouk Sandwich (2 of 2)". */
   combo_child_name?: string;
+  /**
+   * True for a row that only exists so a child's stock moves — a canned drink
+   * with no recipe. There is nothing about it to change, so the sheet lists it
+   * as included rather than as a removable ingredient. A flag rather than an
+   * id comparison, which broke once instances were numbered.
+   */
+  is_combo_fixed?: boolean;
   /**
    * Did the recipe include this by default? Denormalised alongside the rest,
    * because it decides how many counts are FREE: a default gives one away, an

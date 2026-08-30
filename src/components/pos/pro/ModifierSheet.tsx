@@ -31,7 +31,7 @@
 // =============================================
 
 import { useMemo, useState } from "react";
-import { Minus, Plus, Search, X } from "lucide-react";
+import { ChevronDown, Minus, Plus, Search, X } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -51,9 +51,28 @@ import {
 import type { Product } from "@/lib/types/product";
 import type { CartLineModifier } from "@/lib/types/cart";
 import type { RecipeComponent } from "@/lib/recipes/types";
+import { describeModifiers } from "@/lib/pos/modifierSummary";
 
 /** Free text is for instructions, not essays. Keeps receipts printable. */
 const NOTE_MAX = 140;
+
+/**
+ * What adding this ingredient costs, in LL.
+ *
+ * An ingredient's own selling_price. Setting a price on an ingredient is a
+ * DELIBERATE act by the owner — "cheddar, 40,000" means a slice of cheddar
+ * costs 40,000 to add — so it is honoured. Leave it 0 and adding is free,
+ * which is the case for almost every ingredient and needs no setup at all.
+ *
+ * (This briefly did not charge at all. That made every extra free, including
+ * ones an owner had explicitly priced, which is giving food away.)
+ */
+function adhocPriceLl(ingredient: Product): number {
+  if (!ingredient.selling_price) return 0;
+  return ingredient.currency === "USD"
+    ? ingredient.selling_price * SELL_RATE
+    : ingredient.selling_price;
+}
 
 /** Marks a modifier as having no recipe row behind it. */
 const ADHOC_PREFIX = "adhoc:";
@@ -188,6 +207,16 @@ function ModifierBody({
   );
   const [note, setNote] = useState(initialNote || "");
   const [search, setSearch] = useState("");
+  /**
+   * Which combo groups are open.
+   *
+   * A meal is several products' worth of choices at once, and showing them all
+   * expanded is a wall a cashier has to scroll past to reach the one they came
+   * for. Collapsed with a summary of what is actually changed is far quicker to
+   * scan. A single group (an ordinary sandwich) is never collapsed — you opened
+   * this sheet to change it.
+   */
+  const [openGroups, setOpenGroups] = useState<Set<string>>(new Set());
 
   /** Ceilings and removability, from the recipe. Ad-hoc rows have neither. */
   const recipeRules = useMemo(() => {
@@ -217,10 +246,7 @@ function ModifierBody({
    * A non-combo line is one unnamed group, which renders exactly as before.
    */
   const groups = useMemo(() => {
-    const visible = modifiers.filter(
-      (m) =>
-        !(m.combo_child_id && m.combo_child_id === m.ingredient_product_id),
-    );
+    const visible = modifiers.filter((m) => !m.is_combo_fixed);
 
     const isComboLine = visible.some((m) => !!m.combo_child_id);
     if (!isComboLine)
@@ -245,10 +271,7 @@ function ModifierBody({
 
   /** Children of a combo that have nothing to change — shown, but as fact. */
   const fixedChildren = useMemo(
-    () =>
-      modifiers.filter(
-        (m) => m.combo_child_id && m.combo_child_id === m.ingredient_product_id,
-      ),
+    () => modifiers.filter((m) => !!m.is_combo_fixed),
     [modifiers],
   );
 
@@ -302,23 +325,18 @@ function ModifierBody({
         ingredient_product_id: ingredient.id,
         name: ingredient.name,
         state: "extra",
-        // ---- An ad-hoc addition is FREE and moves NO stock ----
+        // PRICED, but STOCK-NEUTRAL. The two halves are decided separately:
         //
-        // Both zero, deliberately.
+        // Price — an owner who typed a price on an ingredient meant it, so it
+        // is charged. Zero means free, which is most ingredients.
         //
-        // Price: an ingredient's own selling_price is never used for a
-        // modifier. It is a field an owner may have set for entirely
-        // unrelated reasons, and charging a customer off the back of it is a
-        // mischarge waiting to happen. An add-on costs money only when the
-        // owner AUTHORED it as a priced component of that recipe — a
-        // deliberate act, with the price stated next to the item it belongs to.
-        //
-        // Stock: there is no trustworthy portion size for something the recipe
-        // never mentioned. Deducting a guessed amount is worse than deducting
-        // nothing, because it silently corrupts the count of an ingredient
-        // whose real usage nobody is tracking anyway.
+        // Stock — there is no trustworthy portion size for something the
+        // recipe never mentioned. Deducting a guess is worse than deducting
+        // nothing: it silently corrupts the count of an ingredient whose real
+        // usage nobody is tracking. See buildStockDecrements, which skips
+        // ad-hoc rows outright.
         ingredient_qty: 0,
-        price_delta_ll: 0,
+        price_delta_ll: adhocPriceLl(ingredient),
         count: 1,
         is_default_component: false,
         is_adhoc: true,
@@ -366,99 +384,150 @@ function ModifierBody({
             </p>
           ) : (
             <div className="space-y-4">
-              {groups.map((group) => (
-                <div key={group.key}>
-                  {group.title && (
-                    <p className="mb-1.5 text-xs font-semibold text-foreground">
-                      {group.title}
-                    </p>
-                  )}
-                  <ul className="space-y-2">
-                    {group.rows.map((m) => {
-                      const { max, removable } = rulesFor(m.component_id);
-                      const locked =
-                        m.is_default_component && !removable && max === 1;
-                      const floor =
-                        m.is_default_component && !removable ? 1 : 0;
-                      const extraUnits = Math.max(
-                        0,
-                        m.count - (m.is_default_component ? 1 : 0),
-                      );
-
-                      return (
-                        <li
-                          key={m.component_id}
-                          className={`flex items-center gap-3 rounded-xl border border-border p-3 ${
-                            m.state === "removed" ? "opacity-60" : ""
+              {groups.map((group) => {
+                const collapsible = groups.length > 1 && !!group.title;
+                const open = !collapsible || openGroups.has(group.key);
+                // What is different from how it comes as standard. Empty means
+                // "as standard", which is the useful thing to say at a glance.
+                const changed = describeModifiers(group.rows);
+                return (
+                  <div
+                    key={group.key}
+                    className={
+                      collapsible ? "rounded-xl border border-border" : ""
+                    }
+                  >
+                    {collapsible ? (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setOpenGroups((prev) => {
+                            const next = new Set(prev);
+                            if (next.has(group.key)) next.delete(group.key);
+                            else next.add(group.key);
+                            return next;
+                          })
+                        }
+                        aria-expanded={open}
+                        className="tap flex w-full items-center gap-2 p-3 text-left"
+                      >
+                        <ChevronDown
+                          className={`h-4 w-4 flex-none text-muted-foreground transition-transform ${
+                            open ? "" : "-rotate-90"
                           }`}
-                        >
-                          <div className="min-w-0 flex-1">
-                            <p
-                              className={`text-sm font-medium ${
-                                m.state === "removed" ? "line-through" : ""
+                          aria-hidden
+                        />
+                        <span className="min-w-0 flex-1">
+                          <span className="block text-sm font-semibold">
+                            {group.title}
+                          </span>
+                          <span className="block truncate text-xs text-muted-foreground">
+                            {changed.length > 0
+                              ? changed.join(", ")
+                              : "As standard"}
+                          </span>
+                        </span>
+                      </button>
+                    ) : (
+                      group.title && (
+                        <p className="mb-1.5 text-xs font-semibold text-foreground">
+                          {group.title}
+                        </p>
+                      )
+                    )}
+                    {open && (
+                      <ul
+                        className={
+                          collapsible ? "space-y-2 px-3 pb-3" : "space-y-2"
+                        }
+                      >
+                        {group.rows.map((m) => {
+                          const { max, removable } = rulesFor(m.component_id);
+                          const locked =
+                            m.is_default_component && !removable && max === 1;
+                          const floor =
+                            m.is_default_component && !removable ? 1 : 0;
+                          const extraUnits = Math.max(
+                            0,
+                            m.count - (m.is_default_component ? 1 : 0),
+                          );
+
+                          return (
+                            <li
+                              key={m.component_id}
+                              className={`flex items-center gap-3 rounded-xl border border-border p-3 ${
+                                m.state === "removed" ? "opacity-60" : ""
                               }`}
                             >
-                              {m.name}
-                              {m.is_adhoc && (
-                                <span className="ml-1.5 rounded bg-primary/15 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-primary">
-                                  Added
-                                </span>
-                              )}
-                            </p>
-                            <p className="text-xs text-muted-foreground">
-                              {locked
-                                ? "Always included"
-                                : m.state === "removed"
-                                  ? "Removed"
-                                  : extraUnits > 0 && m.price_delta_ll > 0
-                                    ? `+${formatLL(m.price_delta_ll * extraUnits)}`
-                                    : m.price_delta_ll > 0
-                                      ? `${formatLL(m.price_delta_ll)} each extra`
-                                      : m.is_default_component
-                                        ? "Included"
-                                        : "Free"}
-                            </p>
-                          </div>
+                              <div className="min-w-0 flex-1">
+                                <p
+                                  className={`text-sm font-medium ${
+                                    m.state === "removed" ? "line-through" : ""
+                                  }`}
+                                >
+                                  {m.name}
+                                  {m.is_adhoc && (
+                                    <span className="ml-1.5 rounded bg-primary/15 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-primary">
+                                      Added
+                                    </span>
+                                  )}
+                                </p>
+                                <p className="text-xs text-muted-foreground">
+                                  {locked
+                                    ? "Always included"
+                                    : m.state === "removed"
+                                      ? "Removed"
+                                      : extraUnits > 0 && m.price_delta_ll > 0
+                                        ? `+${formatLL(m.price_delta_ll * extraUnits)}`
+                                        : m.price_delta_ll > 0
+                                          ? `${formatLL(m.price_delta_ll)} each extra`
+                                          : m.is_default_component
+                                            ? "Included"
+                                            : "Free"}
+                                </p>
+                              </div>
 
-                          {locked ? (
-                            <span className="text-xs text-muted-foreground">
-                              —
-                            </span>
-                          ) : (
-                            <div className="flex flex-none items-center rounded-xl bg-muted/70">
-                              <button
-                                type="button"
-                                aria-label={`Less ${m.name}`}
-                                disabled={m.count <= floor}
-                                onClick={() =>
-                                  setCount(m.component_id, m.count - 1)
-                                }
-                                className="tap flex h-11 w-11 items-center justify-center rounded-xl text-muted-foreground disabled:opacity-30"
-                              >
-                                <Minus className="h-4 w-4" />
-                              </button>
-                              <span className="w-6 text-center text-sm font-bold tnum">
-                                {m.count}
-                              </span>
-                              <button
-                                type="button"
-                                aria-label={`More ${m.name}`}
-                                disabled={m.count >= max}
-                                onClick={() =>
-                                  setCount(m.component_id, m.count + 1)
-                                }
-                                className="tap flex h-11 w-11 items-center justify-center rounded-xl text-primary disabled:opacity-30"
-                              >
-                                <Plus className="h-4 w-4" />
-                              </button>
-                            </div>
-                          )}
-                        </li>
-                      );
-                    })}
-                  </ul>
-                </div>
-              ))}
+                              {locked ? (
+                                <span className="text-xs text-muted-foreground">
+                                  —
+                                </span>
+                              ) : (
+                                <div className="flex flex-none items-center rounded-xl bg-muted/70">
+                                  <button
+                                    type="button"
+                                    aria-label={`Less ${m.name}`}
+                                    disabled={m.count <= floor}
+                                    onClick={() =>
+                                      setCount(m.component_id, m.count - 1)
+                                    }
+                                    className="tap flex h-11 w-11 items-center justify-center rounded-xl text-muted-foreground disabled:opacity-30"
+                                  >
+                                    <Minus className="h-4 w-4" />
+                                  </button>
+                                  <span className="w-6 text-center text-sm font-bold tnum">
+                                    {m.count}
+                                  </span>
+                                  <button
+                                    type="button"
+                                    aria-label={`More ${m.name}`}
+                                    disabled={m.count >= max}
+                                    onClick={() =>
+                                      setCount(m.component_id, m.count + 1)
+                                    }
+                                    className="tap flex h-11 w-11 items-center justify-center rounded-xl text-primary disabled:opacity-30"
+                                  >
+                                    <Plus className="h-4 w-4" />
+                                  </button>
+                                </div>
+                              )}
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
         </section>
@@ -494,6 +563,7 @@ function ModifierBody({
               ) : (
                 <ul className="max-h-56 space-y-1 overflow-y-auto">
                   {addable.map((ingredient) => {
+                    const price = adhocPriceLl(ingredient);
                     return (
                       <li key={ingredient.id}>
                         <button
@@ -504,6 +574,9 @@ function ModifierBody({
                           <Plus className="h-4 w-4 flex-none text-primary" />
                           <span className="min-w-0 flex-1 truncate text-sm font-medium">
                             {ingredient.name}
+                          </span>
+                          <span className="flex-none text-xs font-semibold tnum text-muted-foreground">
+                            {price > 0 ? `+${formatLL(price)}` : "Free"}
                           </span>
                         </button>
                       </li>

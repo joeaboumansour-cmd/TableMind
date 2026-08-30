@@ -99,6 +99,21 @@ export function resolveCombo(
     const recipe = recipes[item.item_product_id];
 
     if (recipe && recipe.length > 0) {
+      // ONE GROUP PER UNIT. A meal with two sandwiches produces two independent
+      // sets of choices, so one can lose its pickles while the other keeps
+      // them. Sharing one set across both was the obvious first cut and is
+      // simply wrong at a counter: two customers order the same meal
+      // differently all the time.
+      for (let instance = 0; instance < item.quantity; instance++) {
+      const childId =
+        item.quantity > 1
+          ? `${item.item_product_id}#${instance}`
+          : item.item_product_id;
+      const childName =
+        item.quantity > 1
+          ? `${nameOf(item.item_product_id)} (${instance + 1} of ${item.quantity})`
+          : nameOf(item.item_product_id);
+
       for (const component of recipe) {
         // EVERY component, not just the defaults — exactly as a standalone
         // sandwich opens. A default arrives included; an optional extra
@@ -106,22 +121,24 @@ export function resolveCombo(
         // the optional ones meant a sandwich inside a meal silently offered
         // fewer choices than the same sandwich sold on its own.
         modifiers.push({
-          component_id: `${item.item_product_id}:${component.id}`,
+          component_id: `${childId}:${component.id}`,
           ingredient_product_id: component.ingredient_product_id,
           name: nameOf(component.ingredient_product_id),
           state: component.is_default ? "included" : "removed",
-          // Multiplied by how many of that item are in the combo, so a meal
-          // with two sandwiches consumes two sandwiches' worth of bread. The
-          // line quantity is applied later, once, by buildStockDecrements.
-          ingredient_qty: component.quantity * item.quantity,
+          // Per INSTANCE now, not multiplied by the combo quantity: two
+          // sandwiches means two groups each consuming one sandwich's worth,
+          // which sums to the same total while staying independently editable.
+          // The line quantity is applied later, once, by buildStockDecrements.
+          ingredient_qty: component.quantity,
           // The meal price covers the standard sandwich; an extra still costs
           // extra, at the price the recipe authored.
           price_delta_ll: component.price_delta_ll,
           count: component.is_default ? 1 : 0,
           is_default_component: component.is_default,
-          combo_child_id: item.item_product_id,
-          combo_child_name: nameOf(item.item_product_id),
+          combo_child_id: childId,
+          combo_child_name: childName,
         });
+      }
       }
       continue;
     }
@@ -141,6 +158,7 @@ export function resolveCombo(
       is_default_component: true,
       combo_child_id: item.item_product_id,
       combo_child_name: nameOf(item.item_product_id),
+      is_combo_fixed: true,
     });
   }
 
