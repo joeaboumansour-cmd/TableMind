@@ -36,6 +36,12 @@ interface UseMenuSheetOptions {
    * them. Anything that has to name an ingredient uses this map.
    */
   productNames: Map<string, string>;
+  /**
+   * What one extra portion of an ingredient costs, in LL — its own
+   * selling_price. A combo resolves its children's recipes and must price an
+   * extra exactly as a standalone sandwich would.
+   */
+  ingredientPrices: Map<string, number>;
   /** True when the store has the menu_items feature on. */
   enabled: boolean;
   /** Falls back to this when the tapped product has no recipe. */
@@ -53,6 +59,7 @@ export function useMenuSheet({
   combos,
   products,
   productNames,
+  ingredientPrices,
   enabled,
   onPlainAdd,
 }: UseMenuSheetOptions) {
@@ -79,7 +86,14 @@ export function useMenuSheet({
         // so using it here named every ingredient "Item".
         const nameOf = (id: string) =>
           productNames.get(id) || products.find((p) => p.id === id)?.name || "Item";
-        const { children, modifiers } = resolveCombo(product.id, combos, recipes, nameOf);
+        const priceOf = (id: string) => ingredientPrices.get(id) ?? 0;
+        const { children, modifiers } = resolveCombo(
+          product.id,
+          combos,
+          recipes,
+          nameOf,
+          priceOf
+        );
         addComboItem(product, children, modifiers);
         playSuccessSound();
         return;
@@ -95,7 +109,7 @@ export function useMenuSheet({
       }
       onPlainAdd(product);
     },
-    [recipes, combos, products, productNames, enabled, onPlainAdd, addComboItem]
+    [recipes, combos, products, productNames, ingredientPrices, enabled, onPlainAdd, addComboItem]
   );
 
   /**

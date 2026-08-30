@@ -1,6 +1,13 @@
 "use client";
 
-import { useState, useEffect, useRef, useMemo, useCallback, startTransition } from "react";
+import {
+  useState,
+  useEffect,
+  useRef,
+  useMemo,
+  useCallback,
+  startTransition,
+} from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { LogOut, ScanLine, Squirrel } from "lucide-react";
@@ -11,12 +18,16 @@ import { useCartStore } from "@/lib/stores/cartStore";
 import { useAuth } from "@/lib/auth/AuthContext";
 import { Product } from "@/lib/types/product";
 import { useToastManager } from "@/hooks/useToastManager";
-import { formatLL } from "@/lib/utils/format";
+import { formatLL, SELL_RATE } from "@/lib/utils/format";
 import { warmLocalDB } from "@/lib/pos/saleCompletion";
 import dynamic from "next/dynamic";
 // Imported from the standalone feedback module, NOT from BarcodeScanner —
 // importing it from there would pull ZXing back into this bundle.
-import { playSuccessSound, playErrorSound, primeFeedback } from "@/lib/feedback";
+import {
+  playSuccessSound,
+  playErrorSound,
+  primeFeedback,
+} from "@/lib/feedback";
 import ProductSearchBar from "@/components/ProductSearchBar";
 import { SyncIndicator } from "@/components/SyncIndicator";
 import { syncEngine } from "@/lib/sync/engine";
@@ -69,7 +80,7 @@ export default function POSPage() {
   const { isEnabled } = useFeatureFlags();
   const [isDesktopMode, setIsDesktopMode] = useState(false);
   const [isScannerActive, setIsScannerActive] = useState(() => {
-    if (typeof window !== 'undefined' && 'localStorage' in window) {
+    if (typeof window !== "undefined" && "localStorage" in window) {
       const saved = localStorage.getItem("scanner_active");
       return saved === null ? true : saved === "true";
     }
@@ -82,10 +93,14 @@ export default function POSPage() {
   const [isLoading, setIsLoading] = useState(true);
   // Throttles the focus-triggered refresh (see the load effect below)
   const lastFocusSyncRef = useRef(0);
-  const [highlightedItemId, setHighlightedItemId] = useState<string | null>(null);
+  const [highlightedItemId, setHighlightedItemId] = useState<string | null>(
+    null,
+  );
   const highlightTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   // O(1) barcode lookup — rebuilt whenever products change
-  const [barcodeIndex, setBarcodeIndex] = useState<Map<string, Product>>(new Map());
+  const [barcodeIndex, setBarcodeIndex] = useState<Map<string, Product>>(
+    new Map(),
+  );
   const barcodeIndexRef = useRef<Map<string, Product>>(new Map());
   // Confirm before ending the session — see the header button.
   const [isLogoutDialogOpen, setIsLogoutDialogOpen] = useState(false);
@@ -110,7 +125,7 @@ export default function POSPage() {
   // effect below; it lives in products/refresh.ts now, next to its inverse.
   const toProducts = useCallback(
     (cached: CachedProduct[]): Product[] => cached.map(cachedToProduct),
-    []
+    [],
   );
 
   // Narrow selectors rather than `useCartStore()` with no selector. Actions and
@@ -158,9 +173,13 @@ export default function POSPage() {
   // Helper: check if user auth exists in localStorage (works offline)
   function hasAuthInStorage(): boolean {
     try {
-      return !!localStorage.getItem("goldensquirrel_user") || 
-             !!localStorage.getItem("goldensquirrel_auth");
-    } catch { return false; }
+      return (
+        !!localStorage.getItem("goldensquirrel_user") ||
+        !!localStorage.getItem("goldensquirrel_auth")
+      );
+    } catch {
+      return false;
+    }
   }
 
   // Redirect to login only if there's truly no auth data in localStorage.
@@ -184,9 +203,11 @@ export default function POSPage() {
 
       try {
         // Get auth data from localStorage for legacy compatibility
-        if (typeof window !== 'undefined' && 'localStorage' in window) {
+        if (typeof window !== "undefined" && "localStorage" in window) {
           const authData = localStorage.getItem("goldensquirrel_auth");
-          const licenseExpiresAt = authData ? JSON.parse(authData)?.license_expires_at : null;
+          const licenseExpiresAt = authData
+            ? JSON.parse(authData)?.license_expires_at
+            : null;
 
           // Check license expiration - only when online, never block offline
           if (licenseExpiresAt && connectivity.isOnline) {
@@ -237,21 +258,27 @@ export default function POSPage() {
             // This uses incremental upsert so it's fast even with 2500 items
             // Use startTransition to mark this as non-urgent — React will
             // prioritize user interactions over the state update from sync
-            syncEngine.initialize(store_id).then(() => {
-              // After sync completes, refresh products from cache in a non-urgent transition
-              if (isMounted) {
-                startTransition(async () => {
-                  const { getCachedProducts } = await import("@/lib/db/localDB");
-                  const updated = await getCachedProducts(store_id);
-                  if (updated && updated.length > 0) {
-                    setProducts(toProducts(updated));
-                  }
-                });
-              }
-            }).catch(() => {});
+            syncEngine
+              .initialize(store_id)
+              .then(() => {
+                // After sync completes, refresh products from cache in a non-urgent transition
+                if (isMounted) {
+                  startTransition(async () => {
+                    const { getCachedProducts } =
+                      await import("@/lib/db/localDB");
+                    const updated = await getCachedProducts(store_id);
+                    if (updated && updated.length > 0) {
+                      setProducts(toProducts(updated));
+                    }
+                  });
+                }
+              })
+              .catch(() => {});
           } else if (!cached || cached.length === 0) {
             // Offline with no cache - seed from static JSON for first-time offline use
-            console.log("[POS] Offline with no cached products, seeding from static data...");
+            console.log(
+              "[POS] Offline with no cached products, seeding from static data...",
+            );
             const seeded = await seedProductsIfNeeded(store_id);
             if (seeded > 0 && isMounted) {
               const seededProducts = await getCachedProducts(store_id);
@@ -286,15 +313,16 @@ export default function POSPage() {
     // time, so we only refresh if the cache is actually stale.
     const handleFocus = () => {
       if (!user?.storeId || !connectivity.isOnline) return;
-      if (Date.now() - lastFocusSyncRef.current < FOCUS_SYNC_MIN_INTERVAL_MS) return;
+      if (Date.now() - lastFocusSyncRef.current < FOCUS_SYNC_MIN_INTERVAL_MS)
+        return;
       lastFocusSyncRef.current = Date.now();
       loadData();
     };
 
-    window.addEventListener('focus', handleFocus);
+    window.addEventListener("focus", handleFocus);
     return () => {
       isMounted = false;
-      window.removeEventListener('focus', handleFocus);
+      window.removeEventListener("focus", handleFocus);
     };
     // NOTE: `merchant?.id` must NOT be in these deps. setMerchant() is called
     // inside this effect, so including it made the effect re-fire and run a
@@ -317,99 +345,143 @@ export default function POSPage() {
   }, [products]);
 
   // Add a product to the cart (used by both barcode scan and saved product buttons)
-  const handleProductAdd = useCallback((product: Product) => {
-    // An ingredient is not a thing a customer buys. Refuse clearly rather than
-    // silently doing nothing, and name it so the cashier knows why — this is
-    // reachable by scanning, because the barcode index is deliberately complete.
-    if (isIngredient(product)) {
-      toast.error(`${product.name} is an ingredient — it isn't sold on its own`);
-      playErrorSound();
-      return;
-    }
+  const handleProductAdd = useCallback(
+    (product: Product) => {
+      // An ingredient is not a thing a customer buys. Refuse clearly rather than
+      // silently doing nothing, and name it so the cashier knows why — this is
+      // reachable by scanning, because the barcode index is deliberately complete.
+      if (isIngredient(product)) {
+        toast.error(
+          `${product.name} is an ingredient — it isn't sold on its own`,
+        );
+        playErrorSound();
+        return;
+      }
 
-    let resolvedProduct = {...product};
+      let resolvedProduct = { ...product };
 
-    // If this is a variant child product, inherit values from parent (O(1) lookup)
-    if (product.parent_id) {
-      const parent = barcodeIndexRef.current.get(product.parent_id);
-      if (parent) {
+      // If this is a variant child product, inherit values from parent (O(1) lookup)
+      if (product.parent_id) {
+        const parent = barcodeIndexRef.current.get(product.parent_id);
+        if (parent) {
+          resolvedProduct = {
+            ...resolvedProduct,
+            name: product.variant_name
+              ? `${parent.name} - ${product.variant_name}`
+              : parent.name,
+            cost_price: parent.cost_price,
+            selling_price: parent.selling_price,
+            profit_percentage: parent.profit_percentage,
+            currency: parent.currency,
+          };
+        }
+      }
+
+      // If product discount feature is disabled, force discount to 0
+      if (!isEnabled("product_discount")) {
         resolvedProduct = {
           ...resolvedProduct,
-          name: product.variant_name ? `${parent.name} - ${product.variant_name}` : parent.name,
-          cost_price: parent.cost_price,
-          selling_price: parent.selling_price,
-          profit_percentage: parent.profit_percentage,
-          currency: parent.currency,
+          discount_percentage: 0,
         };
       }
-    }
 
-    // If product discount feature is disabled, force discount to 0
-    if (!isEnabled("product_discount")) {
-      resolvedProduct = {
-        ...resolvedProduct,
-        discount_percentage: 0,
-      };
-    }
+      // Read the cart imperatively rather than closing over `items`.
+      // This is an event handler, not render, so getState() is the correct
+      // Zustand usage — and it keeps `items` out of this callback's deps, so the
+      // callback identity stays stable across cart changes. That matters because
+      // this function is the `onScan` prop of the memoized scanner: rebuilding it
+      // on every add re-rendered the live camera subtree mid-scan.
+      //
+      // Matches on product_id, NOT lineKey(), and that is correct: this path only
+      // ever handles a plain scanned/tapped product, whose lineKey IS its
+      // product_id. A configured (made-to-order) line never arrives here — it is
+      // built through addConfiguredItem, which deliberately never dedupes, so two
+      // sandwiches with different modifiers stay two lines.
+      const existingItem = useCartStore
+        .getState()
+        .items.find((item) => item.product_id === product.id);
 
-    // Read the cart imperatively rather than closing over `items`.
-    // This is an event handler, not render, so getState() is the correct
-    // Zustand usage — and it keeps `items` out of this callback's deps, so the
-    // callback identity stays stable across cart changes. That matters because
-    // this function is the `onScan` prop of the memoized scanner: rebuilding it
-    // on every add re-rendered the live camera subtree mid-scan.
-    //
-    // Matches on product_id, NOT lineKey(), and that is correct: this path only
-    // ever handles a plain scanned/tapped product, whose lineKey IS its
-    // product_id. A configured (made-to-order) line never arrives here — it is
-    // built through addConfiguredItem, which deliberately never dedupes, so two
-    // sandwiches with different modifiers stay two lines.
-    const existingItem = useCartStore
-      .getState()
-      .items.find((item) => item.product_id === product.id);
-
-    if (existingItem) {
-      // Desktop mode: increment quantity on repeat scan (hardware scanner = intentional)
-      // Mobile mode: show "already in cart" (camera can fire false duplicates)
-      if (isDesktopMode) {
-        incrementQuantity(product.id);
-        playSuccessSound();
-        toast.success(`${resolvedProduct.name} qty increased to ${existingItem.quantity + 1}`, { key: "cart-add" });
+      if (existingItem) {
+        // Desktop mode: increment quantity on repeat scan (hardware scanner = intentional)
+        // Mobile mode: show "already in cart" (camera can fire false duplicates)
+        if (isDesktopMode) {
+          incrementQuantity(product.id);
+          playSuccessSound();
+          toast.success(
+            `${resolvedProduct.name} qty increased to ${existingItem.quantity + 1}`,
+            { key: "cart-add" },
+          );
+        } else {
+          setHighlightedItemId(product.id);
+          if (highlightTimeoutRef.current)
+            clearTimeout(highlightTimeoutRef.current);
+          highlightTimeoutRef.current = setTimeout(
+            () => setHighlightedItemId(null),
+            800,
+          );
+          toast.info(`${resolvedProduct.name} is already in cart`, {
+            key: "cart-duplicate",
+          });
+          setTimeout(() => {
+            const el = document.getElementById(`cart-item-${product.id}`);
+            if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+          }, 50);
+        }
       } else {
-        setHighlightedItemId(product.id);
-        if (highlightTimeoutRef.current) clearTimeout(highlightTimeoutRef.current);
-        highlightTimeoutRef.current = setTimeout(() => setHighlightedItemId(null), 800);
-        toast.info(`${resolvedProduct.name} is already in cart`, { key: "cart-duplicate" });
-        setTimeout(() => {
-          const el = document.getElementById(`cart-item-${product.id}`);
-          if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
-        }, 50);
+        const added = addItem(resolvedProduct);
+        if (added) {
+          playSuccessSound();
+          toast.success(`Added ${resolvedProduct.name}`, { key: "cart-add" });
+        } else {
+          setHighlightedItemId(product.id);
+          if (highlightTimeoutRef.current)
+            clearTimeout(highlightTimeoutRef.current);
+          highlightTimeoutRef.current = setTimeout(
+            () => setHighlightedItemId(null),
+            2000,
+          );
+          toast.info(`${resolvedProduct.name} is already in cart`, {
+            key: "cart-duplicate",
+          });
+          setTimeout(() => {
+            const el = document.getElementById(`cart-item-${product.id}`);
+            if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+          }, 50);
+        }
       }
-    } else {
-      const added = addItem(resolvedProduct);
-      if (added) {
-        playSuccessSound();
-        toast.success(`Added ${resolvedProduct.name}`, { key: "cart-add" });
-      } else {
-        setHighlightedItemId(product.id);
-        if (highlightTimeoutRef.current) clearTimeout(highlightTimeoutRef.current);
-        highlightTimeoutRef.current = setTimeout(() => setHighlightedItemId(null), 2000);
-        toast.info(`${resolvedProduct.name} is already in cart`, { key: "cart-duplicate" });
-        setTimeout(() => {
-          const el = document.getElementById(`cart-item-${product.id}`);
-          if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
-        }, 50);
-      }
-    }
-    // `items` is deliberately NOT a dependency — it is read via getState()
-    // above so this callback stays referentially stable.
-  }, [addItem, incrementQuantity, isEnabled, isDesktopMode, toast]);
+      // `items` is deliberately NOT a dependency — it is read via getState()
+      // above so this callback stays referentially stable.
+    },
+    [addItem, incrementQuantity, isEnabled, isDesktopMode, toast],
+  );
 
-  const sellableProducts = useMemo(() => products.filter(isSellable), [products]);
+  const sellableProducts = useMemo(
+    () => products.filter(isSellable),
+    [products],
+  );
 
   const ingredientNames = useMemo(() => {
     const map = new Map<string, string>();
     for (const product of products) map.set(product.id, product.name);
+    return map;
+  }, [products]);
+
+  /**
+   * What one extra portion of each product costs, in LL — its own
+   * selling_price, normalised. This is the single answer to "what does adding
+   * one more of this cost", used by the modifier sheet and by combo
+   * resolution alike so they cannot price the same act differently.
+   */
+  const ingredientPrices = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const product of products) {
+      map.set(
+        product.id,
+        product.currency === "USD"
+          ? product.selling_price * SELL_RATE
+          : product.selling_price || 0,
+      );
+    }
     return map;
   }, [products]);
 
@@ -421,7 +493,7 @@ export default function POSPage() {
    */
   const ingredientProducts = useMemo(
     () => products.filter((p) => isIngredient(p) && !p.parent_id),
-    [products]
+    [products],
   );
 
   /**
@@ -440,6 +512,7 @@ export default function POSPage() {
     combos,
     products: sellableProducts,
     productNames: ingredientNames,
+    ingredientPrices,
     enabled: isEnabled("menu_items"),
     onPlainAdd: handleProductAdd,
   });
@@ -507,7 +580,7 @@ export default function POSPage() {
         return null;
       }
     },
-    [barcodeIndex, user?.storeId]
+    [barcodeIndex, user?.storeId],
   );
 
   // Camera scan (mobile). A miss is reported and dropped — see resolveBarcode.
@@ -523,7 +596,8 @@ export default function POSPage() {
       // is not in the cache. Without this the camera looks like it froze.
       const needsServerLookup =
         connectivity.isOnline && !barcodeIndex.has(barcode.trim());
-      if (needsServerLookup) toast.loading("Verifying barcode...", { key: "scan-fallback" });
+      if (needsServerLookup)
+        toast.loading("Verifying barcode...", { key: "scan-fallback" });
 
       const product = await resolveBarcode(barcode);
       if (needsServerLookup) toast.dismiss("scan-fallback");
@@ -538,11 +612,13 @@ export default function POSPage() {
 
       playErrorSound();
       toast.error(
-        connectivity.isOnline ? "Product not found" : "Product not found in local data",
-        { key: "scan-miss" }
+        connectivity.isOnline
+          ? "Product not found"
+          : "Product not found in local data",
+        { key: "scan-miss" },
       );
     },
-    [resolveBarcode, handleTileAdd, toast, barcodeIndex]
+    [resolveBarcode, handleTileAdd, toast, barcodeIndex],
   );
 
   // A product created or repriced from the desktop till. Folding it into
@@ -563,7 +639,7 @@ export default function POSPage() {
   const toggleScanner = useCallback(() => {
     setIsScannerActive((prev) => {
       const newState = !prev;
-      if (typeof window !== 'undefined' && 'localStorage' in window) {
+      if (typeof window !== "undefined" && "localStorage" in window) {
         localStorage.setItem("scanner_active", String(newState));
       }
       return newState;
@@ -686,18 +762,17 @@ export default function POSPage() {
    */
   const menuMode = isEnabled("product_categories") && categories.length > 0;
 
-
   const savedProducts = useMemo(() => {
     if (!user?.storeId) return [];
-    const noBarcodeProducts = sellableProducts.filter(p => !p.barcode);
+    const noBarcodeProducts = sellableProducts.filter((p) => !p.barcode);
     const frequentlyUsedIds = getFrequentlyUsedProductIds(user.storeId);
     const frequentlyUsedProducts = frequentlyUsedIds
-      .map(id => sellableProducts.find(p => p.id === id))
+      .map((id) => sellableProducts.find((p) => p.id === id))
       .filter(Boolean) as Product[];
     // Combine, deduplicating by ID
     const combined = [...noBarcodeProducts, ...frequentlyUsedProducts];
     const seen = new Set<string>();
-    return combined.filter(p => {
+    return combined.filter((p) => {
       if (seen.has(p.id)) return false;
       seen.add(p.id);
       return true;
@@ -741,7 +816,7 @@ export default function POSPage() {
       posObserverRef.current?.disconnect();
       searchObserverRef.current?.disconnect();
     },
-    []
+    [],
   );
 
   // Clearing the cart is destructive and one tap away, so it keeps its confirm.
@@ -786,11 +861,12 @@ export default function POSPage() {
           !isEmpty() ? (
             <div className="rounded-2xl bg-muted/50 px-4 py-3">
               <p className="font-semibold">
-                {getItemCount()} item{getItemCount() !== 1 ? "s" : ""} still in the cart
+                {getItemCount()} item{getItemCount() !== 1 ? "s" : ""} still in
+                the cart
               </p>
               <p className="mt-0.5 text-muted-foreground tnum">
-                {formatLL(getTotal())} — kept on this device and still here after you
-                log back in.
+                {formatLL(getTotal())} — kept on this device and still here
+                after you log back in.
               </p>
             </div>
           ) : null
@@ -825,7 +901,10 @@ export default function POSPage() {
   // dragging the sheet never re-lays-out the live video behind it.
   if (!isDesktopMode) {
     return (
-      <div ref={posSurfaceRef} className="relative h-full w-full overflow-hidden bg-black">
+      <div
+        ref={posSurfaceRef}
+        className="relative h-full w-full overflow-hidden bg-black"
+      >
         {/* ---- Camera layer, or the menu ---- */}
         {/*
           A snack shop has no barcodes, so a camera is the wrong page for it:
@@ -864,9 +943,12 @@ export default function POSPage() {
           ) : (
             <div className="absolute inset-0 flex flex-col items-center justify-center bg-zinc-950 px-8 text-center">
               <ScanLine className="h-9 w-9 text-zinc-700" />
-              <p className="mt-3 text-sm font-semibold text-zinc-400">Scanner is off</p>
+              <p className="mt-3 text-sm font-semibold text-zinc-400">
+                Scanner is off
+              </p>
               <p className="mt-1 text-xs text-zinc-600">
-                The camera is released. Search or type a barcode below to keep selling.
+                The camera is released. Search or type a barcode below to keep
+                selling.
               </p>
               {/* Same wording as the header switch, so the two controls read as
                   the one setting they are. */}
@@ -924,7 +1006,7 @@ export default function POSPage() {
                   "tap glass flex h-11 items-center gap-2 rounded-full pl-3 pr-1.5 ring-1 transition-colors",
                   isScannerActive
                     ? "text-primary ring-primary/40"
-                    : "text-muted-foreground ring-white/10"
+                    : "text-muted-foreground ring-white/10",
                 )}
               >
                 <span className="text-[10px] font-bold uppercase tracking-[0.1em]">
@@ -942,12 +1024,14 @@ export default function POSPage() {
                   aria-hidden
                   className={cn(
                     "relative block h-[22px] w-[38px] flex-none rounded-full transition-colors duration-200",
-                    isScannerActive ? "bg-primary" : "bg-white/20"
+                    isScannerActive ? "bg-primary" : "bg-white/20",
                   )}
                 >
                   <span
                     className="absolute left-[3px] top-[3px] h-4 w-4 rounded-full bg-white shadow-sm transition-transform duration-200 ease-[cubic-bezier(0.32,0.72,0,1)]"
-                    style={{ transform: `translateX(${isScannerActive ? 16 : 0}px)` }}
+                    style={{
+                      transform: `translateX(${isScannerActive ? 16 : 0}px)`,
+                    }}
                   />
                 </span>
               </button>
@@ -1023,6 +1107,7 @@ export default function POSPage() {
         combos={combos}
         ingredientNames={ingredientNames}
         ingredients={ingredientProducts}
+        ingredientPrices={ingredientPrices}
         storeId={user?.storeId || ""}
         onProductAdd={handleProductAdd}
         resolveBarcode={resolveBarcode}

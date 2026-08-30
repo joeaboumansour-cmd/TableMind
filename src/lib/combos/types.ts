@@ -8,6 +8,7 @@
 
 import type { CartLineModifier } from "@/lib/types/cart";
 import type { RecipeMap } from "@/lib/recipes/types";
+import { extraUnitPriceLl } from "@/lib/recipes/types";
 
 export interface ComboComponent {
   id: string;
@@ -82,7 +83,9 @@ export function resolveCombo(
   comboProductId: string,
   combos: ComboMap,
   recipes: RecipeMap,
-  nameOf: (productId: string) => string
+  nameOf: (productId: string) => string,
+  /** What one extra portion of an ingredient costs, in LL. */
+  priceOf: (productId: string) => number = () => 0
 ): ResolvedCombo {
   const items = (combos[comboProductId] || []).slice().sort(compareComboComponents);
 
@@ -131,8 +134,13 @@ export function resolveCombo(
           // The line quantity is applied later, once, by buildStockDecrements.
           ingredient_qty: component.quantity,
           // The meal price covers the standard sandwich; an extra still costs
-          // extra, at the price the recipe authored.
-          price_delta_ll: component.price_delta_ll,
+          // extra. Same rule as a standalone sandwich — extraUnitPriceLl —
+          // because the two used to disagree, and a customer asking for extra
+          // chicken should be charged the same either way.
+          price_delta_ll: extraUnitPriceLl(
+            component.price_delta_ll,
+            priceOf(component.ingredient_product_id)
+          ),
           count: component.is_default ? 1 : 0,
           is_default_component: component.is_default,
           combo_child_id: childId,

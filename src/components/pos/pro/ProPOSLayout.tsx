@@ -73,6 +73,8 @@ interface ProPOSLayoutProps {
   ingredientNames: Map<string, string>;
   /** Every ingredient in inventory — anything can be added to anything. */
   ingredients: Product[];
+  /** What one extra portion of each product costs, in LL. */
+  ingredientPrices: Map<string, number>;
   storeId: string;
   /** Adds to the active lane, with the page's variant/discount resolution. */
   onProductAdd: (product: Product) => void;
@@ -92,6 +94,7 @@ export default function ProPOSLayout({
   combos,
   ingredientNames,
   ingredients,
+  ingredientPrices,
   storeId,
   onProductAdd,
   resolveBarcode,
@@ -168,6 +171,7 @@ export default function ProPOSLayout({
     combos,
     products,
     productNames: ingredientNames,
+    ingredientPrices,
     enabled: isEnabled("menu_items"),
     onPlainAdd: onProductAdd,
   });

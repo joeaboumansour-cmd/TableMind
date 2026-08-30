@@ -51,6 +51,7 @@ import {
 import type { Product } from "@/lib/types/product";
 import type { CartLineModifier } from "@/lib/types/cart";
 import type { RecipeComponent } from "@/lib/recipes/types";
+import { extraUnitPriceLl, unitCeiling } from "@/lib/recipes/types";
 import { describeModifiers } from "@/lib/pos/modifierSummary";
 
 /** Free text is for instructions, not essays. Keeps receipts printable. */
@@ -107,6 +108,7 @@ interface ModifierSheetProps {
 function initialModifiers(
   components: RecipeComponent[],
   names: Map<string, string>,
+  priceOf: (productId: string) => number,
 ): CartLineModifier[] {
   return components.map((c) => ({
     component_id: c.id,
@@ -114,7 +116,9 @@ function initialModifiers(
     name: names.get(c.ingredient_product_id) || "Ingredient",
     state: c.is_default ? "included" : "removed",
     ingredient_qty: c.quantity,
-    price_delta_ll: c.price_delta_ll,
+    // The recipe's authored price if it set one, otherwise the ingredient's
+    // own price. One rule for every way an ingredient can be added.
+    price_delta_ll: extraUnitPriceLl(c.price_delta_ll, priceOf(c.ingredient_product_id)),
     count: c.is_default ? 1 : 0,
     is_default_component: c.is_default,
   }));
@@ -200,10 +204,23 @@ function ModifierBody({
   onCancel: () => void;
   onConfirm: (modifiers: CartLineModifier[], note: string) => void;
 }) {
+  /**
+   * What one extra portion of each ingredient costs, in LL.
+   *
+   * Declared BEFORE the state below, which needs it: a useState initialiser
+   * runs during the first render, so anything it calls has to already exist.
+   */
+  const ingredientPrices = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const i of ingredients) map.set(i.id, adhocPriceLl(i));
+    return map;
+  }, [ingredients]);
+  const priceOf = (productId: string) => ingredientPrices.get(productId) ?? 0;
+
   const [modifiers, setModifiers] = useState<CartLineModifier[]>(() =>
     initial && initial.length > 0
       ? initial.map((m) => ({ ...m }))
-      : initialModifiers(components, ingredientNames),
+      : initialModifiers(components, ingredientNames, priceOf),
   );
   const [note, setNote] = useState(initialNote || "");
   const [search, setSearch] = useState("");
@@ -222,15 +239,16 @@ function ModifierBody({
   const recipeRules = useMemo(() => {
     const map = new Map<string, { max: number; removable: boolean }>();
     for (const c of components) {
-      map.set(c.id, { max: c.max_quantity, removable: c.is_removable });
+      // unitCeiling, not max_quantity: the column defaults to 1, which greyed
+      // out every + button so a customer could never ask for extra chicken.
+      map.set(c.id, { max: unitCeiling(c.max_quantity), removable: c.is_removable });
     }
     return map;
   }, [components]);
 
   const rulesFor = (componentId: string) =>
     // An ad-hoc addition has no recipe row, so no ceiling was ever authored.
-    // 9 is a sane till limit rather than an unbounded stepper.
-    recipeRules.get(componentId) ?? { max: 9, removable: true };
+    recipeRules.get(componentId) ?? { max: unitCeiling(1), removable: true };
 
   /**
    * The rows to actually show, grouped.
