@@ -42,9 +42,14 @@ export interface CartLineModifier {
   /** The ingredient. Needed for stock, and to survive a recipe edit. */
   ingredient_product_id: string;
   /**
-   * True when this ingredient is not part of the product's recipe. Its price
-   * came from the INGREDIENT PRODUCT'S OWN selling_price rather than from a
-   * recipe row's price_delta_ll.
+   * True when this ingredient is not part of the product's recipe — something
+   * the cashier added at the counter.
+   *
+   * An ad-hoc addition is always FREE and always moves NO stock. An
+   * ingredient's own selling_price is never used to price a modifier: that
+   * field may have been set for unrelated reasons, and charging off it is a
+   * mischarge waiting to happen. An add-on costs money only when the owner
+   * AUTHORED it as a priced component of that recipe.
    */
   is_adhoc?: boolean;
   /** Denormalised: the name AS SOLD. */

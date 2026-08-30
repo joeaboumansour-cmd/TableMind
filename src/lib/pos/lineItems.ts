@@ -106,7 +106,7 @@ export interface StockDecrement {
  * as the cart's total-only rounding, for the same reason — per-unit rounding
  * compounds and drifts.
  *
- * ## Removed components
+ * ## What does NOT move stock
  *
  * state === "removed" contributes nothing. That is the whole of "no pickles",
  * and it is why the state lives on the line rather than being re-derived from
@@ -137,6 +137,12 @@ export function buildStockDecrements(
     if (modifiers && modifiers.length > 0) {
       for (const m of modifiers) {
         if (m.state === "removed") continue;
+        // An AD-HOC addition moves no stock. The recipe never mentioned this
+        // ingredient, so there is no trustworthy portion size for it, and
+        // deducting a guess is worse than deducting nothing — it corrupts the
+        // count of an ingredient whose real usage nobody is tracking. Stated
+        // explicitly rather than relying on ingredient_qty happening to be 0.
+        if (m.is_adhoc) continue;
         add(m.ingredient_product_id, Math.round(m.ingredient_qty * m.count * item.quantity));
       }
       continue;

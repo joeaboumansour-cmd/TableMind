@@ -78,14 +78,6 @@ interface ModifierSheetProps {
   onConfirm: (modifiers: CartLineModifier[], note: string) => void;
 }
 
-/** An ingredient's price when added ad-hoc, normalised to LL. */
-function adhocPriceLl(ingredient: Product): number {
-  if (!ingredient.selling_price) return 0;
-  return ingredient.currency === "USD"
-    ? ingredient.selling_price * SELL_RATE
-    : ingredient.selling_price;
-}
-
 /**
  * The line's starting choices: every recipe component, defaults included.
  *
@@ -256,10 +248,23 @@ function ModifierBody({
         ingredient_product_id: ingredient.id,
         name: ingredient.name,
         state: "extra",
-        // The ingredient's own portion size. Without it, adding hummus would
-        // deplete 1 gram rather than one scoop.
-        ingredient_qty: ingredient.serving_qty ?? 1,
-        price_delta_ll: adhocPriceLl(ingredient),
+        // ---- An ad-hoc addition is FREE and moves NO stock ----
+        //
+        // Both zero, deliberately.
+        //
+        // Price: an ingredient's own selling_price is never used for a
+        // modifier. It is a field an owner may have set for entirely
+        // unrelated reasons, and charging a customer off the back of it is a
+        // mischarge waiting to happen. An add-on costs money only when the
+        // owner AUTHORED it as a priced component of that recipe — a
+        // deliberate act, with the price stated next to the item it belongs to.
+        //
+        // Stock: there is no trustworthy portion size for something the recipe
+        // never mentioned. Deducting a guessed amount is worse than deducting
+        // nothing, because it silently corrupts the count of an ingredient
+        // whose real usage nobody is tracking anyway.
+        ingredient_qty: 0,
+        price_delta_ll: 0,
         count: 1,
         is_default_component: false,
         is_adhoc: true,
@@ -398,7 +403,6 @@ function ModifierBody({
               ) : (
                 <ul className="max-h-56 space-y-1 overflow-y-auto">
                   {addable.map((ingredient) => {
-                    const price = adhocPriceLl(ingredient);
                     return (
                       <li key={ingredient.id}>
                         <button
@@ -409,9 +413,6 @@ function ModifierBody({
                           <Plus className="h-4 w-4 flex-none text-primary" />
                           <span className="min-w-0 flex-1 truncate text-sm font-medium">
                             {ingredient.name}
-                          </span>
-                          <span className="flex-none text-xs font-semibold tnum text-muted-foreground">
-                            {price > 0 ? `+${formatLL(price)}` : "Free"}
                           </span>
                         </button>
                       </li>
