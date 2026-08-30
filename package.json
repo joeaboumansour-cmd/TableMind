@@ -11,7 +11,8 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "build:legacy": "cross-env NEXT_PUBLIC_BUILD_VARIANT=legacy BROWSERSLIST=\"chrome 109, edge 109\" next build --webpack && npm run verify:sw && npm run verify:legacy-css",
-    "verify:legacy-css": "node scripts/verify-legacy-css.mjs"
+    "verify:legacy-css": "node scripts/verify-legacy-css.mjs",
+    "harness:guard": "node harness/guard/assert-not-production.mjs"
   },
   "dependencies": {
     "@ducanh2912/next-pwa": "^10.2.9",
