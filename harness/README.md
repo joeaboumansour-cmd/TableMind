@@ -55,6 +55,13 @@ npm run harness:seed:down    # tear down only
 npm run harness:all          # guard + unit
 ```
 
+Needs a **running production server** and a seeded database:
+
+```bash
+npm run build && npm run start   # in one terminal
+npm run harness:contract         # in another -- 89 tests, ~47s
+```
+
 **`harness:unit` touches no database and needs no `.env.test`.** Run it freely.
 Everything else writes.
 
@@ -71,8 +78,9 @@ products; pass `--count 40` for a fast run while iterating.
 | `guard/` | The production seatbelt. Called first by every entry point. |
 | `fixtures/` | `ids.mjs` (derived ids + PRNG), `seed.mjs`, `verify.mjs` |
 | `unit/` | Pure-logic characterization (Vitest). No DB, no network, no DOM. |
+| `contract/` | API request -> status + response SHAPE. Needs a server + seeded DB. |
 
-Phase 1 adds `contract/`, `e2e/`, `visual/` and `offline/` alongside these. One obvious place per concern, so "where does my new test go" is never a
+Phase 1 adds `e2e/`, `visual/` and `offline/` alongside these. One obvious place per concern, so "where does my new test go" is never a
 question.
 
 Nothing in `src/` imports from here, and nothing here imports from `src/`
@@ -156,6 +164,24 @@ Three assumptions were wrong when these were written, and each is now pinned:
 zustand `persist` store. It is deliberately the smallest possible shim: if a
 test needs more of the browser than that, it belongs in the E2E suite.
 
+## The contract suite
+
+Records **status + response shape**, not values. A snapshot of literal values
+would break on every re-seed and on every generated id, and would then be
+updated reflexively until it asserted nothing. Shape is the real contract:
+which keys exist, what type each holds. Values that matter are asserted
+explicitly instead — that the rows belong to the fixture store, that a
+duplicate creates exactly one row, that stock moved by the right amount.
+
+To accept an intentional change: `npm run harness:contract -- -u`. **Read the
+diff first.** A key vanishing from a money route is not a snapshot in need of
+updating.
+
+Sales written by `sale.test.ts` are prefixed `CONTRACT-` and deleted in
+`afterAll`, so the `FIXTURE-` rows the rest of the suite reads are untouched.
+They do decrement stock, though, so stock drifts across repeated runs —
+re-seed if a stock assertion starts behaving oddly.
+
 ## Things that will bite you
 
 - **`npm run dev` overwrites `.next`**, which invalidates the bundle numbers in
@@ -168,6 +194,12 @@ test needs more of the browser than that, it belongs in the E2E suite.
 - **`profit_percentage` is computed by a database trigger.** Whatever the seed
   sends is overwritten. Never assert on a value you supplied; assert on the
   formula.
+- **The fixture store has retention DISABLED** (`transaction_retention_days = 0`,
+  set by `seed.mjs`). `GET /api/transactions` filters on that column, and the
+  fixture sales are dated around the March 2026 DST boundary — with the default
+  window the route returned `[]` and looked broken. Fixtures need dates far
+  enough apart to span a DST change *and* need to stay readable; only a store
+  that keeps everything gets both.
 - **`modifiers` distinguishes `NULL` from `[]`.** `NULL` is an ordinary retail
   line; `[]` is a menu line where nothing was changed. The kitchen board filters
   on `modifiers IS NOT NULL`, so collapsing them makes a retail store see every

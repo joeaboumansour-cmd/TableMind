@@ -371,6 +371,17 @@ async function main() {
 
   console.log(`\n[seed] seeding store ${STORE} (${argCount} products)`);
 
+  // Retention OFF for the fixture store.
+  //
+  // GET /api/transactions filters on store.transaction_retention_days, so with
+  // the default window the 300 fixture sales -- dated around the 2026-03-29
+  // Beirut DST boundary -- were invisible and the route returned []. The
+  // fixtures need dates far enough apart to span a DST change AND need to stay
+  // readable, and those two only coexist if the store keeps everything.
+  await req("PATCH", `stores?id=eq.${STORE}`,
+    { transaction_retention_days: 0 }, { Prefer: "return=minimal" });
+  console.log("  retention disabled for the fixture store");
+
   await insertAll("product_categories", buildCategories());
 
   const cat = buildProducts(argCount);

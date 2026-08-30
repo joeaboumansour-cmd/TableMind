@@ -827,7 +827,7 @@ these three it is achievable only in a real shop, on one store, watched.
 | 0.4 budget gates | DONE | | | | `verify:budgets` in `npm run build`. Permanent — survives Phase 9. API-depth budget deferred to Phase 1 |
 | 1.1 fixtures & seeding | DONE | | | | 2,492 products / 300 txns. Determinism + tenant isolation both proven |
 | 1.2 pure-logic characterization | DONE | | | | 130 tests, 8 files, <1s. Vitest 4.1.11 under `harness/` |
-| 1.3 API contract snapshots | NOT STARTED | | | | |
+| 1.3 API contract snapshots | DONE | | | | 89 tests, ~47s. **Found audit P1-11** |
 | 1.4 E2E golden flows | NOT STARTED | | | | |
 | 1.5 visual snapshots | NOT STARTED | | | | |
 | 1.6 offline/sync scenarios | NOT STARTED | | | | |
@@ -963,6 +963,61 @@ main-thread long tasks. Every Tier 1 and Tier 2 screen is behind auth. The
 `perf.*` events from 0.2 will supply the field version of these from real
 devices, which is the better number anyway; local traces remain useful for
 attributing a regression to a specific change.
+
+### 1.3 API contract snapshots (2026-08-31)
+
+`npm run harness:contract` — **89 tests in ~47s** against a production build
+and the seeded store. Needs `npm run build && npm run start` first; `next dev`
+compiles on demand and skews both timings and behaviour.
+
+Three files: `auth.test.ts` (61 — every store route refuses anonymous,
+malformed, no-store-id and unknown-store callers, and accepts the fixture
+caller), `read-shapes.test.ts` (15 — response shape snapshots plus explicit
+tenancy assertions on the rows themselves), `sale.test.ts` (13 — the money
+path).
+
+Snapshots record **shape, not values**. Literal values would break on every
+re-seed and every generated id, and would then be updated reflexively until
+they asserted nothing.
+
+Invariants now pinned end-to-end: **#7** (same `transaction_number` twice
+creates exactly one row, the duplicate is flagged, and stock is not
+double-decremented), **#9** (client `stock_decrements` take priority and the
+line's own product is NOT also decremented), **#10** (a sale succeeds with no
+user, with no matching shift, and with stock at zero), **#17**, **#19**,
+**#21**, **#23**, plus `created_at` clamping in both directions — a future
+timestamp is pulled back, a past one is preserved, which is the audit P1-1 fix.
+
+> ### The suite found a real money bug on its first run — audit **P1-11**
+>
+> `POST /api/transactions` returns **500** when `user_id` names a deleted
+> `store_users` row (`23503` on `transactions_user_id_fkey`).
+>
+> A cashier rings sales offline → the employee leaves and an admin removes them
+> (a **hard** delete) → the till reconnects → the insert violates the FK → the
+> client reads 500 as an offline condition, retries, exhausts five attempts and
+> **dead-letters** the sale. Money taken, sale never recorded.
+>
+> `ON DELETE SET NULL` protects sales already written; it does nothing for ones
+> still in a device's queue. This contradicts **invariant #10** — shift
+> resolution already degrades to a null `shift_id`, but the user reference does
+> not degrade the same way.
+>
+> **Left unfixed on purpose.** Phase 1 freezes behaviour; the test pins the 500
+> so Phase 2.1's atomic sale RPC cannot change it unnoticed in either
+> direction. The fix (coerce an unresolvable `user_id` to null, as shift
+> resolution already does) belongs with 2.1, which rewrites that insert anyway.
+>
+> This is also the answer to Phase 1's exit criterion — *"a net that has never
+> caught anything is not known to work."* It caught something before 1.7 even
+> ran.
+
+**A fixture problem it also surfaced:** `GET /api/transactions` filters on
+`store.transaction_retention_days`, so the March-2026 fixture sales were
+outside the default window and the route returned `[]`. `seed.mjs` now sets
+retention to 0 for the fixture store. Fixtures need dates spread enough to span
+a DST boundary *and* need to stay readable; only a store that keeps everything
+gets both.
 
 ### 1.2 pure-logic characterization (2026-08-31)
 
