@@ -49,7 +49,7 @@ import { PermissionGuard } from "@/lib/auth/guards";
 // Named helpers only. A raw `* SELL_RATE` skips the 5,000 LL rounding that
 // convertUsdToLl exists to apply, and a raw `/ RETURN_RATE` duplicates a rule
 // that is supposed to live in exactly one file.
-import { formatLL, formatUSD, convertUsdToLl, convertLlToUsdForReturn } from "@/lib/utils/format";
+import { formatLL, formatUSD, convertUsdToLl, convertLlToUsdForReturn, SELL_RATE } from "@/lib/utils/format";
 import dynamic from "next/dynamic";
 // See the POS page: the scanner drags in @zxing/library, so it is loaded on
 // demand and the beep comes from the standalone feedback module instead.
@@ -79,6 +79,9 @@ import type { Category } from "@/lib/categories/types";
 import { getCachedRecipes, refreshRecipes, saveRecipe } from "@/lib/recipes/load";
 import type { RecipeMap } from "@/lib/recipes/types";
 import RecipeEditor, { type DraftComponent, type IngredientOption } from "@/components/inventory/RecipeEditor";
+import ComboEditor, { type DraftComboItem, type ComboItemOption } from "@/components/inventory/ComboEditor";
+import { getCachedCombos, refreshCombos, saveCombo } from "@/lib/combos/load";
+import type { ComboMap } from "@/lib/combos/types";
 import CategoryManagerDialog from "@/components/inventory/CategoryManagerDialog";
 import MenuQrDialog from "@/components/inventory/MenuQrDialog";
 
@@ -247,6 +250,8 @@ function StoreProductsPageContent() {
   const [recipeDraft, setRecipeDraft] = useState<DraftComponent[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [recipes, setRecipes] = useState<RecipeMap>({});
+  const [combos, setCombos] = useState<ComboMap>({});
+  const [comboDraft, setComboDraft] = useState<DraftComboItem[]>([]);
   const [kindFilter, setKindFilter] = useState<KindFilter>("sellable");
 
   // Product Variants
@@ -343,8 +348,10 @@ function StoreProductsPageContent() {
     // already uses for products. A failed refresh keeps the cached copy.
     setCategories(getCategories(user.storeId));
     setRecipes(getCachedRecipes(user.storeId));
+    setCombos(getCachedCombos(user.storeId));
     void refreshCategories(user.storeId).then(setCategories);
     void refreshRecipes(user.storeId).then(setRecipes);
+    void refreshCombos(user.storeId).then(setCombos);
     // Invalidate whatever is still in flight. Without this, a fetch that
     // resolves after the user has left writes into an unmounted page.
     return invalidateLoads;
@@ -676,6 +683,28 @@ function StoreProductsPageContent() {
               : "Product saved, but the recipe did not"
           );
         }
+
+        // Same rule as the recipe: the product is already saved and correct,
+        // so a failed combo save is reported rather than rolled back.
+        try {
+          const cleanedCombo = comboDraft
+            .filter((c) => c.item_product_id)
+            .map((c, i) => ({ ...c, sort_order: i }));
+          const savedCombo = await saveCombo(storeId, parentProductId, cleanedCombo);
+          setCombos((prev) => {
+            const next = { ...prev };
+            if (savedCombo.length > 0) next[parentProductId!] = savedCombo;
+            else delete next[parentProductId!];
+            return next;
+          });
+        } catch (comboError) {
+          console.error("Combo save error:", comboError);
+          toast.error(
+            comboError instanceof Error
+              ? `Product saved, but the combo did not: ${comboError.message}`
+              : "Product saved, but the combo did not"
+          );
+        }
       }
 
       setIsDialogOpen(false);
@@ -737,6 +766,13 @@ function StoreProductsPageContent() {
     // Strip the server-side ids: the editor works on drafts and the PUT
     // rewrites the whole set, so carrying ids around would only invite
     // treating this as a patch.
+    setComboDraft(
+      (combos[product.id] || []).map((c) => ({
+        item_product_id: c.item_product_id,
+        quantity: c.quantity,
+        sort_order: c.sort_order,
+      }))
+    );
     setRecipeDraft(
       (recipes[product.id] || []).map((c) => ({
         ingredient_product_id: c.ingredient_product_id,
@@ -861,6 +897,7 @@ function StoreProductsPageContent() {
     setServingQty("1");
     setCategoryId("");
     setRecipeDraft([]);
+    setComboDraft([]);
     setEditingProduct(null);
     setLastUpdated('cost');
   };
@@ -1018,6 +1055,30 @@ function StoreProductsPageContent() {
         }))
         .sort((a, b) => a.name.localeCompare(b.name)),
     [products]
+  );
+
+  /**
+   * What may go inside a combo: sellable products, never ingredients, never
+   * variants, and never the product being edited (a combo cannot contain
+   * itself — the database refuses it too).
+   */
+  const comboOptions = useMemo<ComboItemOption[]>(
+    () =>
+      products
+        .filter(
+          (product) =>
+            isSellable(product) &&
+            !product.parent_id &&
+            product.id !== editingProduct?.id
+        )
+        .map((product) => ({
+          id: product.id,
+          name: product.name,
+          selling_price: product.selling_price,
+          currency: product.currency,
+        }))
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    [products, editingProduct]
   );
 
   /** How many ingredients exist, for the filter chip. */
@@ -2390,6 +2451,33 @@ function StoreProductsPageContent() {
               )}
 
               {productKind === "sellable" && (
+                <div className="space-y-1.5">
+                  <Label>Combo</Label>
+                  <p className="text-xs text-muted-foreground">
+                    Bundle other products at one price. Leave empty if this is not a meal
+                    deal.
+                  </p>
+                  <ComboEditor
+                    options={comboOptions}
+                    items={comboDraft}
+                    onChange={setComboDraft}
+                    // SELL_RATE, not convertUsdToLl: this must match what the
+                    // CART will actually charge, and addComboItem uses the raw
+                    // rate because per-item rounding is not applied — rounding
+                    // to 5,000 belongs to the cart total alone. Using the
+                    // rounding helper here would show a figure the till then
+                    // disagrees with.
+                    comboPriceLl={
+                      currency === "USD"
+                        ? (parseFloat(sellingPrice) || 0) * SELL_RATE
+                        : parseFloat(sellingPrice) || 0
+                    }
+                    disabled={isSubmitting}
+                  />
+                </div>
+              )}
+
+              {productKind === "sellable" && comboDraft.length === 0 && (
                 <div className="space-y-1.5">
                   <Label>Recipe</Label>
                   <p className="text-xs text-muted-foreground">

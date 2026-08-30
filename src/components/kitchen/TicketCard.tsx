@@ -71,6 +71,18 @@ export default function TicketCard({
               {item.product_name}
               {/* The changes are the part a cook can get wrong, so they are
                   called out rather than tucked in with the name. */}
+              {item.combo_children && item.combo_children.length > 0 && (
+                <span className="mt-0.5 flex flex-wrap gap-1">
+                  {item.combo_children.map((label) => (
+                    <span
+                      key={label}
+                      className="rounded bg-primary/20 px-1.5 py-0.5 text-[10px] font-bold leading-none text-primary"
+                    >
+                      {label}
+                    </span>
+                  ))}
+                </span>
+              )}
               {item.modifiers && item.modifiers.length > 0 && (
                 <span className="mt-0.5 flex flex-wrap gap-1">
                   {item.modifiers.map((label) => (

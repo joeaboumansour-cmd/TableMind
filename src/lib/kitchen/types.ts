@@ -91,6 +91,8 @@ export interface KitchenTicketItem {
   modifiers?: string[];
   /** Free-text instruction for this line — "cut in half". */
   note?: string | null;
+  /** For a combo: what it contains, already formatted ("1x Fries"). */
+  combo_children?: string[];
 }
 
 export interface KitchenTicket {

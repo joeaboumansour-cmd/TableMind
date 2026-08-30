@@ -86,6 +86,7 @@ interface TxnRow {
     quantity: number;
     modifiers: CartLineModifier[] | null;
     note: string | null;
+    combo_children: Array<{ name: string; quantity: number }> | null;
   }> | null;
   kitchen_ticket_state:
     | { status: string; claimed_by: string | null; started_at: string | null; ready_at: string | null }
@@ -119,7 +120,7 @@ export async function GET(request: Request) {
       id,
       transaction_number,
       created_at,
-      transaction_items ( id, product_name, quantity, modifiers, note ),
+      transaction_items ( id, product_name, quantity, modifiers, note, combo_children ),
       kitchen_ticket_state ( status, claimed_by, started_at, ready_at )
     `
     )
@@ -149,6 +150,8 @@ export async function GET(request: Request) {
       // so a cook and a customer never read different words for one change.
       modifiers: describeModifiers(item.modifiers),
       note: item.note ?? null,
+      // A cook reads the meal's contents, not its grams.
+      combo_children: (item.combo_children || []).map((c) => `${c.quantity}x ${c.name}`),
     }));
 
     tickets.push({

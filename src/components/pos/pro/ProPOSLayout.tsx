@@ -53,6 +53,7 @@ import ModifierSheet from "./ModifierSheet";
 import { useMenuSheet } from "./useMenuSheet";
 import type { Category } from "@/lib/categories/types";
 import type { RecipeMap } from "@/lib/recipes/types";
+import type { ComboMap } from "@/lib/combos/types";
 import PanelResizer, { usePanelWidth } from "./PanelResizer";
 import { useScanFocus } from "./useScanFocus";
 
@@ -66,6 +67,8 @@ interface ProPOSLayoutProps {
   categories: Category[];
   /** Every recipe in the store, by menu product id. Empty for a retail store. */
   recipes: RecipeMap;
+  /** Every combo in the store. Empty for a store that has none. */
+  combos: ComboMap;
   /** Ingredient names for the modifier sheet, by product id. */
   ingredientNames: Map<string, string>;
   /** Every ingredient in inventory — anything can be added to anything. */
@@ -86,6 +89,7 @@ export default function ProPOSLayout({
   savedProducts,
   categories,
   recipes,
+  combos,
   ingredientNames,
   ingredients,
   storeId,
@@ -161,6 +165,7 @@ export default function ProPOSLayout({
     sheetProps,
   } = useMenuSheet({
     recipes,
+    combos,
     products,
     enabled: isEnabled("menu_items"),
     onPlainAdd: onProductAdd,

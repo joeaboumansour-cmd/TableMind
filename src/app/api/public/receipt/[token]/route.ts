@@ -97,7 +97,8 @@ export async function GET(
           total_price,
           currency,
           modifiers,
-          note
+          note,
+          combo_children
         )
       `)
       .eq("receipt_token", token)
@@ -145,6 +146,7 @@ export async function GET(
           // Null on every ordinary line; the receipt renders nothing for it.
           modifiers: item.modifiers ?? null,
           note: item.note ?? null,
+          combo_children: item.combo_children ?? null,
         })),
         store: {
           name: store?.username || "Store",

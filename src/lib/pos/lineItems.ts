@@ -15,7 +15,7 @@
  * so the rule cannot drift between the online and offline paths.
  */
 
-import type { CartItem, CartLineModifier } from "@/lib/types/cart";
+import type { CartItem, CartLineComboChild, CartLineModifier } from "@/lib/types/cart";
 
 /** Marks a cart key as local-only. Never valid as a UUID, by construction. */
 const ONE_OFF_PREFIX = "oneoff:";
@@ -54,6 +54,13 @@ export interface SaleLineItem {
   modifiers?: CartLineModifier[] | null;
   /** Free-text instruction for this line. Null on an ordinary line. */
   note?: string | null;
+  /**
+   * What a combo line contains. Null on everything else.
+   *
+   * Denormalised like the modifiers beside it: a meal's make-up can be edited
+   * after the sale, and a receipt must say what was actually handed over.
+   */
+  combo_children?: CartLineComboChild[] | null;
 }
 
 /**
@@ -76,6 +83,7 @@ export function buildTransactionItems(items: CartItem[]): SaleLineItem[] {
     // Trimmed to null so an empty box does not become an empty string that
     // renders as a blank line on a receipt.
     note: item.note?.trim() || null,
+    combo_children: item.combo_children ?? null,
   }));
 }
 

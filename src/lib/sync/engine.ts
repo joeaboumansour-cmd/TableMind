@@ -386,6 +386,7 @@ class SyncEngine {
             // changed", which is what the kitchen board filters tickets on.
             modifiers: item.modifiers ?? null,
             note: item.note ?? null,
+            combo_children: item.combo_children ?? null,
           })),
           // ⚠️ Forwarding this is what makes an OFFLINE menu sale deduct the
           // right thing.

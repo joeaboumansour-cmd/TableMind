@@ -38,6 +38,8 @@ import { isSellable, isIngredient } from "@/lib/products/kind";
 import { getCategories, refreshCategories } from "@/lib/categories/load";
 import type { Category } from "@/lib/categories/types";
 import { getCachedRecipes, refreshRecipes } from "@/lib/recipes/load";
+import { getCachedCombos, refreshCombos } from "@/lib/combos/load";
+import type { ComboMap } from "@/lib/combos/types";
 import type { RecipeMap } from "@/lib/recipes/types";
 import ProPOSLayout from "@/components/pos/pro/ProPOSLayout";
 import MenuBrowser from "@/components/pos/pro/MenuBrowser";
@@ -76,6 +78,7 @@ export default function POSPage() {
   const [products, setProducts] = useState<Product[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [recipes, setRecipes] = useState<RecipeMap>({});
+  const [combos, setCombos] = useState<ComboMap>({});
   const [isLoading, setIsLoading] = useState(true);
   // Throttles the focus-triggered refresh (see the load effect below)
   const lastFocusSyncRef = useRef(0);
@@ -207,8 +210,10 @@ export default function POSPage() {
           // keeps whatever was cached rather than emptying them.
           setCategories(getCategories(store_id));
           setRecipes(getCachedRecipes(store_id));
+          setCombos(getCachedCombos(store_id));
           void refreshCategories(store_id).then(setCategories);
           void refreshRecipes(store_id).then(setRecipes);
+          void refreshCombos(store_id).then(setCombos);
 
           // ALWAYS load from local cache first for instant display
           const cached = await getCachedProducts(store_id);
@@ -426,6 +431,7 @@ export default function POSPage() {
     sheetProps: mobileSheetProps,
   } = useMenuSheet({
     recipes,
+    combos,
     products: sellableProducts,
     enabled: isEnabled("menu_items"),
     onPlainAdd: handleProductAdd,
@@ -1012,6 +1018,7 @@ export default function POSPage() {
         savedProducts={savedProducts}
         categories={categories}
         recipes={recipes}
+        combos={combos}
         ingredientNames={ingredientNames}
         ingredients={ingredientProducts}
         storeId={user?.storeId || ""}

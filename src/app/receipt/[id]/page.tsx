@@ -32,6 +32,8 @@ interface PublicReceiptItem {
   modifiers?: CartLineModifier[] | null;
   /** Free-text instruction for this line. */
   note?: string | null;
+  /** What a combo contained. Null on every other line. */
+  combo_children?: Array<{ name: string; quantity: number }> | null;
 }
 
 interface PublicReceipt {
@@ -364,6 +366,14 @@ export default function PublicReceiptPage() {
                       <span className="block truncate">{item.product_name}</span>
                       {/* What the customer asked for, in the same words the
                           till and the kitchen used. */}
+                      {(item.combo_children || []).map((c) => (
+                        <span
+                          key={c.name}
+                          className="block truncate text-xs font-normal text-muted-foreground"
+                        >
+                          {c.quantity}x {c.name}
+                        </span>
+                      ))}
                       {describeModifiers(item.modifiers).map((label) => (
                         <span
                           key={label}

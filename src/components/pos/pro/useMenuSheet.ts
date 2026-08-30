@@ -16,9 +16,12 @@ import { playSuccessSound } from "@/lib/feedback";
 import type { Product } from "@/lib/types/product";
 import type { CartItem, CartLineModifier } from "@/lib/types/cart";
 import type { RecipeMap } from "@/lib/recipes/types";
+import { isCombo, resolveCombo, type ComboMap } from "@/lib/combos/types";
 
 interface UseMenuSheetOptions {
   recipes: RecipeMap;
+  /** Every combo in the store. Empty for a store that has none. */
+  combos: ComboMap;
   products: Product[];
   /** True when the store has the menu_items feature on. */
   enabled: boolean;
@@ -34,6 +37,7 @@ export interface MenuSheetSubject {
 
 export function useMenuSheet({
   recipes,
+  combos,
   products,
   enabled,
   onPlainAdd,
@@ -42,6 +46,7 @@ export function useMenuSheet({
 
   const items = useCartStore((s) => s.items);
   const addConfiguredItem = useCartStore((s) => s.addConfiguredItem);
+  const addComboItem = useCartStore((s) => s.addComboItem);
   const updateItemModifiers = useCartStore((s) => s.updateItemModifiers);
 
   /**
@@ -50,6 +55,20 @@ export function useMenuSheet({
    */
   const handleTileAdd = useCallback(
     (product: Product) => {
+      // A COMBO is rung up as the meal as advertised: one line, one price, no
+      // sheet. It is not "configured" on the way in — a cashier who needs
+      // "no pickles" edits the line afterwards, exactly as on a standalone
+      // sandwich. Checked FIRST, because a combo could also happen to have a
+      // recipe of its own and the meal must win.
+      if (enabled && isCombo(combos, product.id)) {
+        const nameOf = (id: string) =>
+          products.find((p) => p.id === id)?.name || "Item";
+        const { children, modifiers } = resolveCombo(product.id, combos, recipes, nameOf);
+        addComboItem(product, children, modifiers);
+        playSuccessSound();
+        return;
+      }
+
       const components = recipes[product.id];
       // Only a product WITH a recipe opens the sheet on the way in. Anything
       // else goes straight to the cart, so selling a bottle of water stays one
@@ -60,7 +79,7 @@ export function useMenuSheet({
       }
       onPlainAdd(product);
     },
-    [recipes, enabled, onPlainAdd]
+    [recipes, combos, products, enabled, onPlainAdd, addComboItem]
   );
 
   /**

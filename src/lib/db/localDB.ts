@@ -4,7 +4,7 @@
 // ===
 
 import Dexie, { type EntityTable } from "dexie";
-import type { CartLineModifier } from "@/lib/types/cart";
+import type { CartLineComboChild, CartLineModifier } from "@/lib/types/cart";
 import type { StockDecrement } from "@/lib/pos/lineItems";
 
 // ---- Types ----
@@ -34,6 +34,8 @@ export interface CachedTransactionItem {
   modifiers?: CartLineModifier[] | null;
   /** Free-text instruction for this line. Optional, like modifiers above. */
   note?: string | null;
+  /** What a combo contained. Optional, for the same reason. */
+  combo_children?: CartLineComboChild[] | null;
 }
 
 export interface CachedTransaction {
@@ -170,6 +172,8 @@ export interface QueuedTransactionItem {
   modifiers?: CartLineModifier[] | null;
   /** Free-text instruction for this line. Mirrors SaleLineItem. */
   note?: string | null;
+  /** What a combo line contains. Mirrors SaleLineItem. */
+  combo_children?: CartLineComboChild[] | null;
 }
 
 export interface PendingWrite {

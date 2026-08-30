@@ -112,11 +112,24 @@ export default function ProCartRow({
    * bury the one line that matters — the cashier needs to see "no pickles",
    * not a recital of the recipe.
    */
-  const modifierChips = describeModifiers(item.modifiers).map((label) => ({
-    key: label,
-    label,
-    removed: label.startsWith("No "),
-  }));
+  const modifierChips = [
+    // A combo's contents first: what the customer is getting is more important
+    // than which grams moved. A combo line's `modifiers` hold the flattened
+    // ingredient expansion for stock and are deliberately NOT shown here —
+    // "1x Fries" is the useful line, "180 potatoes" is not.
+    ...(item.combo_children || []).map((c) => ({
+      key: `combo:${c.product_id}`,
+      label: `${c.quantity}x ${c.name}`,
+      removed: false,
+    })),
+    ...(item.line_kind === "combo"
+      ? []
+      : describeModifiers(item.modifiers).map((label) => ({
+          key: label,
+          label,
+          removed: label.startsWith("No "),
+        }))),
+  ];
 
   return (
     <div

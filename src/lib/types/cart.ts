@@ -14,7 +14,14 @@ import { Product } from './product';
  *              nullable, and the transactions API already skips the stock
  *              decrement when it is absent.
  */
-export type CartLineKind = 'product' | 'one_off' | 'configured';
+export type CartLineKind = 'product' | 'one_off' | 'configured' | 'combo';
+
+/** One thing inside a combo, as the kitchen and the receipt should read it. */
+export interface CartLineComboChild {
+  product_id: string;
+  name: string;
+  quantity: number;
+}
 
 /**
  * One ingredient choice on a made-to-order line.
@@ -119,6 +126,16 @@ export interface CartItem {
   /** The ingredient choices on a configured line. */
   modifiers?: CartLineModifier[];
   /**
+   * What a combo line CONTAINS, for display — "1x Taouk, 1x Fries, 1x Cola".
+   *
+   * Separate from `modifiers` on purpose. Modifiers carry the flattened
+   * INGREDIENT expansion, so buildStockDecrements depletes a meal correctly
+   * while knowing nothing about combos. This carries the products a human
+   * should be told about: a cook needs to make a sandwich and pour a drink,
+   * not read a list of grams.
+   */
+  combo_children?: CartLineComboChild[];
+  /**
    * Free-text instruction for this line — "cut in half", "extra spicy".
    * Things no ingredient list can express. Reaches the kitchen and the receipt.
    */
@@ -200,6 +217,18 @@ export interface CartActions {
    */
   addConfiguredItem: (
     product: Product,
+    modifiers: CartLineModifier[],
+    quantity?: number,
+    note?: string
+  ) => string;
+  /**
+   * Add a combo: ONE line at the combo's own price, carrying both what it
+   * contains (for the kitchen and the receipt) and its flattened ingredient
+   * expansion (for stock). Always appends, like addConfiguredItem.
+   */
+  addComboItem: (
+    product: Product,
+    children: CartLineComboChild[],
     modifiers: CartLineModifier[],
     quantity?: number,
     note?: string

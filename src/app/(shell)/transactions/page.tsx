@@ -112,6 +112,8 @@ interface TransactionItem {
   modifiers?: CartLineModifier[] | null;
   /** Free-text instruction for this line. */
   note?: string | null;
+  /** What a combo contained. Null on every other line. */
+  combo_children?: Array<{ name: string; quantity: number }> | null;
 }
 
 interface Transaction {
@@ -357,6 +359,7 @@ function TransactionHistoryPageContent() {
                   currency: item.currency,
                   modifiers: item.modifiers ?? null,
                   note: item.note ?? null,
+                  combo_children: item.combo_children ?? null,
                 })),
               }));
               cacheTransactions(toCache).catch((err) =>
@@ -435,6 +438,7 @@ function TransactionHistoryPageContent() {
           // check what was ordered before it has even reached the server.
           modifiers: it.modifiers ?? null,
           note: it.note ?? null,
+          combo_children: it.combo_children ?? null,
         })),
         calculated_change: (q.amount_paid ?? 0) - (q.total_amount ?? 0),
         syncState,
@@ -1171,6 +1175,11 @@ function TransactionHistoryPageContent() {
                       <span className="text-muted-foreground tnum"> × {item.quantity}</span>
                       {/* What was changed, in the same words the till, the
                           kitchen and the receipt use. */}
+                      {(item.combo_children || []).map((c) => (
+                        <span key={c.name} className="block text-xs text-muted-foreground">
+                          {c.quantity}x {c.name}
+                        </span>
+                      ))}
                       {describeModifiers(item.modifiers).map((label) => (
                         <span key={label} className="block text-xs text-muted-foreground">
                           {label}

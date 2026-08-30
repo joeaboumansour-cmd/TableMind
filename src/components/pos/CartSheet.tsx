@@ -329,7 +329,19 @@ export default function CartSheet({
                 </p>
                 {/* Only the CHANGES, same rule and same wording as the desktop
                     row and the receipt — describeModifiers() is shared. */}
-                {describeModifiers(item.modifiers).length > 0 && (
+                {(item.combo_children || []).length > 0 && (
+                  <span className="mt-1 flex flex-wrap gap-1">
+                    {(item.combo_children || []).map((c) => (
+                      <span
+                        key={c.product_id}
+                        className="rounded bg-primary/15 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-primary"
+                      >
+                        {c.quantity}x {c.name}
+                      </span>
+                    ))}
+                  </span>
+                )}
+                {item.line_kind !== "combo" && describeModifiers(item.modifiers).length > 0 && (
                   <span className="mt-1 flex flex-wrap gap-1">
                     {describeModifiers(item.modifiers).map((label) => (
                       <span

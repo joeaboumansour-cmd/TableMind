@@ -26,6 +26,7 @@ import {
   OneOffInput,
   CartLinePatch,
   CartLineModifier,
+  CartLineComboChild,
   CartState,
 } from '@/lib/types/cart';
 import { Product } from '@/lib/types/product';
@@ -323,6 +324,84 @@ export const useCartStore = create<CartStore>()(
          *    becomes currency 'LL', because a line carrying LL add-ons is no
          *    longer tracking the rate and the field should say so.
          */
+        /**
+         * A combo. ONE line at the combo's OWN price.
+         *
+         * The price is the combo product's selling_price and nothing else — not
+         * a sum of its parts, not a discount off them. A round advertised
+         * number is the entire point of a meal deal, so `extrasOf` is not
+         * consulted and the children contribute no money: they are already
+         * paid for by the combo price.
+         *
+         * The children are carried for the kitchen and the receipt; the
+         * flattened ingredient expansion rides in `modifiers`, so
+         * buildStockDecrements depletes a meal correctly while knowing nothing
+         * about combos.
+         */
+        addComboItem: (
+          product: Product,
+          children: CartLineComboChild[],
+          modifiers: CartLineModifier[],
+          quantity = 1,
+          note?: string
+        ) => {
+          const { items } = get();
+          const qty = quantity > 0 ? quantity : 1;
+          const uid = newLineUid();
+
+          const baseLl =
+            product.currency === 'USD'
+              ? product.selling_price * SELL_RATE
+              : product.selling_price;
+
+          const discountPercentage = product.discount_percentage || 0;
+          const unitPriceLl =
+            discountPercentage > 0 ? baseLl * (1 - discountPercentage / 100) : baseLl;
+          const unitPriceUsd = convertLlToUsdForReturn(unitPriceLl);
+          const originalUnitPriceUsd = convertLlToUsdForReturn(baseLl);
+          const unitDiscount = baseLl - unitPriceLl;
+
+          const newItem: CartItem = {
+            product_id: product.id,
+            product_name: product.name,
+            barcode: product.barcode,
+            quantity: qty,
+            unit_price: unitPriceLl,
+            total_price: qty * unitPriceLl,
+            unit_price_usd: unitPriceUsd,
+            total_price_usd: qty * unitPriceUsd,
+            stock_quantity: product.stock_quantity,
+            currency: 'LL',
+            discount_percentage: discountPercentage,
+            original_unit_price: baseLl,
+            original_total_price: qty * baseLl,
+            original_unit_price_usd: originalUnitPriceUsd,
+            original_total_price_usd: qty * originalUnitPriceUsd,
+            unit_price_discount_amount: unitDiscount,
+            total_discount_amount: qty * unitDiscount,
+            line_kind: 'combo',
+            catalog_unit_price: baseLl,
+            line_uid: uid,
+            modifiers,
+            combo_children: children,
+            note: note?.trim() || undefined,
+          };
+
+          commitItems([newItem, ...items], {
+            action: 'cart.configure',
+            target: product.name,
+            details: {
+              product_id: product.id,
+              line_uid: uid,
+              quantity: qty,
+              unit_price_ll: unitPriceLl,
+              combo: true,
+              children: children.map((c) => `${c.quantity}x ${c.name}`),
+            },
+          });
+          return uid;
+        },
+
         addConfiguredItem: (product: Product, modifiers: CartLineModifier[], quantity = 1, note?: string) => {
           const { items } = get();
           const qty = quantity > 0 ? quantity : 1;
