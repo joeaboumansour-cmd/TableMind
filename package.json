@@ -4,16 +4,18 @@
   "private": true,
   "scripts": {
     "dev": "next dev -H 0.0.0.0 --webpack",
-    "build": "next build --webpack && npm run verify:sw",
+    "build": "next build --webpack && npm run verify:sw && npm run verify:budgets",
     "verify:sw": "node scripts/verify-sw.mjs",
     "analyze": "cross-env ANALYZE=true next build --webpack",
     "start": "next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "build:legacy": "cross-env NEXT_PUBLIC_BUILD_VARIANT=legacy BROWSERSLIST=\"chrome 109, edge 109\" next build --webpack && npm run verify:sw && npm run verify:legacy-css",
+    "build:legacy": "cross-env NEXT_PUBLIC_BUILD_VARIANT=legacy BROWSERSLIST=\"chrome 109, edge 109\" next build --webpack && npm run verify:sw && npm run verify:budgets && npm run verify:legacy-css",
     "verify:legacy-css": "node scripts/verify-legacy-css.mjs",
     "baseline": "node scripts/measure-baseline.mjs",
-    "harness:guard": "node harness/guard/assert-not-production.mjs"
+    "harness:guard": "node harness/guard/assert-not-production.mjs",
+    "verify:budgets": "node scripts/verify-budgets.mjs",
+    "baseline:update": "node scripts/measure-baseline.mjs --update"
   },
   "dependencies": {
     "@ducanh2912/next-pwa": "^10.2.9",

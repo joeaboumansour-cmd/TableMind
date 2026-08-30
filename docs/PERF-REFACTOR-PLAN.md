@@ -824,7 +824,7 @@ these three it is achievable only in a real shop, on one store, watched.
 | 0.1 harness env switch + prod-URL guard | DONE | e8b8792 | | | Guard + `.env.test` + harness tenant. 6 guard cases verified |
 | 0.2 field measurement events | DONE | | | | 4 events live through real ingest. Client emitters wired, not yet observed firing — see note |
 | 0.3 local trace baselines | DONE | | see below | | Bundles + request structure + real API latency. CPU/network throttling unavailable — see caveats |
-| 0.4 budget gates | NOT STARTED | | | | Permanent |
+| 0.4 budget gates | DONE | | | | `verify:budgets` in `npm run build`. Permanent — survives Phase 9. API-depth budget deferred to Phase 1 |
 | 1.1 fixtures & seeding | NOT STARTED | | | | |
 | 1.2 pure-logic characterization | NOT STARTED | | | | |
 | 1.3 API contract snapshots | NOT STARTED | | | | |
@@ -963,6 +963,44 @@ main-thread long tasks. Every Tier 1 and Tier 2 screen is behind auth. The
 `perf.*` events from 0.2 will supply the field version of these from real
 devices, which is the better number anyway; local traces remain useful for
 attributing a regression to a specific change.
+
+### 0.4 budget gates (2026-08-30)
+
+`npm run verify:budgets`, wired into `npm run build` after `verify:sw`, in the
+same shape. Enforces `docs/perf-baseline.json`:
+
+- **No route's First Load JS grew.**
+- **Total precache did not grow.**
+
+Measurement lives in `scripts/lib/measure-build.mjs` and is shared by the
+reporter and the gate — a gate that measures differently from the reporter
+fails for reasons nobody can reproduce.
+
+**Growth is allowed, but only deliberately.** A new feature legitimately costs
+bytes; the gate does not re-baseline itself, so that cost has to be accepted by
+a person:
+
+```
+npm run build && npm run baseline:update
+```
+
+**The 1% tolerance is noise absorption, not slack.** Gzip output differs by a
+few bytes across zlib/Node versions, and a gate that reddens on a Node upgrade
+is a gate people learn to ignore — which Phase 1's maintainability rules warn
+about directly.
+
+**The third budget from the plan — serial API round trips per route — is NOT
+implemented**, because measuring it needs a browser driving a signed-in
+session, which arrives with the Phase 1 harness. A placeholder would have been
+a gate asserting nothing. Baseline for when it lands (store `daoud`): `/pos`,
+`/pos/products`, `/pos/cash`, `/transactions` each issue **4 API calls at
+depth 2**; `/checkout` issues **1**. The defect it must catch is the reconcile
+id-set fetch running serially behind the catalogue delta pull.
+
+**Verified:** passes on an unchanged build; a control that tightened the
+recorded `/pos` budget by 20% and precache by 10% produced both failures with
+exit code 1, so the gate is known to catch rather than merely known to pass. A
+missing baseline file fails closed with instructions.
 
 ### 0.3 baseline — runtime (2026-08-30)
 

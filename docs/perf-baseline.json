@@ -18,7 +18,7 @@
       "route": "/admin/activity",
       "chunks": 22,
       "raw": 1038447,
-      "gz": 318204,
+      "gz": 318197,
       "missing": 0
     },
     {
@@ -67,28 +67,28 @@
       "route": "/pos",
       "chunks": 29,
       "raw": 1147799,
-      "gz": 352454,
+      "gz": 352363,
       "missing": 0
     },
     {
       "route": "/pos/cash",
       "chunks": 29,
       "raw": 1114744,
-      "gz": 342390,
+      "gz": 342386,
       "missing": 0
     },
     {
       "route": "/pos/products",
       "chunks": 31,
       "raw": 1195600,
-      "gz": 365299,
+      "gz": 365297,
       "missing": 0
     },
     {
       "route": "/transactions",
       "chunks": 28,
       "raw": 1093225,
-      "gz": 337486,
+      "gz": 337490,
       "missing": 0
     }
   ],
@@ -97,7 +97,12 @@
     "raw": 511934,
     "gz": 158760
   },
+  "precache": {
+    "entries": 119,
+    "raw": 3441149,
+    "counted": 114
+  },
   "recordedAt": "2026-08-30",
-  "note": "Phase 0.3 baseline. Regenerate with: npm run build && npm run baseline -- --json. NOTE: npm run dev overwrites .next, so always rebuild before measuring.",
-  "units": "bytes"
+  "units": "bytes",
+  "note": "Budget baseline enforced by scripts/verify-budgets.mjs. Regenerate with `npm run build && npm run baseline:update`. NOTE: `npm run dev` overwrites .next, so always rebuild before recording."
 }
