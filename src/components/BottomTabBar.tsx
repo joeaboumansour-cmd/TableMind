@@ -21,7 +21,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useTransition } from "react";
+import { useState, useTransition } from "react";
 import { Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { vibrate } from "@/lib/feedback";
@@ -33,7 +33,16 @@ export default function BottomTabBar({ tabs }: { tabs: Tab[] }) {
   // Gives the tapped tab an immediate pending state. Navigations were
   // imperative router.push() calls with no feedback at all, so the screen just
   // froze on the old page until the next route painted.
+  //
+  // `isPending` is ONE flag for the whole bar, so it cannot say WHICH tab was
+  // tapped. Rendering the spinner on `isPending && !active` therefore spun
+  // every inactive tab at once — the whole bar dissolved into spinners on a
+  // single tap, which reads as the app hanging rather than as one destination
+  // loading. Remember the tapped href and spin only that one. No effect is
+  // needed to clear it: `isPending` goes false when the transition settles,
+  // and the next tap overwrites the href.
   const [isPending, startTransition] = useTransition();
+  const [pendingHref, setPendingHref] = useState<string | null>(null);
 
   // Unlike DesktopNav this bar holds nothing but tabs, so no tabs means no
   // bar. That is fine ONLY because sign-out on mobile lives in the POS page's
@@ -81,6 +90,7 @@ export default function BottomTabBar({ tabs }: { tabs: Tab[] }) {
                   if (active) return;
                   e.preventDefault();
                   vibrate(15);
+                  setPendingHref(tab.href);
                   startTransition(() => router.push(tab.href));
                 }}
                 aria-current={active ? "page" : undefined}
@@ -92,7 +102,7 @@ export default function BottomTabBar({ tabs }: { tabs: Tab[] }) {
                   active ? "text-primary" : "text-muted-foreground hover:text-foreground"
                 )}
               >
-                {isPending && !active ? (
+                {isPending && pendingHref === tab.href ? (
                   <Loader2 className="h-[19px] w-[19px] animate-spin" aria-hidden />
                 ) : (
                   // Weight, not scale, carries the active state — a thicker

@@ -32,6 +32,15 @@ type SyncListener = (status: SyncStatus, pendingCount?: number) => void;
 const MAX_PENDING_WRITE_RETRIES = 5;
 
 /**
+ * Minimum gap between syncs triggered by the app being foregrounded.
+ *
+ * Shorter than the 30s retry interval, so this never delays anything a
+ * returning cashier is waiting for — it only collapses the burst that comes
+ * from flicking between apps.
+ */
+const VISIBILITY_SYNC_MIN_INTERVAL_MS = 20000;
+
+/**
  * Name of the cross-tab sync lock.
  *
  * `syncInProgress` below is a per-INSTANCE guard, and every tab has its own
@@ -141,6 +150,8 @@ class SyncEngine {
   private initialized = false;
   private retryIntervalId: ReturnType<typeof setInterval> | null = null;
   private _pendingCount = 0;
+  /** Last sync triggered by the app being foregrounded. See the listener. */
+  private lastVisibilitySyncAt = 0;
 
   constructor() {
     // Defer browser-only initialization to avoid SSR issues
@@ -182,11 +193,25 @@ class SyncEngine {
     // Chrome and did not fire at all on iOS Safari / WKWebView — i.e. the
     // "sync when the cashier returns to the app" path was dead on the primary
     // POS platform.
+    // Throttled. A full sync is a catalogue delta pull plus a queue flush plus
+    // a pending-writes pass, and this fires on EVERY foreground — a cashier
+    // flicking between the till and WhatsApp ran the lot each time. Worse, it
+    // double-fired: connectivity also re-probes on visibilitychange, and a
+    // probe that resolves to "online" runs syncNow() through the subscriber
+    // above. syncInProgress and the cross-tab lock made that harmless but not
+    // free.
+    //
+    // 20s is comfortably shorter than the 30s retry interval, so nothing a
+    // returning cashier needs is delayed — it only collapses a burst.
     document.addEventListener("visibilitychange", () => {
-      if (document.visibilityState === "visible" && connectivity.isOnline) {
-        console.log("[Sync] Page became visible, checking for pending sync...");
-        this.syncNow();
-      }
+      if (document.visibilityState !== "visible" || !connectivity.isOnline) return;
+
+      const now = Date.now();
+      if (now - this.lastVisibilitySyncAt < VISIBILITY_SYNC_MIN_INTERVAL_MS) return;
+      this.lastVisibilitySyncAt = now;
+
+      console.log("[Sync] Page became visible, checking for pending sync...");
+      this.syncNow();
     });
 
     // Start periodic retry if online on init

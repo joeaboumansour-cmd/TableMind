@@ -59,6 +59,33 @@ const withPWA = withPWAInit({
   // The leading "!" entries are exclusion globs (next-pwa convention).
   publicExcludes: ["!noprecache/**/*", "!screenshots/**/*"],
   workboxOptions: {
+    // CRITICAL: supplying `exclude` REPLACES next-pwa's defaults, exactly like
+    // runtimeCaching above. The first three entries ARE those defaults and
+    // must stay:
+    //   * the non-preloaded .woff2 files (the preloaded ones end in `.p.woff2`)
+    //   * source maps, which are megabytes nobody's browser asks for
+    //   * the build's own manifest-*.js
+    // Dropping them silently re-adds all of that to every install.
+    //
+    // `pdf-export` is ours. The PDF exporter (html2pdf.js -> jsPDF +
+    // html2canvas + canvg, with their bundled core-js) is 918 KB — 22% of the
+    // entire precache — and it serves ONE button, on /receipt/[id], which is
+    // the public page a CUSTOMER opens from a receipt QR. The till never loads
+    // it, and it cannot work offline anyway because the page fetches the
+    // receipt from the API. Precaching it meant every shop downloaded most of
+    // a megabyte, on every deploy, for a page they never open.
+    //
+    // Excluded from the PRECACHE only: it is still served (and then runtime
+    // cached) by the default `next-static-js-assets` rule when someone
+    // actually presses Download. The chunk is named by the splitChunks group
+    // in `nextConfig.webpack` below, because content-hashed chunk names cannot
+    // be matched by a stable pattern.
+    exclude: [
+      /\/_next\/static\/.*(?<!\.p)\.woff2/,
+      /\.map$/,
+      /^manifest.*\.js$/,
+      /pdf-export/,
+    ],
     runtimeCaching: [
       // CRITICAL: Exclude /api/health from the service worker 'apis' cache.
       // The connectivity heartbeat probes this endpoint to detect real
@@ -100,7 +127,15 @@ const withPWA = withPWAInit({
       // it, NetworkFirst waits for the browser's own timeout (30-90s) before
       // consulting the cache — and this app's signature failure is wifi that is
       // associated with no upstream, where the fetch hangs rather than failing.
-      // 3s is well past a healthy response and well short of a frozen till.
+      //
+      // It is ALSO a tax on every healthy launch, which is why it is 2s and not
+      // 3s. An installed iOS PWA is a cold WebView on a cold connection every
+      // single time it is opened, so it pays this wait on every launch while a
+      // perfectly good shell sits in the cache. Lowering it costs nothing in
+      // freshness: Workbox races the timeout against the network but does not
+      // abandon the request, so the fresh document still lands in the cache for
+      // the next launch. All that changes is that a slow link opens the till
+      // from cache a second sooner.
       {
         urlPattern: ({
           request,
@@ -113,7 +148,7 @@ const withPWA = withPWAInit({
         method: "GET",
         options: {
           cacheName: "app-shell",
-          networkTimeoutSeconds: 3,
+          networkTimeoutSeconds: 2,
           // maxEntries only. Adding maxAgeSeconds here would reintroduce the
           // exact bug this rule exists to fix — scripts/verify-sw.mjs asserts
           // its absence in the generated worker.
@@ -127,6 +162,35 @@ const withPWA = withPWAInit({
 const nextConfig: NextConfig = {
   experimental: {
     serverMinification: true,
+  },
+  // Give the PDF exporter's libraries one predictable chunk name.
+  //
+  // html2pdf.js pulls in jsPDF, html2canvas, canvg and their bundled core-js —
+  // 918 KB across two chunks, and by far the largest thing in the build. It is
+  // reached from exactly one place: the Download button on /receipt/[id], the
+  // public page a customer opens from a receipt QR. It is already behind a
+  // dynamic import, so it never enters the till's bundle — but the service
+  // worker was PRECACHING it, so every shop downloaded it on every deploy.
+  //
+  // Webpack names split chunks by content hash, which cannot be matched by a
+  // stable pattern in workboxOptions.exclude. Naming the group fixes that. The
+  // group is `chunks: "async"` so it can only ever collect dynamically imported
+  // code — it cannot pull anything into the initial bundle.
+  webpack: (config, { isServer }) => {
+    if (!isServer && typeof config.optimization?.splitChunks === "object") {
+      const groups = (config.optimization.splitChunks.cacheGroups ??= {});
+      groups.pdfExport = {
+        test: /[\\/]node_modules[\\/](html2pdf\.js|jspdf|html2canvas|canvg|dompurify)[\\/]/,
+        name: "pdf-export",
+        chunks: "async",
+        // Above Next's own `lib`/`commons` groups, which would otherwise claim
+        // these first and give them a hashed name again.
+        priority: 50,
+        reuseExistingChunk: true,
+        enforce: true,
+      };
+    }
+    return config;
   },
   // Ensure the service worker is never cached by the browser/CDN so that
   // update checks always fetch the latest version. This is critical for

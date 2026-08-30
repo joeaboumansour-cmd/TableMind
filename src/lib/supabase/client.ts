@@ -1,8 +1,5 @@
 import { createBrowserClient } from "@supabase/ssr";
 
-// Track current restaurant ID to detect changes
-let currentRestaurantId: string | null = null;
-
 // Mock data for demo mode
 const mockTables = [
   { id: "1", name: "Table 1", capacity: 2, shape: "rect" as const, sort_order: 1, restaurant_id: "demo" },
@@ -10,23 +7,6 @@ const mockTables = [
   { id: "3", name: "Table 3", capacity: 4, shape: "circle" as const, sort_order: 3, restaurant_id: "demo" },
   { id: "4", name: "Table 4", capacity: 6, shape: "rect" as const, sort_order: 4, restaurant_id: "demo" },
 ];
-
-/**
- * Get the restaurant ID from localStorage auth data
- */
-function getRestaurantIdFromStorage(): string | null {
-  if (typeof window === "undefined") return null;
-  
-  try {
-    const authData = localStorage.getItem("tablemind_auth");
-    if (!authData) return null;
-    
-    const parsed = JSON.parse(authData);
-    return parsed.restaurant?.id || null;
-  } catch {
-    return null;
-  }
-}
 
 // ---- Product reads ----
 //
@@ -111,70 +91,22 @@ export function createClient() {
     } as unknown as ReturnType<typeof createBrowserClient>;
   }
 
-  // Create real client with DYNAMIC header injection
-  // Use custom fetch to ensure fresh restaurant_id header on EVERY request
-  const options: any = {
-    global: {
-      fetch: (...args: Parameters<typeof fetch>) => {
-        const [url, config = {}] = args;
-        
-        // Read restaurant ID FRESH from localStorage on every request
-        const restaurantId = getRestaurantIdFromStorage();
-        
-        // Create new headers with fresh restaurant_id
-        const headers = new Headers(config.headers || {});
-        if (restaurantId) {
-          headers.set("x-restaurant-id", restaurantId);
-        }
-        
-        return fetch(url, {
-          ...config,
-          headers,
-        });
-      },
-    },
-  };
-
-  // ALWAYS create a fresh client - no caching!
-  return createBrowserClient(supabaseUrl, supabaseKey, options);
-}
-
-/**
- * Create a fresh Supabase client with the current restaurant ID
- * Use this for operations that need the latest auth state
- */
-export function createClientWithAuth() {
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-
-  if (!supabaseUrl || !supabaseKey) {
-    throw new Error("Supabase credentials not configured");
-  }
-
-
-  // Use custom fetch to ensure fresh restaurant_id header on EVERY request
-  const options: any = {
-    global: {
-      fetch: (...args: Parameters<typeof fetch>) => {
-        const [url, config = {}] = args;
-        
-        // Read restaurant ID FRESH from localStorage on every request
-        const restaurantId = getRestaurantIdFromStorage();
-        
-        
-        // Create new headers with fresh restaurant_id
-        const headers = new Headers(config.headers || {});
-        if (restaurantId) {
-          headers.set("x-restaurant-id", restaurantId);
-        }
-        
-        return fetch(url, {
-          ...config,
-          headers,
-        });
-      },
-    },
-  };
-
-  return createBrowserClient(supabaseUrl, supabaseKey, options);
+  // No `global.fetch` wrapper, and no options object at all.
+  //
+  // There used to be one here whose entire job was to read `tablemind_auth`
+  // out of localStorage and JSON.parse it on EVERY Supabase request, to set an
+  // `x-restaurant-id` header. That header is dead TableMind scaffolding: the
+  // tenancy column is `store_id`, nothing on the server reads the header, and
+  // no RLS policy references it — so every product pull, favourite write and
+  // login paid a synchronous storage read plus a Headers allocation for
+  // nothing. (The key it read, `tablemind_auth`, has never been written by
+  // this app.)
+  //
+  // Dropping it also lets @supabase/ssr do what it already wanted to. Despite
+  // the old "ALWAYS create a fresh client - no caching!" comment,
+  // createBrowserClient has ALWAYS returned a cached singleton in the browser
+  // unless `isSingleton` is set explicitly — the comment was simply wrong. One
+  // client is also the correct answer here: tenancy comes from the `x-auth-data`
+  // header the API routes read, never from client identity.
+  return createBrowserClient(supabaseUrl, supabaseKey);
 }

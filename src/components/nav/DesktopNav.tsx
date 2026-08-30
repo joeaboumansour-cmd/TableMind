@@ -16,7 +16,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useTransition } from "react";
+import { useState, useTransition } from "react";
 import { Loader2 } from "lucide-react";
 import { useAuth } from "@/lib/auth/AuthContext";
 import { cn } from "@/lib/utils";
@@ -28,7 +28,11 @@ export default function DesktopNav({ tabs }: { tabs: Tab[] }) {
   const pathname = usePathname();
   const router = useRouter();
   const { user } = useAuth();
+  // One `isPending` for the whole bar cannot say which tab was tapped, so
+  // `isPending && !active` spun every inactive tab at once. Track the tapped
+  // href and spin only that one — same fix, same reason, as BottomTabBar.
   const [isPending, startTransition] = useTransition();
+  const [pendingHref, setPendingHref] = useState<string | null>(null);
 
   // Render whenever there is a signed-in user, NOT only when there are tabs to
   // show. This bar is the only sign-out on desktop -- the POS page's own header
@@ -70,6 +74,7 @@ export default function DesktopNav({ tabs }: { tabs: Tab[] }) {
                 onClick={(e) => {
                   if (active) return;
                   e.preventDefault();
+                  setPendingHref(tab.href);
                   startTransition(() => router.push(tab.href));
                 }}
                 aria-current={active ? "page" : undefined}
@@ -80,7 +85,7 @@ export default function DesktopNav({ tabs }: { tabs: Tab[] }) {
                     : "font-medium text-muted-foreground hover:bg-muted/40 hover:text-foreground"
                 )}
               >
-                {isPending && !active ? (
+                {isPending && pendingHref === tab.href ? (
                   <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
                 ) : (
                   <Icon className="h-4 w-4" strokeWidth={active ? 2.4 : 1.8} aria-hidden />

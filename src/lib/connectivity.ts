@@ -15,6 +15,26 @@ const HEARTBEAT_TIMEOUT_MS = 5000; // Abort probe after 5s
 const HEARTBEAT_URL = "/api/health";
 
 /**
+ * How soon to re-probe after a FAILED probe, by consecutive failure count.
+ *
+ * Without this, a failure was only ever retried by the 15s heartbeat, and the
+ * two costs added up: a probe that hung was abandoned at 5s and the next
+ * attempt did not start until t=15s, so ONE slow request painted "Offline"
+ * for a full ten seconds. That is the iOS PWA cold-launch symptom exactly —
+ * every launch there is a cold process on a cold connection, and the boot
+ * probe was competing with the whole first-load request burst, so it lost.
+ *
+ * A failed probe is the moment we know LEAST about the network, so it is the
+ * worst possible moment to stop asking. Retrying costs nothing when genuinely
+ * offline (fetch rejects immediately, no packets leave the device) and buys
+ * back nine of those ten seconds when the failure was transient.
+ *
+ * The list is short on purpose: past it, the 15s heartbeat is the right
+ * cadence for a network we now have real evidence is down.
+ */
+const RETRY_DELAYS_MS = [1000, 2000, 4000];
+
+/**
  * Cross-tab connectivity channel.
  *
  * Connectivity used to be strictly per-tab: each tab ran its own heartbeat and
@@ -41,6 +61,9 @@ class Connectivity {
   private channel: BroadcastChannel | null = null;
   /** When this tab last established status by its OWN probe. */
   private lastProbeAt = 0;
+  /** Failed probes since the last successful one — indexes RETRY_DELAYS_MS. */
+  private consecutiveFailures = 0;
+  private retryId: ReturnType<typeof setTimeout> | null = null;
 
   constructor() {
     if (typeof window !== "undefined") {
@@ -166,6 +189,34 @@ class Connectivity {
       clearInterval(this.heartbeatId);
       this.heartbeatId = null;
     }
+    // A backgrounded tab must not keep a retry armed either — the whole point
+    // of suspending the heartbeat is to stop probing while the screen is off,
+    // and we re-probe on becoming visible anyway.
+    this.clearRetry();
+  }
+
+  private clearRetry(): void {
+    if (this.retryId) {
+      clearTimeout(this.retryId);
+      this.retryId = null;
+    }
+  }
+
+  /**
+   * Re-probe soon after a failure instead of waiting out the heartbeat.
+   * Only while the tab is in the foreground, for the same battery reason
+   * stopHeartbeat() exists.
+   */
+  private scheduleRetry(): void {
+    this.clearRetry();
+    if (this.consecutiveFailures > RETRY_DELAYS_MS.length) return;
+    if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+
+    const delay = RETRY_DELAYS_MS[this.consecutiveFailures - 1];
+    this.retryId = setTimeout(() => {
+      this.retryId = null;
+      void this.probe();
+    }, delay);
   }
 
   /**
@@ -175,6 +226,8 @@ class Connectivity {
   async probe(): Promise<ConnectivityStatus> {
     if (this.probing) return this._status;
     this.probing = true;
+    // Any probe supersedes a scheduled retry.
+    this.clearRetry();
 
     try {
       const controller = new AbortController();
@@ -198,12 +251,18 @@ class Connectivity {
       clearTimeout(timeout);
 
       // Either way a response came back, so the network is reachable.
+      this.consecutiveFailures = 0;
       this.lastProbeAt = Date.now();
       this.setStatus("online");
     } catch {
       // Network error / timeout / abort => offline
+      this.consecutiveFailures++;
       this.lastProbeAt = Date.now();
       this.setStatus("offline");
+      // Ask again shortly rather than waiting out the full heartbeat. A real
+      // outage simply fails again in milliseconds; a transient boot-time
+      // timeout clears in about a second instead of about ten.
+      this.scheduleRetry();
     } finally {
       this.probing = false;
     }
@@ -213,6 +272,7 @@ class Connectivity {
 
   destroy(): void {
     this.stopHeartbeat();
+    this.clearRetry();
     this.listeners.clear();
     try { this.channel?.close(); } catch { /* already closed */ }
     this.channel = null;

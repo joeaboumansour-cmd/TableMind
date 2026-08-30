@@ -1,5 +1,5 @@
 import { createServiceRoleClient } from "@/lib/supabase/server";
-import { NextResponse } from "next/server";
+import { NextResponse, after } from "next/server";
 import { resolveCaller, readAuthHeader, canAccessSection } from "@/lib/auth/apiCaller";
 
 // History is browsed newest-first and the client loads more on demand, so a
@@ -8,6 +8,49 @@ const DEFAULT_PAGE_SIZE = 50;
 // Hard ceiling regardless of what the caller asks for. Each row carries its
 // nested transaction_items, so large pages get expensive quickly.
 const MAX_PAGE_SIZE = 200;
+
+/**
+ * How often one server instance is willing to run the retention sweep.
+ *
+ * Retention used to be an AFTER INSERT ... FOR EACH ROW trigger (migration
+ * 012) that counted the store's entire transaction table and ran two DELETEs
+ * inside the transaction taking the customer's money. Migration 037 drops it
+ * and this replaces it: the same `cleanup_old_transactions_for_store` the
+ * DELETE handler already calls, run at most hourly, after the response.
+ *
+ * Module scope, so it is per warm serverless instance — the same
+ * best-effort throttle POST /api/activity uses. Missing a sweep costs
+ * nothing; the policy is a ceiling, not a deadline.
+ */
+const RETENTION_SWEEP_INTERVAL_MS = 60 * 60 * 1000;
+const lastRetentionSweepAt = new Map<string, number>();
+
+type ServiceClient = Awaited<ReturnType<typeof createServiceRoleClient>>;
+
+function maybeRunRetentionCleanup(supabase: ServiceClient, storeId: string): void {
+  if (!storeId) return;
+
+  const now = Date.now();
+  const last = lastRetentionSweepAt.get(storeId) ?? 0;
+  if (now - last < RETENTION_SWEEP_INTERVAL_MS) return;
+  lastRetentionSweepAt.set(storeId, now);
+
+  // A long-lived instance serving many stores must not grow this map without
+  // bound. Anything older than two windows cannot block a sweep anyway.
+  if (lastRetentionSweepAt.size > 500) {
+    for (const [id, at] of lastRetentionSweepAt) {
+      if (now - at > RETENTION_SWEEP_INTERVAL_MS * 2) lastRetentionSweepAt.delete(id);
+    }
+  }
+
+  after(async () => {
+    try {
+      await supabase.rpc("cleanup_old_transactions_for_store", { p_store_id: storeId });
+    } catch (e) {
+      console.warn("[API] Retention sweep failed (non-fatal):", e);
+    }
+  });
+}
 
 export async function GET(request: Request) {
   try {
@@ -265,53 +308,17 @@ export async function POST(request: Request) {
       );
     }
 
-    // Check if a transaction with this transaction_number already exists for this store
-    // This prevents duplicate entries when the sync engine pushes the same queued transaction twice
-    const { data: existingTxn } = await supabase
-      .from("transactions")
-      .select("id")
-      .eq("store_id", store_id)
-      .eq("transaction_number", body.transaction_number)
-      .maybeSingle();
-
-    if (existingTxn) {
-      console.log(`[API] Transaction ${body.transaction_number} already exists, skipping duplicate`);
-      // Fetch the full existing transaction to return it
-      const { data: existing, error: fetchError } = await supabase
-        .from("transactions")
-        .select(`
-          id,
-          transaction_number,
-          subtotal,
-          total_amount,
-          amount_paid,
-          change_given,
-        created_at,
-        user_id,
-        user_name,
-        transaction_items (
-          id,
-          product_id,
-          product_name,
-          quantity,
-          unit_price,
-          total_price,
-          currency,
-          modifiers,
-          note,
-          combo_children
-        )
-      `)
-      .eq("id", existingTxn.id)
-      .single();
-
-      if (fetchError) {
-        return NextResponse.json({ error: fetchError.message }, { status: 500 });
-      }
-
-      return NextResponse.json({ transaction: existing, duplicated: true }, { status: 200 });
-    }
-
+    // NO duplicate pre-check.
+    //
+    // There used to be a `select id where transaction_number = ...` here on
+    // 100% of sales, to catch the sync engine pushing the same queued sale
+    // twice. It was a full extra round trip on the money path to answer a
+    // question the database already answers for free: idempotency comes from
+    // the UNIQUE (store_id, transaction_number) constraint added in migration
+    // 016, and the 23505 branch below returns exactly the same
+    // `{ transaction, duplicated: true }` response the pre-check did. The
+    // insert is attempted and rejected instead of being pre-empted, which is
+    // one round trip rather than two on every sale in the shop.
     // Create transaction
     const { data: transaction, error } = await supabase
       .from("transactions")
@@ -411,15 +418,6 @@ export async function POST(request: Request) {
         combo_children: item.combo_children ?? null,
       }));
 
-      const { error: itemsError } = await supabase
-        .from("transaction_items")
-        .insert(txnItems);
-
-      if (itemsError) {
-        console.error("Transaction items error:", itemsError);
-        // Transaction created but items failed - still return success but log error
-      }
-
       // CRITICAL FIX: Decrement stock server-side for each item.
       // This ensures stock is decremented exactly once per transaction,
       // whether the transaction was created online or synced from offline.
@@ -463,20 +461,81 @@ export async function POST(request: Request) {
               quantity: item.quantity,
             }));
 
-      for (const decrement of decrements) {
-        const { error: stockError } = await supabase.rpc("decrement_stock", {
-          product_id: decrement.product_id,
-          quantity: decrement.quantity,
+      // ## Two waves, not N+1 serial round trips
+      //
+      // The line items and the stock decrements are independent of each other —
+      // neither reads what the other writes — so they go out together. And the
+      // decrements go as ONE `decrement_stock_batch` call rather than a
+      // `decrement_stock` per line: a ten-line sale used to be ten serial
+      // round trips from the Vercel function to Postgres, and a made-to-order
+      // sale is worse than that because a sandwich decrements every ingredient
+      // in its recipe. That whole loop is now one call.
+      //
+      // `decrement_stock_batch` is from migration 037. If it has not been
+      // applied yet the call fails with PostgREST's "function not found"
+      // (PGRST202 / 42883) and we fall back to the original per-item loop, so
+      // this deploy is safe in either order.
+      const insertItems = supabase.from("transaction_items").insert(txnItems);
+
+      const applyDecrements = async () => {
+        if (decrements.length === 0) return;
+
+        const { error: batchError } = await supabase.rpc("decrement_stock_batch", {
           p_store_id: store_id,
+          p_items: decrements,
         });
 
-        if (stockError) {
-          console.error(`[API] Stock decrement failed for product ${decrement.product_id}:`, stockError);
-          // Don't fail the transaction — log and continue.
-          // The transaction is already created; stock can be reconciled later.
+        if (!batchError) return;
+
+        const missing =
+          batchError.code === "PGRST202" ||
+          batchError.code === "42883" ||
+          /could not find the function|does not exist/i.test(batchError.message || "");
+
+        if (!missing) {
+          console.error("[API] Batch stock decrement failed:", batchError);
+          return;
         }
+
+        console.warn(
+          "[API] decrement_stock_batch not available (migration 037 not applied?) — falling back to per-item decrements"
+        );
+        for (const decrement of decrements) {
+          const { error: stockError } = await supabase.rpc("decrement_stock", {
+            product_id: decrement.product_id,
+            quantity: decrement.quantity,
+            p_store_id: store_id,
+          });
+
+          if (stockError) {
+            console.error(`[API] Stock decrement failed for product ${decrement.product_id}:`, stockError);
+            // Don't fail the transaction — log and continue.
+            // The transaction is already created; stock can be reconciled later.
+          }
+        }
+      };
+
+      const [{ error: itemsError }] = await Promise.all([insertItems, applyDecrements()]);
+
+      if (itemsError) {
+        console.error("Transaction items error:", itemsError);
+        // Transaction created but items failed - still return success but log error
       }
     }
+
+    // Retention, moved OFF the sale path.
+    //
+    // Migration 012 did this with an AFTER INSERT ... FOR EACH ROW trigger that
+    // ran a COUNT(*) over the store's whole transaction table plus two DELETEs
+    // inside the transaction that takes the customer's money. Migration 037
+    // drops it; this is where the same policy runs instead — at most once an
+    // hour per server instance, and via `after()` so it happens once the
+    // response has already gone back to the till. Same pattern
+    // POST /api/activity uses for its partition maintenance.
+    //
+    // A failure here is never surfaced: retention falling behind is a disk
+    // concern, and the sale is already recorded.
+    maybeRunRetentionCleanup(supabase, store_id);
 
     return NextResponse.json({ transaction }, { status: 201 });
   } catch (error: any) {

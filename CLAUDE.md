@@ -80,6 +80,8 @@ The app must keep selling with no internet. This shapes almost every design deci
 
 > **Critical:** `/api/health` has a `NetworkOnly` rule in `next.config.ts`. If the service worker is ever allowed to cache it, the app serves a cached `200` forever, believes it is permanently online, never shows offline banners, and never triggers sync. Do not touch that rule.
 >
+> **`workboxOptions.exclude` has the same footgun as `runtimeCaching`.** Supplying it REPLACES next-pwa's three defaults (`.woff2` that is not preloaded, `.map`, `manifest-*.js`), so the array in `next.config.ts` re-lists all three before adding its own `/pdf-export/` entry. Drop them and every install re-acquires megabytes of source maps. `scripts/verify-sw.mjs` asserts both halves.
+>
 > Equally critical and easier to break by accident: **`extendDefaultRuntimeCaching: true` must stay set.** Supplying a custom `runtimeCaching` array *replaces* the 19 defaults unless it's on — including the `pages` rule that caches HTML navigations, which is the only thing letting the POS open cold with no internet (HTML is deliberately not precached).
 >
 > **A service-worker update reloads the page, so it must never land mid-task.** `src/components/PWAUpdateListener.tsx` applies an update on `controllerchange`, but only once nothing holds `src/lib/pwa/reloadGuard.ts`. Screens declare their own busy state with `useReloadGuard(active, reason)` — a non-empty cart alone is not enough, because every screen outside the POS has an empty cart by definition. If you build a screen where a reload would lose typed or selected state, add a hold.
@@ -110,7 +112,7 @@ Idempotency comes from a **`UNIQUE (store_id, transaction_number)`** constraint 
 
 > **Never reconcile the product cache against an unpaginated query.** Supabase/PostgREST silently caps an unbounded `select` at 1000 rows. Feeding a truncated list to `reconcileProductsCache()` reads as "everything past row 1000 was deleted" and wipes it locally, which the next sync then re-pulls — a permanent delete/refetch loop. Use `fetchAllProductIds()` and the `evaluateReconcile()` guard in `src/lib/products/refresh.ts` (re-exported from `src/lib/sync/engine.ts`, where it used to live): **deletion requires positive proof the ID set is complete.** Skipping is always safe; deleting on partial evidence is not.
 
-Stock decrements are **server-side only** now. Do not re-add client-side stock queuing — that was removed deliberately to prevent double-decrements.
+Stock decrements are **server-side only** now. Do not re-add client-side stock queuing — that was removed deliberately to prevent double-decrements. They go as **one `decrement_stock_batch` call per sale** (migration 037), not a `decrement_stock` per line; the per-line loop survives only as the fallback for a database that has not had 037 applied.
 
 ### Adding a new offline-capable write
 
@@ -293,7 +295,7 @@ git checkout 744ad0d -- tests src/tests playwright.config.ts vitest.config.ts
   a write on it**; it is a markup, not a 0-100 percentage, and it is routinely
   over 100 (up to 489% in one store) and sometimes negative. `discount_percentage`
   IS a real 0-100 percentage.
-- Migrations are append-only and manually numbered; the highest is **`033`**. **`008` is already duplicated** — check the highest number before adding.
+- Migrations are append-only and manually numbered; the highest is **`037`**. **`008` is already duplicated** — check the highest number before adding (`ls supabase/migrations/ | tail -1`), and note that this line has been stale before.
 - `.env.local` is correctly gitignored. Required vars are in `.env.example`.
 - Path alias: `@/*` → `./src/*`.
 - Careful: `src/lib/utils.ts` (file) and `src/lib/utils/` (directory) both exist. `@/lib/utils` resolves to the **file**; formatting helpers are at `@/lib/utils/format`.
@@ -439,6 +441,16 @@ already use.
 - **Aggregate in Postgres, never by summing a select.** `get_unassigned_totals`
   exists because the route used to pull up to 1000 rows over the wire to add two
   columns, for a figure that is almost always zero.
+  > This rule is not local to the cash page. `GET /api/transactions/analytics`
+  > broke it for a year: it selected every sale WITH its nested line items and
+  > added them up in JS, so any store past 1,000 sales in the window was shown
+  > revenue and profit computed from an arbitrary 1,000 of them — silently.
+  > It runs on **`get_transaction_analytics`** (migration 037) now. That
+  > function returns cost as `cost_ll` plus raw `usd_cost_lines`, and does NOT
+  > convert: the LL/USD rate has one definition, in `format.ts`, and the route
+  > applies `productCostInLL()` per product exactly as before. Do not "simplify"
+  > that by summing the USD side in SQL — it would round once rather than per
+  > product and move a number the owner reads daily.
 - **Analytics loads after the drawer figures**, not alongside them — a 30-day
   range scan was holding up the numbers people came to read.
 

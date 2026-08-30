@@ -144,7 +144,8 @@ export async function GET(request: Request) {
     // profit figure disagree with the sales listed next to it. getCutoffDate
     // remains as the fallback for older clients and direct calls.
     // Same reasoning as `from`: the device knows which clock the shop runs on.
-    const localClock = makeLocalClock(resolveTimeZone(url.searchParams.get("tz")));
+    const timeZone = resolveTimeZone(url.searchParams.get("tz"));
+    const localClock = makeLocalClock(timeZone);
 
     const fromParam = url.searchParams.get("from");
     let cutoff: Date | null = getCutoffDate(dateFilter);
@@ -157,10 +158,187 @@ export async function GET(request: Request) {
       }
     }
 
-    // Fetch transactions with items
+    // ── The report is aggregated in Postgres ────────────────────────────────
+    //
+    // This used to `select` every transaction in the window WITH every nested
+    // line item and add it all up in JavaScript, with no `.limit()`. Two
+    // separate problems, and the second is the serious one:
+    //
+    //   * SLOW — 700-2,900 ms measured on a store with FORTY sales, to return
+    //     3 KB of report. It scaled with the store's whole history.
+    //   * WRONG — PostgREST silently caps an unbounded select at 1,000 rows.
+    //     Any store with more than 1,000 sales in the window was shown revenue
+    //     and profit computed from an arbitrary 1,000 of them, with nothing on
+    //     screen to say the number was partial.
+    //
+    // Same rule the cash page already follows (CLAUDE.md §11a): aggregate in
+    // Postgres, never by summing a select.
+    //
+    // The USD→LL conversion is deliberately NOT in the SQL. The rate has one
+    // definition, in src/lib/utils/format.ts, and `usd_cost_lines` comes back
+    // as raw (cost_price, quantity) pairs so productCostInLL() converts each
+    // one exactly as it did before — converting a pre-summed USD total would
+    // round once instead of per product and quietly move the figure.
+    const rpc = await supabase.rpc("get_transaction_analytics", {
+      p_store_id: store_id,
+      p_from: cutoff ? cutoff.toISOString() : null,
+      p_tz: timeZone,
+    });
+
+    if (!rpc.error && rpc.data) {
+      return NextResponse.json(buildFromAggregate(rpc.data as AggregateRow));
+    }
+
+    if (rpc.error && !isMissingFunction(rpc.error)) {
+      console.error("Analytics RPC error:", rpc.error);
+      return NextResponse.json({ error: rpc.error.message }, { status: 500 });
+    }
+
+    // ── Fallback: migration 037 has not been applied to this database ───────
+    //
+    // Kept so the code and the migration can be deployed in either order. It
+    // is the old JavaScript aggregation, with the two defects that made it
+    // dangerous fixed: it PAGES through the window instead of taking whatever
+    // PostgREST felt like returning, and it chunks the product lookup instead
+    // of building a URL out of every product id in the range.
+    console.warn(
+      "[Analytics] get_transaction_analytics not available (migration 037 not applied?) — aggregating in JS"
+    );
+    return NextResponse.json(
+      await computeAnalyticsInJs(supabase, store_id, cutoff, localClock)
+    );
+  } catch (error: any) {
+    console.error("Analytics error:", error);
+    return NextResponse.json(
+      { error: "Failed to fetch analytics", details: error?.message },
+      { status: 500 }
+    );
+  }
+}
+
+// =============================================================================
+// Aggregate path
+// =============================================================================
+
+interface AggregateRow {
+  total_revenue: number | string;
+  total_transactions: number | string;
+  total_items_sold: number | string;
+  cost_ll: number | string;
+  usd_cost_lines: Array<{ cost_price: number | string; quantity: number | string }>;
+  top_by_revenue: Array<{ product_name: string; totalQuantity: number; totalRevenue: number }>;
+  top_by_quantity: Array<{ product_name: string; totalQuantity: number; totalRevenue: number }>;
+  hourly: Array<{ hour: number; revenue: number | string; transactions: number | string }>;
+  weekday: Array<{ dow: number; revenue: number | string; transactions: number | string }>;
+}
+
+/** Postgres returns NUMERIC as a string to preserve precision. */
+function num(value: number | string | null | undefined): number {
+  return Number(value) || 0;
+}
+
+function buildFromAggregate(row: AggregateRow): AnalyticsResponse {
+  const totalRevenue = num(row.total_revenue);
+  const totalTransactions = num(row.total_transactions);
+  const totalItemsSold = num(row.total_items_sold);
+
+  // productCostInLL is the shared helper — same function the offline History
+  // screen uses, so the two can never disagree about what a USD cost is worth.
+  let totalCost = num(row.cost_ll);
+  for (const line of row.usd_cost_lines || []) {
+    const costLl = productCostInLL({ cost_price: num(line.cost_price), currency: "USD" }) ?? 0;
+    totalCost += costLl * num(line.quantity);
+  }
+
+  const totalProfit = totalRevenue - totalCost;
+
+  const hourById = new Map((row.hourly || []).map((h) => [Number(h.hour), h]));
+  const dowById = new Map((row.weekday || []).map((d) => [Number(d.dow), d]));
+
+  const normaliseTop = (
+    rows: Array<{ product_name: string; totalQuantity: number; totalRevenue: number }>
+  ) =>
+    (rows || []).map((r) => ({
+      product_name: r.product_name,
+      totalQuantity: num(r.totalQuantity),
+      totalRevenue: num(r.totalRevenue),
+    }));
+
+  return {
+    summary: {
+      totalRevenue,
+      totalProfit,
+      totalTransactions,
+      averageTransactionValue: totalTransactions > 0 ? totalRevenue / totalTransactions : 0,
+      totalItemsSold,
+      profitMargin: totalRevenue > 0 ? (totalProfit / totalRevenue) * 100 : 0,
+    },
+    topProductsByRevenue: normaliseTop(row.top_by_revenue),
+    topProductsByQuantity: normaliseTop(row.top_by_quantity),
+    hourlySales: Array.from({ length: 24 }, (_, hour) => ({
+      hour,
+      revenue: num(hourById.get(hour)?.revenue),
+      transactions: num(hourById.get(hour)?.transactions),
+    })),
+    dayOfWeekSales: DAY_NAMES.map((day, index) => ({
+      day,
+      revenue: num(dowById.get(index)?.revenue),
+      transactions: num(dowById.get(index)?.transactions),
+    })),
+  };
+}
+
+/** PostgREST's answer when the RPC does not exist in this database. */
+function isMissingFunction(error: { code?: string; message?: string }): boolean {
+  return (
+    error.code === "PGRST202" ||
+    error.code === "42883" ||
+    /could not find the function|does not exist/i.test(error.message || "")
+  );
+}
+
+// =============================================================================
+// Fallback path — only reached when migration 037 is not applied
+// =============================================================================
+
+/** PostgREST's own hard cap per request. */
+const PAGE_SIZE = 1000;
+/**
+ * Ceiling on the fallback's paging. 200,000 transactions is far past anything
+ * this app's retention policy allows, so hitting it means something is wrong;
+ * stopping is better than looping forever inside a serverless invocation.
+ */
+const MAX_PAGES = 200;
+/** Product ids per `.in()` — a bigger list builds a URL that 414s. */
+const ID_CHUNK = 200;
+
+async function computeAnalyticsInJs(
+  supabase: Awaited<ReturnType<typeof createServiceRoleClient>>,
+  store_id: string,
+  cutoff: Date | null,
+  localClock: (date: Date) => { hour: number; dayOfWeek: number }
+): Promise<AnalyticsResponse> {
+  type Row = {
+    id: string;
+    total_amount: number;
+    subtotal: number;
+    created_at: string;
+    transaction_items: Array<{
+      product_name: string;
+      quantity: number;
+      unit_price: number;
+      total_price: number;
+      currency: string;
+      product_id: string | null;
+    }> | null;
+  };
+
+  const txns: Row[] = [];
+  for (let page = 0; page < MAX_PAGES; page++) {
     let query = supabase
       .from("transactions")
-      .select(`
+      .select(
+        `
         id,
         total_amount,
         subtotal,
@@ -173,168 +351,120 @@ export async function GET(request: Request) {
           currency,
           product_id
         )
-      `)
+      `
+      )
       .eq("store_id", store_id)
-      .order("created_at", { ascending: false });
+      .order("created_at", { ascending: false })
+      .range(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE - 1);
 
     if (cutoff) {
       query = query.gte("created_at", cutoff.toISOString());
     }
 
-    const { data: transactions, error } = await query;
+    const { data, error } = await query;
+    if (error) throw new Error(error.message);
 
-    if (error) {
-      console.error("Analytics query error:", error);
-      return NextResponse.json({ error: error.message }, { status: 500 });
+    const rows = (data || []) as unknown as Row[];
+    txns.push(...rows);
+    if (rows.length < PAGE_SIZE) break;
+  }
+
+  // Collect unique product IDs to fetch cost prices
+  const productIds = new Set<string>();
+  txns.forEach((t) => {
+    t.transaction_items?.forEach((item) => {
+      if (item.product_id) productIds.add(item.product_id);
+    });
+  });
+
+  // `cost_price` is stored in the product's own `currency` (USD or LL) while
+  // transaction amounts are ALWAYS LL, so a USD cost must be converted before
+  // it is subtracted from LL revenue — otherwise the tiny USD number is dwarfed
+  // and profit erroneously ≈ revenue. productCostInLL is shared with the
+  // offline path so the two cannot drift.
+  const costPriceMap: Record<string, number> = {};
+  const allIds = Array.from(productIds);
+  for (let i = 0; i < allIds.length; i += ID_CHUNK) {
+    const { data: products } = await supabase
+      .from("products")
+      .select("id, cost_price, currency")
+      .eq("store_id", store_id)
+      .in("id", allIds.slice(i, i + ID_CHUNK));
+
+    (products || []).forEach((p) => {
+      costPriceMap[p.id] = productCostInLL(p) ?? 0;
+    });
+  }
+
+  let totalRevenue = 0;
+  let totalItemsSold = 0;
+  let totalCost = 0;
+  const productStats: Record<string, { quantity: number; revenue: number }> = {};
+  const hourlyStats: Record<number, { revenue: number; transactions: number }> = {};
+  const dayOfWeekStats: Record<number, { revenue: number; transactions: number }> = {};
+
+  txns.forEach((t) => {
+    const revenue = Number(t.total_amount) || 0;
+    totalRevenue += revenue;
+    totalItemsSold += t.transaction_items?.length || 0;
+
+    // NOT getHours()/getDay(): those are the SERVER's clock, so on Vercel an
+    // 11am Beirut sale was filed under 8am and a sale just after midnight under
+    // the previous day.
+    const { hour, dayOfWeek } = localClock(new Date(t.created_at));
+
+    if (!hourlyStats[hour]) hourlyStats[hour] = { revenue: 0, transactions: 0 };
+    hourlyStats[hour].revenue += revenue;
+    hourlyStats[hour].transactions += 1;
+
+    // dayOfWeek is -1 only if Intl returned a weekday name DAY_NAMES does not
+    // carry, which should not happen under the en-US locale — but silently
+    // writing to index -1 would.
+    if (dayOfWeek >= 0) {
+      if (!dayOfWeekStats[dayOfWeek]) dayOfWeekStats[dayOfWeek] = { revenue: 0, transactions: 0 };
+      dayOfWeekStats[dayOfWeek].revenue += revenue;
+      dayOfWeekStats[dayOfWeek].transactions += 1;
     }
 
-    const txns = transactions || [];
+    t.transaction_items?.forEach((item) => {
+      const cost = (item.product_id ? costPriceMap[item.product_id] : undefined) || item.unit_price || 0;
+      totalCost += cost * item.quantity;
 
-    // Calculate summary metrics
-    let totalRevenue = 0;
-    let totalItemsSold = 0;
-    const productStats: Record<string, { quantity: number; revenue: number }> = {};
-
-    // Time-based analytics
-    const hourlyStats: Record<number, { revenue: number; transactions: number }> = {};
-    const dayOfWeekStats: Record<number, { revenue: number; transactions: number }> = {};
-
-    // Collect unique product IDs to fetch cost prices
-    const productIds = new Set<string>();
-    txns.forEach((t) => {
-      t.transaction_items?.forEach((item) => {
-        if (item.product_id) productIds.add(item.product_id);
-      });
+      const name = item.product_name;
+      if (!productStats[name]) productStats[name] = { quantity: 0, revenue: 0 };
+      productStats[name].quantity += item.quantity;
+      productStats[name].revenue += Number(item.total_price) || 0;
     });
+  });
 
-    // Fetch current cost prices for products.
-    // NOTE: `cost_price` is stored in the product's own `currency` (USD or LL).
-    // Transaction amounts (total_amount / unit_price) are ALWAYS stored in LL,
-    // so a USD-denominated cost_price must be converted to LL before it is
-    // subtracted from LL revenue — otherwise the tiny USD cost is dwarfed by
-    // the large LL revenue and profit erroneously ≈ revenue.
-    let costPriceMap: Record<string, number> = {};
-    if (productIds.size > 0) {
-      const { data: products } = await supabase
-        .from("products")
-        .select("id, cost_price, currency")
-        .eq("store_id", store_id)
-        .in("id", Array.from(productIds));
+  const totalTransactions = txns.length;
+  const totalProfit = totalRevenue - totalCost;
+  const ranked = Object.entries(productStats).map(([product_name, stats]) => ({
+    product_name,
+    totalQuantity: stats.quantity,
+    totalRevenue: stats.revenue,
+  }));
 
-      if (products) {
-        products.forEach((p) => {
-          // Shared with the offline path in @/lib/analytics/profit so the two
-          // cannot drift — see that module's header.
-          costPriceMap[p.id] = productCostInLL(p) ?? 0;
-        });
-      }
-    }
-
-    let totalCost = 0;
-
-    txns.forEach((t) => {
-      const revenue = Number(t.total_amount) || 0;
-      totalRevenue += revenue;
-      totalItemsSold += t.transaction_items?.length || 0;
-
-      // NOT getHours()/getDay(): those are the SERVER's clock, so on Vercel
-      // an 11am Beirut sale was filed under 8am and a sale just after midnight
-      // under the previous day.
-      const { hour, dayOfWeek } = localClock(new Date(t.created_at));
-
-      // Update hourly stats
-      if (!hourlyStats[hour]) {
-        hourlyStats[hour] = { revenue: 0, transactions: 0 };
-      }
-      hourlyStats[hour].revenue += revenue;
-      hourlyStats[hour].transactions += 1;
-
-      // Update day of week stats. dayOfWeek is -1 only if Intl returned a
-      // weekday name DAY_NAMES does not carry, which should not happen under
-      // the en-US locale above -- but silently writing to index -1 would.
-      if (dayOfWeek >= 0) {
-        if (!dayOfWeekStats[dayOfWeek]) {
-          dayOfWeekStats[dayOfWeek] = { revenue: 0, transactions: 0 };
-        }
-        dayOfWeekStats[dayOfWeek].revenue += revenue;
-        dayOfWeekStats[dayOfWeek].transactions += 1;
-      }
-
-      // Calculate cost of items
-      t.transaction_items?.forEach((item) => {
-        const cost = costPriceMap[item.product_id] || item.unit_price || 0;
-        totalCost += cost * item.quantity;
-
-        // Track product stats
-        const name = item.product_name;
-        if (!productStats[name]) {
-          productStats[name] = { quantity: 0, revenue: 0 };
-        }
-        productStats[name].quantity += item.quantity;
-        productStats[name].revenue += Number(item.total_price) || 0;
-      });
-    });
-
-    const totalTransactions = txns.length;
-    const totalProfit = totalRevenue - totalCost;
-    const profitMargin = totalRevenue > 0 ? (totalProfit / totalRevenue) * 100 : 0;
-    const averageTransactionValue = totalTransactions > 0 ? totalRevenue / totalTransactions : 0;
-
-    // Top 10 products by revenue
-    const topProductsByRevenue = Object.entries(productStats)
-      .map(([product_name, stats]) => ({
-        product_name,
-        totalQuantity: stats.quantity,
-        totalRevenue: stats.revenue,
-      }))
-      .sort((a, b) => b.totalRevenue - a.totalRevenue)
-      .slice(0, 10);
-
-    // Top 10 products by quantity
-    const topProductsByQuantity = Object.entries(productStats)
-      .map(([product_name, stats]) => ({
-        product_name,
-        totalQuantity: stats.quantity,
-        totalRevenue: stats.revenue,
-      }))
-      .sort((a, b) => b.totalQuantity - a.totalQuantity)
-      .slice(0, 10);
-
-    // Hourly sales data (all 24 hours)
-    const hourlySales = Array.from({ length: 24 }, (_, i) => ({
+  return {
+    summary: {
+      totalRevenue,
+      totalProfit,
+      totalTransactions,
+      averageTransactionValue: totalTransactions > 0 ? totalRevenue / totalTransactions : 0,
+      totalItemsSold,
+      profitMargin: totalRevenue > 0 ? (totalProfit / totalRevenue) * 100 : 0,
+    },
+    topProductsByRevenue: [...ranked].sort((a, b) => b.totalRevenue - a.totalRevenue).slice(0, 10),
+    topProductsByQuantity: [...ranked].sort((a, b) => b.totalQuantity - a.totalQuantity).slice(0, 10),
+    hourlySales: Array.from({ length: 24 }, (_, i) => ({
       hour: i,
       revenue: hourlyStats[i]?.revenue || 0,
       transactions: hourlyStats[i]?.transactions || 0,
-    }));
-
-    // Day of week sales data
-    const dayOfWeekSales = DAY_NAMES.map((day, index) => ({
+    })),
+    dayOfWeekSales: DAY_NAMES.map((day, index) => ({
       day,
       revenue: dayOfWeekStats[index]?.revenue || 0,
       transactions: dayOfWeekStats[index]?.transactions || 0,
-    }));
-
-    const response: AnalyticsResponse = {
-      summary: {
-        totalRevenue,
-        totalProfit,
-        totalTransactions,
-        averageTransactionValue,
-        totalItemsSold,
-        profitMargin,
-      },
-      topProductsByRevenue,
-      topProductsByQuantity,
-      hourlySales,
-      dayOfWeekSales,
-    };
-
-    return NextResponse.json(response);
-  } catch (error: any) {
-    console.error("Analytics error:", error);
-    return NextResponse.json(
-      { error: "Failed to fetch analytics", details: error?.message },
-      { status: 500 }
-    );
-  }
+    })),
+  };
 }

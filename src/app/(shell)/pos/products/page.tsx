@@ -57,7 +57,7 @@ import { playSuccessSound, playErrorSound } from "@/lib/feedback";
 import { isDesktop } from "@/lib/device";
 import CSVImportDialog from "@/components/CSVImportDialog";
 import { useConfirm } from "@/components/ConfirmDialog";
-import { getFrequentlyUsedProductIds, addFrequentlyUsedProduct, removeFrequentlyUsedProduct, isFrequentlyUsed, syncFavoritesFromSupabase } from "@/lib/frequentlyUsed";
+import { getFrequentlyUsedProductIds, addFrequentlyUsedProduct, removeFrequentlyUsedProduct, syncFavoritesFromSupabase } from "@/lib/frequentlyUsed";
 import { downloadCSV, productsToCSV } from "@/lib/csv/utils";
 import { FeatureFlagGuard, useFeatureFlag } from "@/lib/auth/featureGuard";
 import { refreshProductsIntoCache } from "@/lib/products/refresh";
@@ -1248,8 +1248,26 @@ function StoreProductsPageContent() {
 
   const favStoreId = user?.storeId || "";
 
+  /**
+   * The starred ids, read ONCE per render pass.
+   *
+   * Each row used to call `isFrequentlyUsed(favStoreId, id)`, which is a
+   * synchronous `localStorage.getItem` + `JSON.parse` + `Array.includes` — per
+   * row, per render. The list is virtualised to ~16 rows, and the virtualiser
+   * re-renders on every scroll frame, so scrolling the catalogue meant ~16
+   * storage reads and 16 JSON parses per frame on the main thread. Measured at
+   * 0.2 ms a pass on a desktop; a cheap Android is nowhere near that.
+   *
+   * `freqVersion` is bumped by toggleFavourite and by the Supabase favourites
+   * sync, so this stays exactly as fresh as the old per-row read was.
+   */
+  const favouriteIds = useMemo(
+    () => new Set(getFrequentlyUsedProductIds(favStoreId)),
+    [favStoreId, freqVersion]
+  );
+
   const toggleFavourite = (product: InventoryProduct) => {
-    const wasFavourite = isFrequentlyUsed(favStoreId, product.id);
+    const wasFavourite = favouriteIds.has(product.id);
     logActivity("catalog.favorite_toggle", {
       target: product.name,
       details: { product_id: product.id, added: !wasFavourite },
@@ -1804,7 +1822,7 @@ function StoreProductsPageContent() {
                   ) : (
                     <ProductRow
                       product={row.product}
-                      isFavourite={isFrequentlyUsed(favStoreId, row.product.id)}
+                      isFavourite={favouriteIds.has(row.product.id)}
                       isHighlighted={highlightedProductId === row.product.id}
                       isOpen={openRowId === row.product.id}
                       disabled={isOffline}
@@ -1926,7 +1944,7 @@ function StoreProductsPageContent() {
                   <Star
                     className={cn(
                       "h-4 w-4",
-                      isFrequentlyUsed(favStoreId, detailProduct.id) &&
+                      favouriteIds.has(detailProduct.id) &&
                         "fill-primary text-primary"
                     )}
                   />

@@ -788,19 +788,35 @@ export async function removeQueuedTransaction(
  * Counts rows inside a retry backoff window too — this is the number the
  * cashier sees, and a sale waiting out a backoff is still an unsynced sale.
  * Use getDueQueuedCount() for "is there anything to send right now".
+ *
+ * All three counters below use `.filter().count()` rather than materialising
+ * the queue and taking `.length`. `failed_permanently` is a boolean, and
+ * IndexedDB cannot index booleans, so a scan is unavoidable — but the old form
+ * (`(await getUnsyncedTransactions()).length`) also did an `orderBy` index
+ * traversal and allocated a JS array of every queued sale, each carrying its
+ * whole `items` payload, purely to read `.length` off it and drop it.
+ * getDueQueuedCount() runs on a 30-second interval for as long as the app is
+ * open, which is exactly the wrong place to be deserialising a backlog.
  */
 export async function getQueuedCount(): Promise<number> {
-  return (await getUnsyncedTransactions()).length;
+  return db.offline_queue.filter((t) => !t.failed_permanently).count();
 }
 
 /** Count of queued sales eligible for a send attempt right now. */
 export async function getDueQueuedCount(): Promise<number> {
-  return (await getQueuedTransactions()).length;
+  const now = Date.now();
+  return db.offline_queue
+    .filter(
+      (t) =>
+        !t.failed_permanently &&
+        !(t.next_attempt_at && Date.parse(t.next_attempt_at) > now)
+    )
+    .count();
 }
 
 /** Count of sales that failed permanently and need manual attention. */
 export async function getDeadLetterCount(): Promise<number> {
-  return (await getDeadLetterTransactions()).length;
+  return db.offline_queue.filter((t) => t.failed_permanently === true).count();
 }
 
 // ---- Pending Writes Operations ----

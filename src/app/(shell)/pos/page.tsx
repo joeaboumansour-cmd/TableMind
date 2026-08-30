@@ -39,6 +39,7 @@ import { getFrequentlyUsedProductIds } from "@/lib/frequentlyUsed";
 import { connectivity } from "@/lib/connectivity";
 import { useReloadGuard } from "@/lib/pwa/useReloadGuard";
 import { warmAppShell } from "@/lib/pwa/warmAppShell";
+import { scheduleWhenIdle } from "@/lib/pwa/whenIdle";
 import {
   ensurePersistentStorage,
   hasShownPersistNotice,
@@ -97,10 +98,8 @@ export default function POSPage() {
     null,
   );
   const highlightTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  // O(1) barcode lookup — rebuilt whenever products change
-  const [barcodeIndex, setBarcodeIndex] = useState<Map<string, Product>>(
-    new Map(),
-  );
+  // Products indexed by id, for the callbacks that need a lookup after commit.
+  // The maps themselves are derived — see `productIndex` below.
   const barcodeIndexRef = useRef<Map<string, Product>>(new Map());
   // Confirm before ending the session — see the header button.
   const [isLogoutDialogOpen, setIsLogoutDialogOpen] = useState(false);
@@ -331,18 +330,68 @@ export default function POSPage() {
   }, [router, setStoreId, user, authLogout, toast, toProducts]);
 
   // ---- Build O(1) barcode index whenever products change ----
-  useEffect(() => {
-    const index = new Map<string, Product>();
-    const idIndex = new Map<string, Product>();
+  /**
+   * Everything derived from the catalogue, built in ONE pass.
+   *
+   * There were six separate walks over `products` here: an effect building the
+   * barcode and id maps, then four memos for the sellable list, the ingredient
+   * names, the ingredient prices and the ingredient products. On a 3,000-item
+   * store that is ~18,000 iterations and six fresh allocations every time
+   * `setProducts` fires — which is on first paint AND after every background
+   * sync, i.e. while the cashier is scanning.
+   *
+   * The maps were also STATE, set from an effect. That cost an extra render of
+   * the whole till on every catalogue change: one pass with the stale index,
+   * then the effect, then a second pass with the new one. Derived data belongs
+   * in a memo, where it is correct in the same render that produced it.
+   *
+   * `byBarcode` is deliberately NOT filtered to sellable items — see
+   * handleProductAdd. A scanned ingredient IS in the catalogue, and letting it
+   * fall through to the unknown-barcode prompt would read as a broken scanner.
+   */
+  const productIndex = useMemo(() => {
+    const byBarcode = new Map<string, Product>();
+    const byId = new Map<string, Product>();
+    const sellable: Product[] = [];
+    const ingredientProducts: Product[] = [];
+    const ingredientNames = new Map<string, string>();
+    const ingredientPrices = new Map<string, number>();
+
     for (const p of products) {
-      if (p.barcode) {
-        index.set(p.barcode, p);
+      if (p.barcode) byBarcode.set(p.barcode, p);
+      byId.set(p.id, p);
+      ingredientNames.set(p.id, p.name);
+      // What one extra portion costs, in LL — the single answer to "what does
+      // adding one more of this cost", shared by the modifier sheet and combo
+      // resolution so they cannot price the same act differently.
+      ingredientPrices.set(
+        p.id,
+        p.currency === "USD"
+          ? p.selling_price * SELL_RATE
+          : p.selling_price || 0,
+      );
+
+      if (isSellable(p)) {
+        sellable.push(p);
+      } else if (!p.parent_id) {
+        // Every ingredient in inventory, so ANY of them can be added to ANY
+        // line — hummus does not have to be in the taouk sandwich's recipe to
+        // go on it. Variants are excluded: a variant is a way of SELLING a
+        // product, not a thing you put inside one.
+        ingredientProducts.push(p);
       }
-      idIndex.set(p.id, p);
     }
-    setBarcodeIndex(index);
-    barcodeIndexRef.current = idIndex;
+
+    return { byBarcode, byId, sellable, ingredientProducts, ingredientNames, ingredientPrices };
   }, [products]);
+
+  const barcodeIndex = productIndex.byBarcode;
+
+  // The id map is read from event handlers (after commit), never during
+  // render, so syncing it in an effect cannot serve a stale value.
+  useEffect(() => {
+    barcodeIndexRef.current = productIndex.byId;
+  }, [productIndex]);
 
   // Add a product to the cart (used by both barcode scan and saved product buttons)
   const handleProductAdd = useCallback(
@@ -455,46 +504,8 @@ export default function POSPage() {
     [addItem, incrementQuantity, isEnabled, isDesktopMode, toast],
   );
 
-  const sellableProducts = useMemo(
-    () => products.filter(isSellable),
-    [products],
-  );
-
-  const ingredientNames = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const product of products) map.set(product.id, product.name);
-    return map;
-  }, [products]);
-
-  /**
-   * What one extra portion of each product costs, in LL — its own
-   * selling_price, normalised. This is the single answer to "what does adding
-   * one more of this cost", used by the modifier sheet and by combo
-   * resolution alike so they cannot price the same act differently.
-   */
-  const ingredientPrices = useMemo(() => {
-    const map = new Map<string, number>();
-    for (const product of products) {
-      map.set(
-        product.id,
-        product.currency === "USD"
-          ? product.selling_price * SELL_RATE
-          : product.selling_price || 0,
-      );
-    }
-    return map;
-  }, [products]);
-
-  /**
-   * Every ingredient in inventory, so ANY of them can be added to ANY line —
-   * hummus does not have to be in the taouk sandwich's recipe to go on it.
-   * Variants are excluded: a variant is a way of selling a product, not a
-   * thing you put inside one.
-   */
-  const ingredientProducts = useMemo(
-    () => products.filter((p) => isIngredient(p) && !p.parent_id),
-    [products],
-  );
+  const { sellable: sellableProducts, ingredientProducts, ingredientNames, ingredientPrices } =
+    productIndex;
 
   /**
    * The mobile till's modifier sheet. Same hook the desktop layout uses, so the
@@ -700,13 +711,30 @@ export default function POSPage() {
   // The three HEAD requests that used to sit here never did anything: Workbox
   // registers every route for "GET", so a HEAD was not intercepted, and a HEAD
   // response has no body to serve a navigation from anyway.
+  //
+  // Deliberately NOT on mount. Every request here exists for a FUTURE offline
+  // launch — nothing on this screen reads any of it — yet firing them during
+  // boot put eight extra requests in direct competition with the ones this
+  // launch does need. The connectivity heartbeat is the one that lost: on iOS,
+  // where every launch is a cold WebView on a cold connection, its probe timed
+  // out and the till opened showing "Offline". So this waits for idle; see
+  // scheduleWhenIdle for why the timeout matters.
   useEffect(() => {
-    if (connectivity.isOnline && user) {
+    if (!connectivity.isOnline || !user) return;
+
+    let cancelled = false;
+    const cancelIdle = scheduleWhenIdle(() => {
+      if (cancelled) return;
       router.prefetch("/checkout");
       router.prefetch("/pos/products");
       router.prefetch("/transactions");
       void warmAppShell();
-    }
+    });
+
+    return () => {
+      cancelled = true;
+      cancelIdle();
+    };
   }, [router, user]);
 
   // Ask the browser to stop treating our storage as disposable.
@@ -766,9 +794,12 @@ export default function POSPage() {
     if (!user?.storeId) return [];
     const noBarcodeProducts = sellableProducts.filter((p) => !p.barcode);
     const frequentlyUsedIds = getFrequentlyUsedProductIds(user.storeId);
+    // Map lookup, not `.find()` per favourite: that was a full scan of the
+    // sellable catalogue for every starred product — 20 favourites against
+    // 3,000 items is 60,000 comparisons, redone whenever the catalogue changes.
     const frequentlyUsedProducts = frequentlyUsedIds
-      .map((id) => sellableProducts.find((p) => p.id === id))
-      .filter(Boolean) as Product[];
+      .map((id) => productIndex.byId.get(id))
+      .filter((p): p is Product => !!p && isSellable(p));
     // Combine, deduplicating by ID
     const combined = [...noBarcodeProducts, ...frequentlyUsedProducts];
     const seen = new Set<string>();
@@ -777,7 +808,7 @@ export default function POSPage() {
       seen.add(p.id);
       return true;
     });
-  }, [sellableProducts, user?.storeId]);
+  }, [sellableProducts, productIndex, user?.storeId]);
 
   // ---- Layout measurements for the scan-first mobile layout ----
   //

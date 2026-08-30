@@ -463,8 +463,36 @@ export interface Database {
         Args: {
           product_id: string;
           quantity: number;
+          /** Added by migration 024. Omitting it skips the tenancy check. */
+          p_store_id?: string;
         };
         Returns: undefined;
+      };
+      /**
+       * Migration 037. Every line of a sale in one round trip; replaces the
+       * per-line decrement_stock loop in POST /api/transactions.
+       * `p_items` is [{ product_id, quantity }].
+       */
+      decrement_stock_batch: {
+        Args: {
+          p_store_id: string;
+          p_items: Array<{ product_id: string; quantity: number }>;
+        };
+        /** Number of product rows actually updated. */
+        Returns: number;
+      };
+      /**
+       * Migration 037. The History/analytics report, aggregated in Postgres.
+       * Returns cost split into `cost_ll` and `usd_cost_lines` so the LL/USD
+       * rate keeps its single definition in src/lib/utils/format.ts.
+       */
+      get_transaction_analytics: {
+        Args: {
+          p_store_id: string;
+          p_from?: string | null;
+          p_tz?: string;
+        };
+        Returns: Record<string, unknown>;
       };
       cleanup_old_transactions_for_store: {
         Args: {

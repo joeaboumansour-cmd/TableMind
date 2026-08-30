@@ -490,8 +490,13 @@ html {
 .glass {
   background-color: rgb(var(--card-rgb) / 88%);
   background-color: color-mix(in oklch, var(--card) 88%, transparent);
-  backdrop-filter: blur(20px) saturate(150%);
-  -webkit-backdrop-filter: blur(20px) saturate(150%);
+  /* 12px, not 20px. Blur cost scales with radius and this composites over a
+     LIVE camera feed on the scanning screen, every frame. Behind a 72%-opaque
+     panel the two radii are not distinguishable — the background-color is
+     doing the legibility work, the blur is only softening what shows through.
+     Switched off entirely on weak devices; see the .low-power rule below. */
+  backdrop-filter: blur(12px) saturate(140%);
+  -webkit-backdrop-filter: blur(12px) saturate(140%);
 }
 
 @supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
@@ -646,10 +651,18 @@ html {
    decorative. Colour is NOT touched here — the sRGB token fallbacks above
    already handle that.
    --------------------------------------------------------------------------- */
-.legacy .glass {
+.legacy .glass,
+.low-power .glass {
   /* Blur + saturate over a live camera feed is the single most expensive
      thing this UI asks of a GPU. The solid background-color fallback that
-     .glass already declares is perfectly readable without it. */
+     .glass already declares is perfectly readable without it.
+
+     `.low-power` is on the list because `.legacy` was never the right gate
+     for a COST question. It fires only on browsers that cannot parse oklch()
+     — Chrome ≤110, i.e. Windows 7 tills — so every cheap modern Android was
+     paying full price for a 20px blur + saturate compositing over a live
+     camera feed at 30fps. See src/components/BrowserGate.tsx for how the
+     class is set. */
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
 }

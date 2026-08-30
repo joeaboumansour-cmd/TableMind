@@ -51,6 +51,17 @@ function appShellOptions(sw) {
 }
 
 /**
+ * Every URL in the generated precache manifest.
+ *
+ * Workbox emits it as `precacheAndRoute([{revision:"…",url:"/…"}, …])` inside
+ * the minified worker, so the urls are recoverable with a plain scan — there
+ * is nothing else in the file shaped like `url:"…"`.
+ */
+function precachedUrls(sw) {
+  return [...sw.matchAll(/url:\s*"([^"]+)"/g)].map((m) => m[1]);
+}
+
+/**
  * Each check names what breaks if the rule is missing, so a CI failure is
  * self-explanatory to whoever hits it.
  */
@@ -101,6 +112,30 @@ const CHECKS = [
       "day 2 — the exact scenario this app is built for. Stale HTML is not a",
       "risk here: NetworkFirst always prefers the network, so a stale shell is",
       "only ever served when there is no network. Use maxEntries alone.",
+    ].join("\n    "),
+  },
+  {
+    name: "the precache manifest excludes source maps",
+    test: (sw) => !precachedUrls(sw).some((u) => u.endsWith(".map")),
+    why: [
+      "workboxOptions.exclude in next.config.ts REPLACES next-pwa's defaults",
+      "the same way runtimeCaching does — supplying a custom array without",
+      "re-listing /\\.map$/, the .woff2 rule and /^manifest.*\\.js$/ silently",
+      "adds megabytes of source maps to every install and every SW update.",
+      "Re-add the three default entries alongside whatever you were adding.",
+    ].join("\n    "),
+  },
+  {
+    name: "the PDF exporter is NOT precached",
+    test: (sw) => !precachedUrls(sw).some((u) => u.includes("pdf-export")),
+    why: [
+      "html2pdf.js + jsPDF + html2canvas is ~918KB — 22% of the whole",
+      "precache — and serves one Download button on /receipt/[id], the public",
+      "page a CUSTOMER opens from a receipt QR. The till never loads it and it",
+      "cannot work offline anyway. It is excluded by the /pdf-export/ entry in",
+      "workboxOptions.exclude, which only matches because the splitChunks group",
+      "in nextConfig.webpack gives it a stable name. Losing either half puts",
+      "the megabyte back.",
     ].join("\n    "),
   },
   {

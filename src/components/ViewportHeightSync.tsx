@@ -32,8 +32,17 @@ export default function ViewportHeightSync() {
 
     // Last height measured with no keyboard up.
     let lastStable = window.innerHeight;
+    // What is actually written into `--app-h` right now. Setting a custom
+    // property dirties the root element's inline style and invalidates style
+    // for the WHOLE document — every descendant that could read the variable.
+    // `visualViewport` fires `scroll` once per frame while Android's URL bar
+    // retracts, and this used to write on every one of those, unconditionally,
+    // even when the number had not changed. Tracking the written value turns a
+    // per-frame full-document invalidation into one write per real change.
+    let written = -1;
+    let frame = 0;
 
-    const apply = () => {
+    const measure = () => {
       const visual = vv?.height ?? window.innerHeight;
       const layout = window.innerHeight;
 
@@ -49,10 +58,29 @@ export default function ViewportHeightSync() {
 
       // Never taller than the visible area, whichever measure is smaller.
       lastStable = Math.min(visual, layout);
-      root.style.setProperty("--app-h", `${Math.round(lastStable)}px`);
+
+      const next = Math.round(lastStable);
+      if (next === written) return;
+      written = next;
+      root.style.setProperty("--app-h", `${next}px`);
     };
 
-    apply();
+    // Coalesce to one measurement per frame. A URL-bar retraction fires
+    // `scroll` and `resize` in the same frame, and reading `innerHeight` /
+    // `visualViewport.height` forces a layout flush — doing that twice per
+    // frame is a guaranteed forced reflow on the platform (Android) where
+    // this component exists in the first place.
+    const apply = () => {
+      if (frame) return;
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        measure();
+      });
+    };
+
+    // Synchronous on mount: the shell needs a height for its first paint, and
+    // waiting a frame for it means one frame at the dvh fallback.
+    measure();
 
     vv?.addEventListener("resize", apply);
     // The URL bar sliding away fires scroll on the visual viewport, not resize.
@@ -61,6 +89,7 @@ export default function ViewportHeightSync() {
     window.addEventListener("orientationchange", apply);
 
     return () => {
+      if (frame) cancelAnimationFrame(frame);
       vv?.removeEventListener("resize", apply);
       vv?.removeEventListener("scroll", apply);
       window.removeEventListener("resize", apply);

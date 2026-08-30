@@ -47,6 +47,13 @@ let warmedThisSession = false;
  * warm. Each route is added independently and a failure on one is logged and
  * skipped — a partial warm is strictly better than none.
  *
+ * Deliberately SEQUENTIAL, not Promise.all. These are five full HTML documents
+ * fetched with `cache: "no-cache"`, i.e. five forced round trips, for a
+ * benefit nobody is waiting on. Issued together they filled the connection
+ * pool and delayed whatever the cashier actually asked for. One at a time
+ * finishes at the same point on an idle link and stays out of the way on a
+ * busy one. The caller already defers this to idle; see scheduleWhenIdle.
+ *
  * `force` re-warms even if this session already did, for callers that know the
  * shell changed.
  */
@@ -59,30 +66,28 @@ export async function warmAppShell(force = false): Promise<{ warmed: number; fai
   try {
     const cache = await caches.open(CACHE_NAME);
 
-    await Promise.all(
-      SHELL_ROUTES.map(async (route) => {
-        try {
-          // Explicitly bypass the HTTP cache so we store a genuinely fresh
-          // document rather than re-storing whatever the browser already held.
-          const response = await fetch(route, {
-            credentials: "same-origin",
-            cache: "no-cache",
-          });
+    for (const route of SHELL_ROUTES) {
+      try {
+        // Explicitly bypass the HTTP cache so we store a genuinely fresh
+        // document rather than re-storing whatever the browser already held.
+        const response = await fetch(route, {
+          credentials: "same-origin",
+          cache: "no-cache",
+        });
 
-          // Only cache a real document. A redirect to /login or a 500 would
-          // otherwise become the thing the till opens to when offline.
-          if (!response.ok || response.redirected) {
-            result.failed++;
-            return;
-          }
-
-          await cache.put(route, response);
-          result.warmed++;
-        } catch {
+        // Only cache a real document. A redirect to /login or a 500 would
+        // otherwise become the thing the till opens to when offline.
+        if (!response.ok || response.redirected) {
           result.failed++;
+          continue;
         }
-      })
-    );
+
+        await cache.put(route, response);
+        result.warmed++;
+      } catch {
+        result.failed++;
+      }
+    }
 
     warmedThisSession = true;
     console.log(
