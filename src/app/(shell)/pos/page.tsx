@@ -225,15 +225,13 @@ export default function POSPage() {
           setStoreId(store_id);
           syncEngine.setStoreId(store_id);
 
-          // Cache first, then revalidate — the rail and the modifier sheet must
-          // be usable on the first frame with no internet, and a failed refresh
-          // keeps whatever was cached rather than emptying them.
+          // Local caches only. The three NETWORK refreshes that used to sit
+          // here moved into their own effect below, because they must be gated
+          // on the feature flags and re-run when those resolve — which this
+          // effect cannot do without re-running the whole catalogue load.
           setCategories(getCategories(store_id));
           setRecipes(getCachedRecipes(store_id));
           setCombos(getCachedCombos(store_id));
-          void refreshCategories(store_id).then(setCategories);
-          void refreshRecipes(store_id).then(setRecipes);
-          void refreshCombos(store_id).then(setCombos);
 
           // ALWAYS load from local cache first for instant display
           const cached = await getCachedProducts(store_id);
@@ -703,6 +701,50 @@ export default function POSPage() {
       }
     };
   }, []);
+
+  // Menu data — fetched ONLY by stores that have the menu features on.
+  //
+  // These three requests fired unconditionally at every POS launch: categories,
+  // recipes and combos, each a full round trip with its own server-side caller
+  // resolution in front of it. `product_categories` and `menu_items` both
+  // default to FALSE, so a plain retail store — most of them — spent three
+  // requests of its cold start fetching data it has no screen for. The rail is
+  // already gated on `product_categories` (see `menuMode`) and the modifier
+  // sheet on the recipes being non-empty, so nothing rendered from them either.
+  //
+  // Its own effect, keyed on the flags, so that a store where the flags resolve
+  // from the database a moment after mount still fetches: useFeatureFlags
+  // answers from localStorage instantly on a device that has been here before,
+  // and from the optimistic defaults (both false) on one that has not.
+  //
+  // The local-cache reads stay in the load effect above and remain
+  // unconditional — they are synchronous, free, and keep the first frame right
+  // for a store that DOES have the features.
+  useEffect(() => {
+    const storeId = user?.storeId;
+    if (!storeId) return;
+
+    let cancelled = false;
+
+    if (isEnabled("product_categories")) {
+      void refreshCategories(storeId).then((c) => {
+        if (!cancelled) setCategories(c);
+      });
+    }
+
+    if (isEnabled("menu_items")) {
+      void refreshRecipes(storeId).then((r) => {
+        if (!cancelled) setRecipes(r);
+      });
+      void refreshCombos(storeId).then((c) => {
+        if (!cancelled) setCombos(c);
+      });
+    }
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.storeId, isEnabled]);
 
   // Prefetch critical routes while online so they are available offline.
   //

@@ -45,6 +45,7 @@ import { cn } from "@/lib/utils";
 import ProductRow from "@/components/pos/ProductRow";
 import type { InventoryProduct } from "@/components/pos/ProductRow";
 import { useAuth } from "@/lib/auth/AuthContext";
+import { useFeatureFlags } from "@/hooks/useFeatureFlags";
 import { PermissionGuard } from "@/lib/auth/guards";
 // Named helpers only. A raw `* SELL_RATE` skips the 5,000 LL rounding that
 // convertUsdToLl exists to apply, and a raw `/ RETURN_RATE` duplicates a rule
@@ -137,6 +138,9 @@ export default function StoreProductsPage() {
 function StoreProductsPageContent() {
   const router = useRouter();
   const { user, logout: authLogout, isLoading: authLoading } = useAuth();
+  // Only for gating the menu-data fetches below; every UI gate on this page
+  // is unchanged.
+  const { isEnabled } = useFeatureFlags();
   // Destructive confirms (delete, wipe-and-replace import) go through this.
   const { confirm, confirmDialog } = useConfirm();
   // Lazy init supabase client inside component to avoid SSR issues on hard refresh
@@ -343,19 +347,51 @@ function StoreProductsPageContent() {
       setFreqVersion(v => v + 1);
     });
 
-    // Categories and recipes: paint from the localStorage copy immediately,
-    // then revalidate behind it — the same "cache first" rule this page
-    // already uses for products. A failed refresh keeps the cached copy.
+    // Categories and recipes: paint from the localStorage copy immediately.
+    // Free and synchronous, so it stays unconditional. The NETWORK refreshes
+    // moved to their own flag-gated effect below — see the comment there.
     setCategories(getCategories(user.storeId));
     setRecipes(getCachedRecipes(user.storeId));
     setCombos(getCachedCombos(user.storeId));
-    void refreshCategories(user.storeId).then(setCategories);
-    void refreshRecipes(user.storeId).then(setRecipes);
-    void refreshCombos(user.storeId).then(setCombos);
     // Invalidate whatever is still in flight. Without this, a fetch that
     // resolves after the user has left writes into an unmounted page.
     return invalidateLoads;
   }, [user, invalidateLoads]);
+
+  // Menu data — fetched ONLY by stores that have the menu features on.
+  //
+  // Same change as the till (see src/app/(shell)/pos/page.tsx): three network
+  // round trips, each with its own server-side caller resolution, fired on
+  // every visit regardless of whether the store has anywhere to show the
+  // result. `product_categories` and `menu_items` both default to false.
+  //
+  // Its own effect keyed on the flags, so a device whose flags arrive from the
+  // database a moment after mount still fetches.
+  useEffect(() => {
+    const storeId = user?.storeId;
+    if (!storeId) return;
+
+    let cancelled = false;
+
+    if (isEnabled("product_categories")) {
+      void refreshCategories(storeId).then((c) => {
+        if (!cancelled) setCategories(c);
+      });
+    }
+
+    if (isEnabled("menu_items")) {
+      void refreshRecipes(storeId).then((r) => {
+        if (!cancelled) setRecipes(r);
+      });
+      void refreshCombos(storeId).then((c) => {
+        if (!cancelled) setCombos(c);
+      });
+    }
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.storeId, isEnabled]);
 
   // Helper: check if user auth exists in localStorage (works offline)
   function hasAuthInStorage(): boolean {
@@ -1263,6 +1299,11 @@ function StoreProductsPageContent() {
    */
   const favouriteIds = useMemo(
     () => new Set(getFrequentlyUsedProductIds(favStoreId)),
+    // `freqVersion` is not read in the body — it IS the invalidation key. The
+    // source of truth is localStorage, which React cannot observe, so the
+    // counter bumped by toggleFavourite and by the Supabase favourites sync is
+    // what tells this memo the storage changed underneath it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [favStoreId, freqVersion]
   );
 

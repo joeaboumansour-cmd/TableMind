@@ -91,23 +91,35 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: "Unauthorized - No store_id in auth data" }, { status: 401 });
     }
 
-    // Hiding the History link is not a guard — enforce the section here too.
-    // A cashier with transactions:false who knows this URL used to get every
-    // sale in the store, and the analytics route used to hand them the profit.
-    const caller = await resolveCaller(supabase, store_id, readAuthHeader(request).userId);
+    // Two independent lookups, one wave.
+    //
+    // These used to be serial: resolve the caller, then fetch the store's
+    // retention settings, then run the actual query — three round trips deep
+    // before a single transaction was read, on an endpoint measured at
+    // 700-2,700 ms. Neither of the first two reads what the other writes, and
+    // the settings fetch is scoped by `store_id` from the header, which the
+    // permission check below governs the USE of, not the fetch. So they go
+    // together and the depth drops to two.
+    //
+    // The permission gate itself is unchanged and still runs before anything
+    // is returned: hiding the History link is not a guard, and a cashier with
+    // transactions:false who knows this URL used to get every sale in the
+    // store.
+    const [caller, { data: store, error: storeError }] = await Promise.all([
+      resolveCaller(supabase, store_id, readAuthHeader(request).userId),
+      supabase
+        .from("stores")
+        .select("transaction_retention_days, max_transactions")
+        .eq("id", store_id)
+        .single(),
+    ]);
+
     if (!caller) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
     if (!canAccessSection(caller, "transactions")) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
-
-    // Get store retention settings first
-    const { data: store, error: storeError } = await supabase
-      .from("stores")
-      .select("transaction_retention_days, max_transactions")
-      .eq("id", store_id)
-      .single();
 
     if (storeError) {
       console.error("Error fetching store settings:", storeError);

@@ -98,20 +98,62 @@ function validateColor(value: unknown): string | null | { error: string } {
   return color;
 }
 
+/**
+ * Resolve the caller and run a store-scoped read CONCURRENTLY.
+ *
+ * `requireCaller` is a sequential gate: resolve who is calling, then query.
+ * That is two full round trips deep before a byte of data is read, on routes
+ * the POS fires three of at once on launch. Neither step reads what the other
+ * writes, and the query is already scoped to the `store_id` the caller is
+ * claiming — so a failed auth discards a read of the caller's OWN store and
+ * never touches another tenant.
+ *
+ * This is the same trade GET /api/cash-shifts already makes (see its "Wave 1"
+ * comment): overlap the latency, decide afterwards, return nothing until the
+ * caller is confirmed.
+ */
+type ServiceClient = Awaited<ReturnType<typeof createServiceRoleClient>>;
+type ResolvedCaller = NonNullable<Awaited<ReturnType<typeof resolveCaller>>>;
+
+async function callerAndRead<T>(
+  request: Request,
+  read: (supabase: ServiceClient, storeId: string) => PromiseLike<T>
+): Promise<
+  { error: NextResponse } | { caller: ResolvedCaller; storeId: string; result: T }
+> {
+  if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    return { error: bad("Supabase is not configured", 500) };
+  }
+  const supabase = await createServiceRoleClient();
+  const { storeId, userId } = readAuthHeader(request);
+  if (!storeId) return { error: bad("Unauthorized", 401) };
+
+  // Promise.resolve() so the PostgREST builder (a thenable, not a Promise) is
+  // a real Promise before Promise.all sees it — otherwise T infers as unknown.
+  const readPromise: Promise<T> = Promise.resolve(read(supabase, storeId));
+  const [caller, result] = await Promise.all([
+    resolveCaller(supabase, storeId, userId),
+    readPromise,
+  ]);
+
+  if (!caller) return { error: bad("Unauthorized", 401) };
+  return { caller, storeId, result };
+}
+
 // ── GET: the rail ──────────────────────────────────────────────────────────
 // Any authenticated caller, including a POS-only cashier: they need the rail
 // to sell. Sorting is done with the SAME comparator the client uses, so the
 // two can never disagree about order.
 export async function GET(request: Request) {
-  const resolved = await requireCaller(request, false);
+  const resolved = await callerAndRead(request, (supabase, storeId) =>
+    supabase
+      .from("product_categories")
+      .select(SELECT_COLS)
+      .eq("store_id", storeId)
+      .eq("is_active", true)
+  );
   if ("error" in resolved) return resolved.error;
-  const { supabase, storeId } = resolved;
-
-  const { data, error } = await supabase
-    .from("product_categories")
-    .select(SELECT_COLS)
-    .eq("store_id", storeId)
-    .eq("is_active", true);
+  const { data, error } = resolved.result;
 
   if (error) {
     console.error("[Categories] List failed:", error.message);

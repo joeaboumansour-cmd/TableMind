@@ -69,6 +69,29 @@ export function readAuthHeader(request: Request): AuthHeader {
 }
 
 /**
+ * Resolutions currently in flight, keyed by store+user.
+ *
+ * NOT a cache — entries are removed the moment they settle, so a completed
+ * answer is never reused and a permission change or a deactivation takes
+ * effect on the very next request. This only collapses lookups that genuinely
+ * overlap in time.
+ *
+ * That is worth having because the app fires these in bursts: opening the POS
+ * requests categories, recipes and combos at the same instant, and the cash
+ * page fires three of its own — six identical `stores` / `store_users` reads
+ * within a few milliseconds, one in front of each handler. When those land on
+ * the same warm instance (the common case under Node concurrency) they now
+ * share one query instead of issuing six.
+ *
+ * A TTL cache would collapse more, including non-overlapping calls. It is
+ * deliberately not done: this is the only server-side identity check the app
+ * has, and holding a settled answer would delay revoking an employee — a real
+ * behavioural change on the path that governs cash. Overlap-only dedup buys
+ * most of the win and changes no observable behaviour at all.
+ */
+const inFlightCallers = new Map<string, Promise<Caller | null>>();
+
+/**
  * Resolve the caller, or null when they cannot be established.
  *
  * Null must always become a 401 — never a fallback identity.
@@ -82,6 +105,23 @@ export async function resolveCaller(
 
   // A missing user_id used to mean "owner". It now means "unidentified".
   if (!userId) return null;
+
+  const key = `${storeId}|${userId}`;
+  const existing = inFlightCallers.get(key);
+  if (existing) return existing;
+
+  const run = resolveCallerUncached(supabase, storeId, userId).finally(() => {
+    inFlightCallers.delete(key);
+  });
+  inFlightCallers.set(key, run);
+  return run;
+}
+
+async function resolveCallerUncached(
+  supabase: SupabaseClient,
+  storeId: string,
+  userId: string
+): Promise<Caller | null> {
 
   // ── Owner ────────────────────────────────────────────────────────────────
   // The owner's session id IS the store id. One query, and it doubles as the

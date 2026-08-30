@@ -43,21 +43,65 @@ async function requireCaller(request: Request, write: boolean) {
   return { supabase, storeId };
 }
 
-// ── GET ────────────────────────────────────────────────────────────────────
-export async function GET(request: Request) {
-  const resolved = await requireCaller(request, false);
-  if ("error" in resolved) return resolved.error;
-  const { supabase, storeId } = resolved;
+/**
+ * Resolve the caller and run a store-scoped read CONCURRENTLY.
+ *
+ * `requireCaller` is a sequential gate: resolve who is calling, then query.
+ * That is two full round trips deep before a byte of data is read, on routes
+ * the POS fires three of at once on launch. Neither step reads what the other
+ * writes, and the query is already scoped to the `store_id` the caller is
+ * claiming — so a failed auth discards a read of the caller's OWN store and
+ * never touches another tenant.
+ *
+ * This is the same trade GET /api/cash-shifts already makes (see its "Wave 1"
+ * comment): overlap the latency, decide afterwards, return nothing until the
+ * caller is confirmed.
+ */
+type ServiceClient = Awaited<ReturnType<typeof createServiceRoleClient>>;
+type ResolvedCaller = NonNullable<Awaited<ReturnType<typeof resolveCaller>>>;
 
-  // Explicit cap: PostgREST silently truncates an unbounded select at 1000,
-  // and a truncated combo would sell a meal missing half its contents.
-  const CAP = 2000;
-  const { data, error } = await supabase
-    .from("combo_components")
-    .select(SELECT_COLS)
-    .eq("store_id", storeId)
-    .order("sort_order", { ascending: true })
-    .limit(CAP);
+async function callerAndRead<T>(
+  request: Request,
+  read: (supabase: ServiceClient, storeId: string) => PromiseLike<T>
+): Promise<
+  { error: NextResponse } | { caller: ResolvedCaller; storeId: string; result: T }
+> {
+  if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    return { error: bad("Supabase is not configured", 500) };
+  }
+  const supabase = await createServiceRoleClient();
+  const { storeId, userId } = readAuthHeader(request);
+  if (!storeId) return { error: bad("Unauthorized", 401) };
+
+  // Promise.resolve() so the PostgREST builder (a thenable, not a Promise) is
+  // a real Promise before Promise.all sees it — otherwise T infers as unknown.
+  const readPromise: Promise<T> = Promise.resolve(read(supabase, storeId));
+  const [caller, result] = await Promise.all([
+    resolveCaller(supabase, storeId, userId),
+    readPromise,
+  ]);
+
+  if (!caller) return { error: bad("Unauthorized", 401) };
+  return { caller, storeId, result };
+}
+
+// ── GET ────────────────────────────────────────────────────────────────────
+// Explicit cap: PostgREST silently truncates an unbounded select at 1000, and
+// a truncated combo would sell a meal missing half its contents.
+const COMBO_CAP = 2000;
+
+export async function GET(request: Request) {
+  const resolved = await callerAndRead(request, (supabase, storeId) =>
+    supabase
+      .from("combo_components")
+      .select(SELECT_COLS)
+      .eq("store_id", storeId)
+      .order("sort_order", { ascending: true })
+      .limit(COMBO_CAP)
+  );
+  if ("error" in resolved) return resolved.error;
+  const { data, error } = resolved.result;
+  const CAP = COMBO_CAP;
 
   if (error) {
     console.error("[Combos] List failed:", error.message);

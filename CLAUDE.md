@@ -78,6 +78,8 @@ The app must keep selling with no internet. This shapes almost every design deci
 
 `src/lib/connectivity.ts` is a **heartbeat-based** singleton — it probes `/api/health`, because `navigator.onLine` lies (it reports "online" for a connected wifi with no internet).
 
+> **`/api/health` runs on the Edge runtime, and must stay there.** It is the most-called endpoint in the product — every tab, every 15s, all day, in every shop — and as a Node function it was the app's RTT floor at ~200ms plus a cold start. Anything imported into that file that needs Node (a Supabase client, the service-role key, `cookies()`) silently drops it back to Node and makes the heartbeat slow again.
+
 > **Critical:** `/api/health` has a `NetworkOnly` rule in `next.config.ts`. If the service worker is ever allowed to cache it, the app serves a cached `200` forever, believes it is permanently online, never shows offline banners, and never triggers sync. Do not touch that rule.
 >
 > **`workboxOptions.exclude` has the same footgun as `runtimeCaching`.** Supplying it REPLACES next-pwa's three defaults (`.woff2` that is not preloaded, `.map`, `manifest-*.js`), so the array in `next.config.ts` re-lists all three before adding its own `/pdf-export/` entry. Drop them and every install re-acquires megabytes of source maps. `scripts/verify-sw.mjs` asserts both halves.
@@ -153,6 +155,8 @@ onto `products/write.ts` is an open task.
 - Login is hand-rolled against a `stores` / `store_users` table; state lives in **localStorage** (`goldensquirrel_auth`, `goldensquirrel_user`, `goldensquirrel_admin`) and React Context (`src/lib/auth/AuthContext.tsx`).
 - **`src/middleware.ts` enforces nothing.** It creates a Supabase client and returns. There is no server-side route protection.
 - API routes read tenancy from an **unsigned `x-auth-data` JSON header** and then query with the **service-role key**, bypassing RLS. This is the central vulnerability.
+- **`resolveCaller()` shares in-flight lookups**, keyed by `store|user`, because the POS and the cash page each fire three requests at the same instant. Entries are dropped the moment they settle — it is **not** a cache, and must not become one: holding a settled answer would delay revoking an employee on the path that governs cash.
+- **Auth may run *alongside* a store-scoped read, never after it, and never instead of it.** `GET /api/cash-shifts`, `/api/transactions`, `/api/categories`, `/api/recipes` and `/api/combos` all issue the read concurrently with `resolveCaller()` and return nothing until the caller is confirmed. Safe only because the read is scoped to the `store_id` the caller is claiming, so a failed auth discards a read of their own store.
 - `src/lib/auth/jwt.ts` contains the correct primitive (`jose`-based verify) and is **imported by nothing**. It is the intended replacement.
 
 ### Permissions vs roles — don't mix them up
@@ -177,7 +181,7 @@ There are more mechanisms than there should be. Know which is authoritative:
 
 | Concern | Authoritative source |
 |---|---|
-| Cart | Zustand `src/lib/stores/cartStore.ts` (persisted to localStorage, `version: 1`). Holds **lanes** — see §6a. |
+| Cart | Zustand `src/lib/stores/cartStore.ts` (persisted to localStorage, `version: 1`). Holds **lanes** — see §6a. **`items` is deliberately not persisted**: it mirrors the active lane, so writing it too serialised the basket twice per scan. `onRehydrateStorage` re-derives it. |
 | Auth / current user | React Context `src/lib/auth/AuthContext.tsx` — **use `useAuth()`**, don't read localStorage directly |
 | Feature flags | `src/hooks/useFeatureFlags.ts` (localStorage-first, then background DB sync) |
 | Products / transactions offline | Dexie via `src/lib/db/localDB.ts` |

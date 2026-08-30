@@ -872,8 +872,25 @@ export const useCartStore = create<CartStore>()(
       // v1 introduced lanes. The item-level backfill below predates versioning
       // and must keep running for carts persisted before it existed.
       version: 1,
+      // `items` is deliberately NOT persisted.
+      //
+      // It is a MIRROR of `lanes[activeLaneId].items` (see the header), so
+      // writing both meant every cart mutation serialised the active lane's
+      // lines TWICE — a synchronous JSON.stringify plus a localStorage write,
+      // on the main thread, on every scan and every quantity change. On a
+      // thirty-line basket that is the largest single blocking cost on the
+      // money path.
+      //
+      // Nothing is lost: onRehydrateStorage below ALWAYS re-derives `items`
+      // from the active lane, and it cannot drift in the meantime because
+      // commitItems() is the single writer of both. Carts persisted before
+      // lanes existed still carry `items` in storage and still take the
+      // legacy branch there, which reads it — that path is untouched.
+      //
+      // `version` stays 1: nothing about the persisted SHAPE changed in a way
+      // migrate() needs to see, and bumping it would newly run the migration
+      // over every live device's parked lanes for nothing.
       partialize: (state) => ({
-        items: state.items,
         store_id: state.store_id,
         lanes: state.lanes,
         laneOrder: state.laneOrder,
