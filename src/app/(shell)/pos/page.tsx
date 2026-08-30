@@ -407,6 +407,12 @@ export default function POSPage() {
 
   const sellableProducts = useMemo(() => products.filter(isSellable), [products]);
 
+  const ingredientNames = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const product of products) map.set(product.id, product.name);
+    return map;
+  }, [products]);
+
   /**
    * Every ingredient in inventory, so ANY of them can be added to ANY line —
    * hummus does not have to be in the taouk sandwich's recipe to go on it.
@@ -433,6 +439,7 @@ export default function POSPage() {
     recipes,
     combos,
     products: sellableProducts,
+    productNames: ingredientNames,
     enabled: isEnabled("menu_items"),
     onPlainAdd: handleProductAdd,
   });
@@ -679,11 +686,6 @@ export default function POSPage() {
    */
   const menuMode = isEnabled("product_categories") && categories.length > 0;
 
-  const ingredientNames = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const product of products) map.set(product.id, product.name);
-    return map;
-  }, [products]);
 
   const savedProducts = useMemo(() => {
     if (!user?.storeId) return [];

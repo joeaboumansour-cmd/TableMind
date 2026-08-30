@@ -167,6 +167,7 @@ export default function ProPOSLayout({
     recipes,
     combos,
     products,
+    productNames: ingredientNames,
     enabled: isEnabled("menu_items"),
     onPlainAdd: onProductAdd,
   });

@@ -22,7 +22,20 @@ interface UseMenuSheetOptions {
   recipes: RecipeMap;
   /** Every combo in the store. Empty for a store that has none. */
   combos: ComboMap;
+  /**
+   * SELLABLE products — what a tile can add and what a cart line maps back to.
+   * Deliberately excludes ingredients.
+   */
   products: Product[];
+  /**
+   * Names for the WHOLE catalogue, ingredients included.
+   *
+   * Resolving a combo has to name the ingredients inside its children's
+   * recipes, and those are precisely the rows `products` leaves out — so
+   * looking them up there produced the literal word "Item" for every one of
+   * them. Anything that has to name an ingredient uses this map.
+   */
+  productNames: Map<string, string>;
   /** True when the store has the menu_items feature on. */
   enabled: boolean;
   /** Falls back to this when the tapped product has no recipe. */
@@ -39,6 +52,7 @@ export function useMenuSheet({
   recipes,
   combos,
   products,
+  productNames,
   enabled,
   onPlainAdd,
 }: UseMenuSheetOptions) {
@@ -61,8 +75,10 @@ export function useMenuSheet({
       // sandwich. Checked FIRST, because a combo could also happen to have a
       // recipe of its own and the meal must win.
       if (enabled && isCombo(combos, product.id)) {
+        // productNames covers the WHOLE catalogue. `products` is sellable-only,
+        // so using it here named every ingredient "Item".
         const nameOf = (id: string) =>
-          products.find((p) => p.id === id)?.name || "Item";
+          productNames.get(id) || products.find((p) => p.id === id)?.name || "Item";
         const { children, modifiers } = resolveCombo(product.id, combos, recipes, nameOf);
         addComboItem(product, children, modifiers);
         playSuccessSound();
@@ -79,7 +95,7 @@ export function useMenuSheet({
       }
       onPlainAdd(product);
     },
-    [recipes, combos, products, enabled, onPlainAdd, addComboItem]
+    [recipes, combos, products, productNames, enabled, onPlainAdd, addComboItem]
   );
 
   /**
