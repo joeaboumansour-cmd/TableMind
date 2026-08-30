@@ -46,11 +46,17 @@ closed: an unset URL is refused, not assumed harmless.
 ## Everyday use
 
 ```bash
+npm run harness:unit         # pure-logic suite -- 130 tests, <1s, no DB
+npm run harness:unit:watch   # same, in watch mode
 npm run harness:guard        # what database am I pointed at?
 npm run harness:seed         # tear down + re-seed the fixture store
 npm run harness:verify       # 17 assertions, incl. other tenants untouched
 npm run harness:seed:down    # tear down only
+npm run harness:all          # guard + unit
 ```
+
+**`harness:unit` touches no database and needs no `.env.test`.** Run it freely.
+Everything else writes.
 
 Seeding is destructive **within the fixture store only** — it clears that
 store's rows and rebuilds them. It takes about a minute for the full 2,492
@@ -64,9 +70,9 @@ products; pass `--count 40` for a fast run while iterating.
 |---|---|
 | `guard/` | The production seatbelt. Called first by every entry point. |
 | `fixtures/` | `ids.mjs` (derived ids + PRNG), `seed.mjs`, `verify.mjs` |
+| `unit/` | Pure-logic characterization (Vitest). No DB, no network, no DOM. |
 
-Phase 1 adds `unit/`, `contract/`, `e2e/`, `visual/` and `offline/` alongside
-these. One obvious place per concern, so "where does my new test go" is never a
+Phase 1 adds `contract/`, `e2e/`, `visual/` and `offline/` alongside these. One obvious place per concern, so "where does my new test go" is never a
 question.
 
 Nothing in `src/` imports from here, and nothing here imports from `src/`
@@ -127,6 +133,28 @@ objects differ in shape, so rows with optional columns are padded with nulls.
 If you add a column to some rows only, that is what handles it.
 
 ---
+
+## The unit suite
+
+**Characterization, not specification.** These record what the code does
+*today*, so the refactor can move things underneath them. Where current
+behaviour looks odd it is still recorded as-is with a comment saying so —
+changing it is a separate, deliberate decision, not something a refactor does
+by accident.
+
+Three assumptions were wrong when these were written, and each is now pinned:
+
+- **`addItem` refuses a repeat rather than accumulating.** Scanning the same
+  product twice leaves the quantity alone and returns `false`; quantity only
+  ever rises via the manual "+". 
+- **Lines are PREPENDED**, so `items[0]` is the most recently scanned.
+- **`CartLineModifier.state` is `'included' | 'removed' | 'extra'`** — there is
+  no `'kept'`. Only `'removed'` is special-cased, so an invalid state behaves
+  like `'included'` and a test using one proves nothing.
+
+`unit/setup.ts` supplies a memory `localStorage` because the cart store is a
+zustand `persist` store. It is deliberately the smallest possible shim: if a
+test needs more of the browser than that, it belongs in the E2E suite.
 
 ## Things that will bite you
 

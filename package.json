@@ -18,7 +18,10 @@
     "baseline:update": "node scripts/measure-baseline.mjs --update",
     "harness:seed": "node harness/fixtures/seed.mjs",
     "harness:seed:down": "node harness/fixtures/seed.mjs --down",
-    "harness:verify": "node harness/fixtures/verify.mjs"
+    "harness:verify": "node harness/fixtures/verify.mjs",
+    "harness:unit": "vitest run --config harness/vitest.config.mts",
+    "harness:unit:watch": "vitest --config harness/vitest.config.mts",
+    "harness:all": "npm run harness:guard && npm run harness:unit"
   },
   "dependencies": {
     "@ducanh2912/next-pwa": "^10.2.9",
@@ -65,6 +68,7 @@
     "postcss": "^8.5.6",
     "shadcn": "3.8.4",
     "tailwindcss": "^4.1.18",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vitest": "^4.1.11"
   }
 }

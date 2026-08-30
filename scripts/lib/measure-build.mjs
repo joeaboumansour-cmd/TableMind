@@ -135,10 +135,18 @@ export function measureBuild() {
   };
 }
 
-/** Strip the asset lists — what gets committed as the recorded baseline. */
+/**
+ * Strip the asset lists — what gets committed as the recorded baseline.
+ *
+ * The per-route chunk URLs are hashed and change on every build, so committing
+ * them would make `docs/perf-baseline.json` churn on every commit and bury the
+ * numbers that actually matter in diff noise.
+ */
 export function toRecord(m) {
   return {
-    routes: m.routes.map(({ assets, ...r }) => r),
+    routes: m.routes.map((r) => ({
+      route: r.route, chunks: r.chunks, raw: r.raw, gz: r.gz, missing: r.missing,
+    })),
     shared: m.shared,
     precache: m.precache
       ? { entries: m.precache.entries, raw: m.precache.raw, counted: m.precache.counted }

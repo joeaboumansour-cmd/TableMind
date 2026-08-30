@@ -826,7 +826,7 @@ these three it is achievable only in a real shop, on one store, watched.
 | 0.3 local trace baselines | DONE | | see below | | Bundles + request structure + real API latency. CPU/network throttling unavailable — see caveats |
 | 0.4 budget gates | DONE | | | | `verify:budgets` in `npm run build`. Permanent — survives Phase 9. API-depth budget deferred to Phase 1 |
 | 1.1 fixtures & seeding | DONE | | | | 2,492 products / 300 txns. Determinism + tenant isolation both proven |
-| 1.2 pure-logic characterization | NOT STARTED | | | | |
+| 1.2 pure-logic characterization | DONE | | | | 130 tests, 8 files, <1s. Vitest 4.1.11 under `harness/` |
 | 1.3 API contract snapshots | NOT STARTED | | | | |
 | 1.4 E2E golden flows | NOT STARTED | | | | |
 | 1.5 visual snapshots | NOT STARTED | | | | |
@@ -963,6 +963,45 @@ main-thread long tasks. Every Tier 1 and Tier 2 screen is behind auth. The
 `perf.*` events from 0.2 will supply the field version of these from real
 devices, which is the better number anyway; local traces remain useful for
 attributing a regression to a specific change.
+
+### 1.2 pure-logic characterization (2026-08-31)
+
+`npm run harness:unit` — **130 tests across 8 files in under a second**, no
+database, no network, no DOM. Comfortably inside the 10s budget Phase 1 sets.
+
+Covered: `utils/format`, `stores/cartStore` (mutations, totals, lanes,
+one-offs, configured lines), `pos/lineItems`, `pos/lineKey`,
+`products/kind`, `products/refresh.evaluateReconcile`,
+`auth/permissions.parsePermissions`, `features.mergeFeaturesWithDefaults` +
+preset completeness, and `db/localDB.computeRetryBackoffMs`.
+
+Invariants now pinned by a test: **#2** (rounding at the total only — asserted
+against what per-line rounding *would* have given), **#5** (`updateLine` resets
+`original_unit_price` so no phantom discount is reported), **#8** (deletion
+requires positive proof, including the 1,000-row truncation case), **#9**
+(components decrement, not the menu item; integerised once at the line),
+**#16** (`isSellable` defaults to sellable on a pre-030 `undefined` kind),
+**#17** (`[]` survives as `[]`, never collapsed to null), **#18** (`lineKey`).
+
+> **Three of my assumptions were wrong, and being wrong is the point.**
+> Characterization only has value if it records reality:
+>
+> 1. **`addItem` REFUSES a repeat** — it returns `false` and leaves the
+>    quantity alone. Scanning twice does not double a line; quantity only rises
+>    via the manual "+". Documented in the code and deliberate.
+> 2. **Lines are PREPENDED**, so `items[0]` is the newest.
+> 3. **`CartLineModifier.state` is `'included' | 'removed' | 'extra'`** — there
+>    is no `'kept'`. My first draft used `'kept'` and *passed*, because only
+>    `'removed'` is special-cased. A test that passes for the wrong reason is
+>    worse than one that fails, and typechecking the harness is what caught it.
+
+`unit/setup.ts` supplies a memory `localStorage` (the cart store is a zustand
+`persist` store) and nothing else — needing more of the browser is a signal a
+"pure logic" test is reaching too far.
+
+**Gates:** typecheck clean, lint unchanged from `main` at 207/77/130, budgets
+green. The harness is typechecked by `npm run typecheck` because `tsconfig`
+includes `**/*.ts` — worth keeping, since it is what caught the invalid state.
 
 ### 1.1 fixtures (2026-08-31)
 
