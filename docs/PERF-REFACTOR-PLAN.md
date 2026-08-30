@@ -823,7 +823,7 @@ these three it is achievable only in a real shop, on one store, watched.
 | P-2 confirm 025 + 037 applied | DONE | | | | **Both applied.** Do NOT run 025 — see note below |
 | 0.1 harness env switch + prod-URL guard | DONE | e8b8792 | | | Guard + `.env.test` + harness tenant. 6 guard cases verified |
 | 0.2 field measurement events | DONE | | | | 4 events live through real ingest. Client emitters wired, not yet observed firing — see note |
-| 0.3 local trace baselines | NOT STARTED | | | | |
+| 0.3 local trace baselines | PARTIAL | | see below | | Bundle half DONE (`npm run baseline`). Runtime traces need a signed-in session |
 | 0.4 budget gates | NOT STARTED | | | | Permanent |
 | 1.1 fixtures & seeding | NOT STARTED | | | | |
 | 1.2 pure-logic characterization | NOT STARTED | | | | |
@@ -905,6 +905,64 @@ The lesson generalises past this step: **the REST API cannot answer schema
 questions.** Anything about column types, constraints, indexes or triggers
 needs the SQL editor, a direct Postgres connection, or a Management API
 token. Phase 2.4's `EXPLAIN` work will need one of those three.
+
+### 0.3 baseline — bundles (2026-08-30)
+
+`npm run baseline` after `npm run build`. Committed to `docs/perf-baseline.json`
+so 0.4 has something to compare against. Regenerate after every build;
+**`npm run dev` overwrites `.next`, so a dev session invalidates these numbers**
+— the script says so when it cannot find the build.
+
+Next 16 no longer emits `app-build-manifest.json` and no longer prints the
+Size / First Load JS columns, so this reads the **prerendered HTML** in
+`.next/server/app/*.html` and sums the `/_next/static/*.js` it references.
+That is what the browser is actually handed, which makes it a better source
+than a manifest rather than a workaround for losing one.
+
+**First Load JS, gzipped (raw), highest first:**
+
+| Route | gzip KB | raw KB | chunks | Tier |
+|---|---:|---:|---:|---|
+| `/pos/products` | 356.7 | 1167.6 | 31 | 3 |
+| **`/pos`** | **344.2** | **1120.9** | **29** | **1** |
+| **`/checkout`** | **336.0** | **1080.8** | **30** | **1** |
+| `/pos/cash` | 334.4 | 1088.6 | 29 | 2 |
+| `/transactions` | 329.6 | 1067.6 | 28 | 3 |
+| `/kitchen` | 322.5 | 1042.4 | 28 | 2 |
+| `/barcodegen` | 317.4 | 1061.0 | 22 | — |
+| `/admin/activity` | 310.7 | 1014.1 | 22 | 3 |
+| `/admin` | 310.6 | 1016.6 | 23 | 3 |
+| `/login` | 289.4 | 945.9 | 20 | — |
+| `/admin/login` | 289.1 | 942.3 | 21 | 3 |
+| `/admin/transactions` | 288.9 | 944.1 | 20 | 3 |
+| `/` | 155.0 | 499.9 | 6 | — |
+
+**Shared by every route: 155.0 KB gz / 499.9 KB raw across 6 chunks.**
+
+**Precache: 119 entries, 3.28 MB raw** — 95 JS files (2909.5 KB), 11 woff2
+(143.0 KB), 4 png (172.6 KB), 1 css (86.4 KB), 1 ico (41.4 KB), 2 json.
+
+**Three things these numbers say that change where effort goes:**
+
+1. **The shared baseline is 45% of `/pos`.** 155 of 344 KB is paid by every
+   route including `/`, so at most ~190 KB of `/pos` is even addressable by
+   route-level splitting. Phase 7 should attack the shared chunk first; a
+   route-by-route diet caps out well before it feels like anything.
+2. **The spread across routes is small — 289 to 357 KB, a 68 KB band.** Every
+   screen carries nearly the same bundle, which is the signature of weak code
+   splitting rather than genuinely heavy screens. `/admin/transactions`, which
+   a cashier never opens, costs 84% of what `/pos` costs.
+3. **§6's "918 KB" figure is wrong and should be retired.** Measured precache
+   is **3.28 MB raw**. The infra-cost argument in the business lens is
+   therefore understated by roughly 3.5×, not overstated — worth recomputing in
+   Phase 9 from this number.
+
+**Not done — needs a signed-in session:** cold/warm boot to interactive under
+4× CPU and Slow 4G, request count and request depth per screen, and
+main-thread long tasks. Every Tier 1 and Tier 2 screen is behind auth. The
+`perf.*` events from 0.2 will supply the field version of these from real
+devices, which is the better number anyway; local traces remain useful for
+attributing a regression to a specific change.
 
 ### 0.2 notes (2026-08-30)
 
