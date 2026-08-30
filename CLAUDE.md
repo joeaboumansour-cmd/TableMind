@@ -104,7 +104,7 @@ The app must keep selling with no internet. This shapes almost every design deci
 
 Schema is at `version(4)`. Dexie versions are **append-only** — add a new `db.version(n).stores({...})` block, never edit an existing one. Compound indexes in use: `[store_id+barcode]` (barcode lookups must be store-scoped — barcodes are not unique across tenants), `[store_id+created_at]`, `[store_id+name]`.
 
-Every write path is retry-capped at 5 attempts. Queued **transactions** are the exception to dropping: on exhaustion they are **dead-lettered** (`failed_permanently`), never deleted — each one is a completed sale whose money was taken. `getQueuedTransactions()` excludes them; `getDeadLetterTransactions()` returns them. **Nothing surfaces them in the UI yet** — that's an open task.
+Every write path is retry-capped at 5 attempts. Queued **transactions** are the exception to dropping: on exhaustion they are **dead-lettered** (`failed_permanently`), never deleted — each one is a completed sale whose money was taken. `getQueuedTransactions()` excludes them; `getDeadLetterTransactions()` returns them. They **do** surface now: the transactions page reads `getDeadLetterTransactions()` and lists them with `syncState: "failed"` alongside the queued ones.
 
 ### Sync
 
@@ -312,6 +312,7 @@ git checkout 744ad0d -- tests src/tests playwright.config.ts vitest.config.ts
 |---|---|---|
 | **`CLAUDE.md`** (this file) | ✅ Authoritative | |
 | `docs/AUDIT-2026-08.md` | ✅ Current | The live bug/debt backlog |
+| `docs/PERF-REFACTOR-PLAN.md` | ✅ Authoritative for the refactor | Plan of record for the performance refactor. **If it is in progress, read it before touching `src/`** — it carries the invariant list and the step ledger. |
 | `docs/CSV_IMPORT_EXPORT_GUIDE.md` | ✅ Accurate | Matches the code |
 | `README.md` | ✅ Accurate | Setup only |
 | `ARCHITECTURE.md` | ✅ Rewritten Aug 2026 | Was wrong before; now matches reality |

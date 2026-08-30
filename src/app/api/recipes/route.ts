@@ -22,6 +22,7 @@
 import { NextResponse } from "next/server";
 import { createServiceRoleClient } from "@/lib/supabase/server";
 import { readAuthHeader, resolveCaller, canAccessSection } from "@/lib/auth/apiCaller";
+import { bad, callerAndRead } from "@/lib/auth/apiRoute";
 import {
   MAX_COMPONENTS_PER_RECIPE,
   validateComponent,
@@ -36,10 +37,6 @@ const FK_VIOLATION = "23503";
 const SELECT_COLS =
   "id, menu_product_id, ingredient_product_id, quantity, is_default, is_removable, max_quantity, price_delta_ll, sort_order";
 
-function bad(message: string, status: number) {
-  return NextResponse.json({ error: message }, { status });
-}
-
 async function requireCaller(request: Request, write: boolean) {
   if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
     return { error: bad("Supabase is not configured", 500) };
@@ -50,48 +47,6 @@ async function requireCaller(request: Request, write: boolean) {
   if (!caller) return { error: bad("Unauthorized", 401) };
   if (write && !canAccessSection(caller, "inventory")) return { error: bad("Forbidden", 403) };
   return { supabase, storeId };
-}
-
-/**
- * Resolve the caller and run a store-scoped read CONCURRENTLY.
- *
- * `requireCaller` is a sequential gate: resolve who is calling, then query.
- * That is two full round trips deep before a byte of data is read, on routes
- * the POS fires three of at once on launch. Neither step reads what the other
- * writes, and the query is already scoped to the `store_id` the caller is
- * claiming — so a failed auth discards a read of the caller's OWN store and
- * never touches another tenant.
- *
- * This is the same trade GET /api/cash-shifts already makes (see its "Wave 1"
- * comment): overlap the latency, decide afterwards, return nothing until the
- * caller is confirmed.
- */
-type ServiceClient = Awaited<ReturnType<typeof createServiceRoleClient>>;
-type ResolvedCaller = NonNullable<Awaited<ReturnType<typeof resolveCaller>>>;
-
-async function callerAndRead<T>(
-  request: Request,
-  read: (supabase: ServiceClient, storeId: string) => PromiseLike<T>
-): Promise<
-  { error: NextResponse } | { caller: ResolvedCaller; storeId: string; result: T }
-> {
-  if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
-    return { error: bad("Supabase is not configured", 500) };
-  }
-  const supabase = await createServiceRoleClient();
-  const { storeId, userId } = readAuthHeader(request);
-  if (!storeId) return { error: bad("Unauthorized", 401) };
-
-  // Promise.resolve() so the PostgREST builder (a thenable, not a Promise) is
-  // a real Promise before Promise.all sees it — otherwise T infers as unknown.
-  const readPromise: Promise<T> = Promise.resolve(read(supabase, storeId));
-  const [caller, result] = await Promise.all([
-    resolveCaller(supabase, storeId, userId),
-    readPromise,
-  ]);
-
-  if (!caller) return { error: bad("Unauthorized", 401) };
-  return { caller, storeId, result };
 }
 
 // ── GET ────────────────────────────────────────────────────────────────────
@@ -113,7 +68,6 @@ export async function GET(request: Request) {
   );
   if ("error" in resolved) return resolved.error;
   const { data, error } = resolved.result;
-  const CAP = RECIPE_CAP;
 
   if (error) {
     console.error("[Recipes] List failed:", error.message);
@@ -136,7 +90,7 @@ export async function GET(request: Request) {
     recipes,
     // Tells the client its copy may be short rather than letting it believe a
     // truncated recipe is the whole thing.
-    truncated: rows.length >= CAP,
+    truncated: rows.length >= RECIPE_CAP,
   });
 }
 
