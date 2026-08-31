@@ -837,7 +837,7 @@ these three it is achievable only in a real shop, on one store, watched.
 | 2.3 generated DB types | NOT STARTED | | | | |
 | 2.4 index & query audit | NOT STARTED | | | | |
 | 2.5 edge runtime pass | NOT STARTED | | | | |
-| 3.1 data primitive | NOT STARTED | | | | |
+| 3.1 data primitive | DONE | | | | `src/lib/data/`. 27 harness tests. No screen migrated yet — that is 3.2 |
 | 3.0 parallelise the boot delta+count | DONE | | ~600ms serial | **~300ms parallel** | Brought forward from 0.3's finding |
 | 3.2 migrate /pos | NOT STARTED | | | | |
 | 3.3 migrate /pos/products | NOT STARTED | | | | |
@@ -1043,6 +1043,125 @@ be tracked down.
 **iOS is unblocked** (WebKit installed 2026-08-31), so invariant #24 is
 satisfied for the flows written so far. The row stays PARTIAL because flows
 5-8 — cash shift, inventory, CSV import, kitchen — are still to write.
+
+### Harness finding — the iOS offline cold-launch flow cannot be verified here (2026-08-31)
+
+`offline.spec.ts` "a cold launch offline still reaches the till" **fails on the
+`ios` profile**, and has nothing to do with any change in this session:
+
+- It reproduces on a clean checkout of `cdc1e31` with a fresh `npm run build`.
+  Controlled comparison, same machine, minutes apart.
+- The error is `page.goto: WebKit encountered an internal error` — a driver
+  error on the navigation itself, **not** a content assertion. The app's own
+  assertions are never reached.
+- Every other offline scenario passes on `ios`. The ones that pass use
+  `setOffline` **without navigating**, or intercept routes; this is the only
+  one that calls `page.goto` while the context is offline.
+
+So the likeliest reading is a Playwright/WebKit limitation, not a product
+defect — but that is a reading, not a proof, and the thing it would be hiding
+is the one that matters most on iOS: every launch there is a cold WebView, and
+the `pages` runtime rule opening the till with no internet is what the whole
+service-worker configuration exists for.
+
+**Do not "fix" this by deleting or loosening the test.** It belongs to Phase
+6.3's three-week shelf-life drill, which is on real devices precisely because
+the harness cannot answer questions like this one. Recorded here so the red is
+understood rather than rediscovered, and so nobody reads it as a 3.1
+regression.
+
+> Watch out for a second trap this session hit: `TaskStop` on `npm run start`
+> kills the npm wrapper, **not** the `next start` child. The port stays held,
+> the next `npm run start` dies with `EADDRINUSE`, and the suite silently keeps
+> testing the OLD build — which invalidated the first attempt at the comparison
+> above. Kill by port, then verify `/api/health` is actually gone.
+
+### 3.1 the data primitive (2026-08-31)
+
+`src/lib/data/` — 2 files, no dependencies, 27 harness tests.
+**Nothing is migrated onto it yet; that is 3.2 onward.** The only production
+behaviour that changed is one line in `clearUserFromStorage()`.
+
+Two files, and the split is the point:
+
+| File | What it is |
+|---|---|
+| `resource.ts` | **Pure.** No React, no `fetch`, no imports at all. Every environment-specific thing arrives through the `ResourceDefinition` the caller supplies. |
+| `useResource.ts` | The React wiring — `useSyncExternalStore` plus one effect. ~30 lines of substance. |
+
+The store is where the decisions live that can lose a shop data — keep the
+cache when a revalidate fails, one request per store, "we do not know yet" is
+a state — so it is tested directly in the node suite rather than through a
+rendered component.
+
+#### What it replaces
+
+Fifteen hand-rolled copies of "read the cache, paint it, revalidate in a
+`useEffect`". Four properties they could not have individually:
+
+1. **In-flight sharing across components.** One request per
+   `(resource, store)`, and **one notify per real change** rather than one per
+   subscriber — `commit()` compares the next state field-by-field and returns
+   early on a no-op, so a second component joining a load in progress does not
+   push a render through everyone already watching it.
+2. **`staleTime`.** In-memory and per-tab, so a page load always revalidates.
+   What it collapses is the *cross-screen* duplicate: `/pos` and
+   `/pos/products` each refresh categories and recipes on mount, so walking
+   between them costs four requests for data that changes a few times a week.
+3. **Tenancy in the key, structurally.** The entry key is `name:storeId`.
+   There is no way to ask for a resource without saying whose.
+4. **`hydrated` — the P1-12 fix's missing half.** See below.
+
+#### The inversion that makes it worth having
+
+`ResourceDefinition.fetch` **must reject on failure.** Today's loaders
+(`refreshCategories`, `refreshRecipes`, `refreshCombos`) all catch their own
+errors and *resolve with the cached copy*, so a caller's `.then()` says
+nothing about whether the fetch worked and a `.catch()` beside it is dead
+code. That is exactly the trap the first P1-12 attempt fell into.
+
+Moving the swallow into one place buys the two things the loaders could not
+express: an observable `error`, and a `hydrated` flag that a failed fetch
+leaves **alone** — because a failed fetch is not evidence that the cached copy
+is wrong. Same rule as `evaluateReconcile()`: removing things requires
+positive proof.
+
+#### What 3.2 inherits for P1-12
+
+The audit's fix is "HOLD a scanned menu item until recipes settle, then add it
+properly — do not refuse it, do not guess." Two pieces exist now:
+
+- `isAwaitingFirstLoad(state)` — `!hydrated && loading`. The **only** state in
+  which waiting is right. An empty answer (`hydrated: true`, `data: {}`) is a
+  real answer: a shop can genuinely have no recipes.
+- `whenResourceSettles(def, storeId, { timeoutMs })` — resolves the moment the
+  device has an answer, **immediately** when it already had one, so every scan
+  on a warm till costs nothing. The timeout is not optional and defaults to
+  1.2s: invariant #10 says a sale is never blocked, and a till that pauses a
+  scan on a hanging request is a worse failure than the mis-sale it prevents.
+
+#### Three things that had to be got right, recorded so they are not undone
+
+1. **`clearResourceCache()` resets entries in place, it does not delete them.**
+   `subscribeResource` closes over the entry object, so dropping it from the
+   map would leave every mounted component watching an orphan that nothing
+   notifies again — deaf until it remounts, which a logout does not guarantee.
+   Only unwatched entries are dropped. It is now called from
+   `clearUserFromStorage()` beside the localStorage prefix sweep: those are the
+   same caches, and one of them was only being cleared on disk.
+2. **The entry map is never touched without a `window` check.** Client
+   components still execute on the server for SSR, where a module-level `Map`
+   is shared by every request on the instance. The server path returns a frozen
+   per-definition empty state and writes nothing.
+3. **The in-flight slot is cleared from a `.then`, never a `finally` in the
+   same synchronous turn.** A `ResourceDefinition` whose `fetch` throws
+   *synchronously* would otherwise clear the slot before it was set, stranding
+   the resource as permanently loading for the life of the tab. There is a test
+   for it.
+
+**Verified:** 157/157 harness unit (27 new), typecheck clean, lint unchanged at
+main's 207/77/130, build green with `verify:sw` and `verify:budgets` both
+passing. No route, screen, or API changed.
 
 ### 2.2 (part 2) — serial GETs become one wave (2026-08-31)
 
