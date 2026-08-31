@@ -203,12 +203,12 @@ describe("a sale is never blocked — invariant #10", () => {
   });
 
   /**
-   * ⚠️ FINDING, NOT DESIRED BEHAVIOUR — recorded as-is, deliberately.
+   * audit P1-11 — FIXED by migration 038 (the atomic sale RPC).
    *
-   * A sale whose `user_id` names a store_users row that no longer exists is
-   * REJECTED with 500, from a 23503 on `transactions_user_id_fkey`.
+   * A sale whose `user_id` names a `store_users` row that no longer exists
+   * USED to be rejected with 500, from a 23503 on
+   * `transactions_user_id_fkey`. That lost money:
    *
-   * Why that loses money:
    *   1. a cashier rings sales offline; they queue carrying their user_id
    *   2. the employee leaves and an admin deletes them — DELETE
    *      /api/admin/store-users is a HARD delete
@@ -216,25 +216,46 @@ describe("a sale is never blocked — invariant #10", () => {
    *   4. 23503 -> 500 -> the client reads any 500 as an offline condition,
    *      retries, exhausts its 5 attempts, and DEAD-LETTERS the sale
    *
-   * The money was taken at the till and the sale never reaches the server.
-   * `ON DELETE SET NULL` (migration 015) protects sales already recorded; it
-   * does nothing for ones still sitting in a device's queue.
+   * `create_sale` now coerces an unresolvable user_id to NULL, exactly as
+   * shift resolution already degrades to a NULL shift_id. The sale is
+   * RECORDED rather than lost, and `user_name` — stored denormalised
+   * alongside — still says who rang it.
    *
-   * This test PINS the current behaviour so Phase 2.1's atomic sale RPC cannot
-   * change it by accident in either direction. The fix — coercing an
-   * unresolvable user_id to null on insert, exactly as the shift resolution
-   * already degrades — belongs with that step, not here: Phase 1 freezes
-   * behaviour rather than improving it. Logged in docs/AUDIT-2026-08.md.
+   * This test now pins the FIX. If it ever goes back to 500, a shop is
+   * losing sales again.
    */
-  it("CURRENTLY REJECTS a sale from a deleted employee (500) — see comment", async () => {
+  it("records a sale from a deleted employee, attributing it to nobody", async () => {
     const body = track(sale({ user_id: "00000000-0000-4000-8000-00000000dead" }));
     const r = await call("POST", "/api/transactions", { body });
-    expect(r.status).toBe(500);
+    expect(r.status).toBeLessThan(300);
 
     const rows = await db.get(
-      `transactions?select=id&store_id=eq.${STORE_ID}&transaction_number=eq.${body.transaction_number}`
+      `transactions?select=id,user_id,user_name,total_amount&store_id=eq.${STORE_ID}&transaction_number=eq.${body.transaction_number}`
     );
-    expect(rows).toHaveLength(0); // the sale is simply lost
+    // The sale exists — this is the whole point.
+    expect(rows).toHaveLength(1);
+    // Attributed to nobody rather than to a ghost...
+    expect(rows[0].user_id).toBeNull();
+    // ...but who rang it is not lost, because user_name is denormalised.
+    expect(rows[0].user_name).toBe("Fixture Manager");
+    // And the money is right.
+    expect(Number(rows[0].total_amount)).toBe(100_000);
+  });
+
+  it("drops a user_id belonging to ANOTHER store rather than recording it", async () => {
+    // The same coercion is scoped by store, so a forged id cannot attribute a
+    // sale to someone in a different tenant.
+    const other = await db.get(`store_users?select=id&store_id=neq.${STORE_ID}&limit=1`);
+    if (!other?.length) return;
+
+    const body = track(sale({ user_id: other[0].id }));
+    const r = await call("POST", "/api/transactions", { body });
+    expect(r.status).toBeLessThan(300);
+
+    const rows = await db.get(
+      `transactions?select=user_id&store_id=eq.${STORE_ID}&transaction_number=eq.${body.transaction_number}`
+    );
+    expect(rows[0].user_id).toBeNull();
   });
 
   it("succeeds for a product with no stock left", async () => {

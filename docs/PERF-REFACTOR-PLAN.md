@@ -832,7 +832,7 @@ these three it is achievable only in a real shop, on one store, watched.
 | 1.5 visual snapshots | DONE | | | | 24 baselines, 3 viewports. Opt-in `harness:visual`, stable on re-run |
 | 1.6 offline/sync scenarios | DONE | | | | 6 scenarios incl. the wifi-with-no-upstream hang case |
 | 1.7 mutation check of the net | DONE | | | | **7/7 caught.** `npm run harness:mutation` |
-| 2.1 atomic sale RPC | CODE DONE | e8bd0e7 | 1226ms median | pending | **Migration 038 not yet applied.** Fallback verified 13/13 |
+| 2.1 atomic sale RPC | DONE | | **1226ms** median | **307ms** median | **-75%.** Closes audit P1-4 and P1-11 |
 | 2.2 route kernel | NOT STARTED | | | | |
 | 2.3 generated DB types | NOT STARTED | | | | |
 | 2.4 index & query audit | NOT STARTED | | | | |
@@ -1074,7 +1074,50 @@ network calls are in flight.
 > queries were already fast. It is only visible in a **request-depth** trace,
 > which is why 0.3 recorded request depth as well as request count.
 
-### 2.1 atomic sale RPC — CODE READY, MIGRATION PENDING (2026-08-31)
+### 2.1 atomic sale RPC — DONE, MIGRATION APPLIED (2026-08-31)
+
+**The first change a cashier can feel.**
+
+| `POST /api/transactions`, 3-line sale, median of 15 | Before | After |
+|---|---|---|
+| median | **1226 ms** | **307 ms** |
+| p90 | 1243 ms | 409 ms |
+| min | 1127 ms | 270 ms |
+
+**−75%, or 919 ms off every single sale.** Reproduce with
+`npm run harness:bench`.
+
+Three serial waves to Postgres became one call in one transaction. Nothing was
+made to skip work: the same shift is resolved, the same rows are written, the
+same stock moves. What was removed is *waiting*.
+
+**It also closed two of the bugs the harness found:**
+
+- **audit P1-4** — a sale could be half-written. The transaction committed,
+  the items insert failed, and that failure was deliberately swallowed because
+  the sale already existed. The result was an empty receipt, no kitchen ticket
+  and analytics under-counting, silently. All three writes now share one
+  transaction.
+- **audit P1-11** — a `user_id` naming a deleted employee raised 23503 → 500 →
+  the client read it as offline → retried → dead-lettered a sale whose money
+  was already taken. It is now coerced to NULL, scoped by store, exactly as
+  shift resolution already degrades.
+
+**Regression check, all green on the atomic path:** 120/120 contract, 20/20
+E2E desktop **including the offline sell → reconnect → exactly-one-row and
+stock-decremented-exactly-once scenarios** (the riskiest part of changing an
+idempotency path), 130/130 unit, 17/17 fixture assertions.
+
+> **One deliberate contract change.** The duplicate-replay response now returns
+> the full transaction row where it previously returned a narrow column list —
+> a **superset**: `store_id`, `payment_method`, `usd_*`, `receipt_token`, and
+> `store_id`/`transaction_id` on the nested items. Nothing was removed.
+> Verified nothing consumes it: no client reads `duplicated` or the body shape,
+> and the sync engine only checks `response.ok`. Snapshot updated deliberately
+> rather than narrowed, because narrowing would have cost another migration to
+> change a field nothing reads.
+
+### 2.1 atomic sale RPC — original notes (2026-08-31)
 
 Migration **038** creates `create_sale(store_id, sale jsonb)`: resolve the
 shift, insert the transaction, insert the line items, apply the stock — one
