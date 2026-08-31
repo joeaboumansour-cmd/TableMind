@@ -164,6 +164,27 @@ test.describe("flow 2 — menu item and modifiers", () => {
 
 test.describe("cold device with no recipes — deterministic, not a race", () => {
   /**
+   * SERVICE WORKER OFF for these two tests, and it is load-bearing.
+   *
+   * Both control `/api/recipes` with `page.route` — one aborts it, one holds
+   * it — and `page.route` does NOT intercept a request the SERVICE WORKER
+   * makes on the page's behalf. Whether it claims the page before or after the
+   * recipe fetch varies from run to run on a fresh context, so the block
+   * silently leaked about one run in five: the recipes arrived anyway and the
+   * modifier sheet opened where a plain line was expected.
+   *
+   * That was invisible before Phase 3.2 — the till decided immediately, so a
+   * late-arriving recipe changed nothing. Now that it WAITS, the leak decides
+   * the outcome. The race was always there; holding the scan is what made it
+   * observable.
+   *
+   * Nothing in this describe is about the service worker, so switching it off
+   * makes `page.route` authoritative and both tests deterministic. The offline
+   * suite, which IS about the service worker, is a different file and keeps it.
+   */
+  test.use({ serviceWorkers: "block" });
+
+  /**
    * ⚠️ FINDING (audit P1-12), reproduced deterministically.
    *
    * With no cached recipes and none obtainable, a menu item is added as an
@@ -185,8 +206,11 @@ test.describe("cold device with no recipes — deterministic, not a race", () =>
    * on its first launch has no recipes at all, and every menu item it sells
    * that day takes this path.
    *
-   * Recorded, not fixed. Phase 1 freezes behaviour; the fix belongs in Phase 3
-   * where the data layer can distinguish "not loaded yet" from "no recipe".
+   * Since Phase 3.2 this outcome is reached DELIBERATELY rather than by
+   * mistake: the till holds the scan for up to MENU_HOLD_MS, the aborted
+   * request answers immediately with a failure, and the line is added rather
+   * than leaving a customer standing at the counter. Degrading after trying is
+   * the design. The test below covers the case that actually changed.
    */
   test("a menu item is sold as a plain line when recipes cannot load", async ({ signedIn: page }) => {
     // Deterministic: the recipe fetch never succeeds, so the cache stays empty.
@@ -208,8 +232,64 @@ test.describe("cold device with no recipes — deterministic, not a race", () =>
     const items = await activeItems(page);
     // No sheet was offered, and the line carries no modifiers -- so the
     // kitchen will never see it and stock will move on the wrong product.
+    //
+    // This is still the outcome, and it is still wrong, but since Phase 3.2 it
+    // is reached DELIBERATELY: the till holds the scan for MENU_HOLD_MS, the
+    // aborted request never answers, and it adds the line rather than leaving
+    // the customer standing there. Degrading after trying is the design; the
+    // bug was degrading without trying. The test below covers the case that
+    // actually changed.
     expect(items[0].modifiers ?? null).toBeNull();
     expect(items[0].line_uid ?? null).toBeNull();
+  });
+
+  /**
+   * Audit **P1-12**, the fix.
+   *
+   * The recipe response is HELD until the test releases it, so the scan
+   * provably lands inside the window where this device does not yet know what
+   * is on the menu. Before Phase 3.2 that window produced a plain line with no
+   * ticket and the wrong stock movement; now the till waits for the answer.
+   *
+   * Deterministic by construction rather than by timing: nothing here races a
+   * background fetch, which is what made the first attempt at the test above
+   * flaky.
+   */
+  test("a menu item scanned BEFORE recipes land still opens the sheet", async ({ signedIn: page }) => {
+    let release: (() => void) | undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    await page.route("**/api/recipes**", async (route) => {
+      await held;
+      await route.continue();
+    });
+
+    // NOT openTill(): that helper exists to wait the recipe cache in, which is
+    // precisely the state this test must avoid being in.
+    await page.goto("/pos");
+    await expect(page.getByText("Loading…")).toHaveCount(0, { timeout: 30_000 });
+    await requireWedge(page);
+
+    // Proof the device is genuinely cold, not merely assumed to be.
+    const cached = await page.evaluate(
+      (store) => localStorage.getItem(`store_recipes_${store}`),
+      STORE_ID
+    );
+    expect(cached).toBeNull();
+
+    await scan(page, FIXTURE.menuBarcode);
+
+    // The scan is now being HELD. Let the recipes through.
+    release!();
+
+    const sheet = page.getByRole("dialog");
+    await expect(sheet).toBeVisible({ timeout: 15_000 });
+    await expect(sheet.getByRole("heading", { name: "Fixture Fries Sandwich" })).toBeVisible();
+
+    // And nothing was added behind the sheet's back.
+    expect(await activeItems(page)).toHaveLength(0);
   });
 });
 

@@ -839,7 +839,7 @@ these three it is achievable only in a real shop, on one store, watched.
 | 2.5 edge runtime pass | NOT STARTED | | | | |
 | 3.1 data primitive | DONE | a36e978 | | | `src/lib/data/`. 27 harness tests. No screen migrated yet — that is 3.2 |
 | 3.0 parallelise the boot delta+count | DONE | | ~600ms serial | **~300ms parallel** | Brought forward from 0.3's finding |
-| 3.2 migrate /pos | NOT STARTED | | | | |
+| 3.2 migrate /pos | DONE | | 6 menu requests per remount | **3** | Closes audit **P1-12** + a second gap it uncovered in the feature flags |
 | 3.3 migrate /pos/products | NOT STARTED | | | | |
 | 3.4 migrate /transactions | NOT STARTED | | | | |
 | 3.5 migrate /pos/cash + /kitchen | NOT STARTED | | | | |
@@ -1020,6 +1020,9 @@ Pro till does not exist on a phone.
 > The root cause is a conflation: an absent cache and an absent recipe look
 > identical. Belongs in **Phase 3**, where the data layer gains a real loading
 > state. Recorded, not fixed.
+>
+> **CLOSED by 3.2 (2026-08-31)** — see the 3.2 note below, including the second
+> defect of the same shape it uncovered in the feature flags.
 
 **Two testing lessons worth keeping:**
 
@@ -1043,6 +1046,94 @@ be tracked down.
 **iOS is unblocked** (WebKit installed 2026-08-31), so invariant #24 is
 satisfied for the flows written so far. The row stays PARTIAL because flows
 5-8 — cash shift, inventory, CSV import, kitchen — are still to write.
+
+### 3.2 migrate /pos — and P1-12 is closed (2026-08-31)
+
+Three `useState`s, two effects and three copies of cache-then-revalidate on the
+till became three `useResource` subscriptions. The loaders keep their old
+signatures for /pos/products (Phase 3.3) but **delegate** to the resource
+rather than duplicating it, so there is one in-flight map, not two.
+
+#### Measured — duplicate fetches
+
+Controlled comparison, old code rebuilt and measured on the same machine
+minutes apart. `/pos` → History → `/pos`, **client-side** navigation:
+
+| | Before | After |
+|---|---:|---:|
+| First `/pos` mount | 3 requests | 3 requests |
+| Client-side remount | **3 more** | **0** |
+| Total for the round trip | **6** | **3** |
+
+Three requests saved every time a cashier checks history or inventory and comes
+back, which is many times a day. A FULL page load still revalidates, by design:
+`fetchedAt` is in-memory and per-tab, so the stale window can never make a cold
+launch show yesterday's menu. That distinction cost a measurement — the first
+attempt navigated with `page.goto`, saw 6 requests, and looked like the feature
+had not worked at all.
+
+#### Audit P1-12 — closed, and it had a second half nobody had seen
+
+The till now HOLDS a scanned product for at most `MENU_HOLD_MS` (1.2s) when
+this device does not yet know what is on the menu, then decides against what
+arrived. Not a refusal (tried, reverted — it refused every scan), not a guess,
+and never unbounded: invariant #10 applies to a hanging request as much as to a
+missing register. On a warm till `whenResourceSettles` returns immediately, so
+the common path costs nothing.
+
+**Writing the E2E test for it found a second defect of exactly the same shape,
+one layer up.** The first version of the fix did not work, and the reason was
+not the recipes:
+
+> `useFeatureFlags` reports `isLoading: false` while serving
+> `optimisticDefaults()`. On a first-ever launch — no `store_features_` cache —
+> `menu_items` therefore reads **false** for a few hundred ms. A sandwich
+> scanned in that window is sold as a plain line, for the same reason and with
+> the same consequences as P1-12, and the recipe-level hold never even engages
+> because the feature looks switched off.
+
+So `flagsResolved` was added to `useFeatureFlags` — purely additive, nothing
+existing changed. `isLoading` deliberately still means "is there something
+usable to render", which is what a route guard needs so it cannot spin forever
+on an offline device; `flagsResolved` means "has anything told us", which is
+what anything deciding **what a customer is sold** needs. Same rule as
+`evaluateReconcile()` and `hydrated`: an absent answer is not a negative
+answer.
+
+The hold therefore has two stages — flags, then the menu. The flags are React
+state with no promise to await, so stage 1 is a bounded 25 ms poll; stage 2 is
+`whenResourceSettles`. Stage 1 runs only on a device that has never loaded this
+store's flags.
+
+#### Two things that were subtly wrong first, and are worth not repeating
+
+1. **`decide` closed over `enabled`.** The held path resumes on a LATER render
+   — that is what holding means — so calling the captured callback used
+   `menu_items: false`, the very value the wait existed to replace, and sold
+   the sandwich plain anyway. It goes through a `decideRef` now. Anything that
+   resumes after an await must re-read, not remember.
+2. **Both ref writes had to move into effects.** Writing a ref during render is
+   an ESLint error in this repo, and the held path always resumes after a
+   commit, so an effect is early enough by construction.
+
+#### A flaky test the change EXPOSED rather than caused
+
+`menu.spec.ts` "sold as a plain line when recipes cannot load" blocks
+`/api/recipes` with `page.route`. **`page.route` does not intercept a request
+the SERVICE WORKER makes on the page's behalf**, and whether the worker claims
+the page before or after the recipe fetch varies run to run on a fresh context.
+The block leaked about one run in five.
+
+It was invisible before 3.2 because the till decided immediately, so a
+late-arriving recipe changed nothing. Now that it waits, the leak decides the
+outcome. `test.use({ serviceWorkers: "block" })` on that describe makes
+`page.route` authoritative — 4/4 stable since. The offline suite, which IS
+about the service worker, is a different file and keeps it.
+
+**Verified:** 21/21 E2E desktop (one new flow), 11 passed / 30 skipped on
+android+ios with the same pre-existing iOS failure recorded above and no other,
+157/157 harness unit, typecheck clean, lint unchanged at main's 207/77/130,
+build green with `verify:sw` and `verify:budgets`.
 
 ### Harness finding — the iOS offline cold-launch flow cannot be verified here (2026-08-31)
 

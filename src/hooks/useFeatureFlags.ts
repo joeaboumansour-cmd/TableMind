@@ -10,6 +10,7 @@ interface FeatureFlagsState {
   flags: Record<string, boolean>;
   storeType: string;
   isLoading: boolean;
+  flagsResolved: boolean;
 }
 
 interface FeatureFlagsData {
@@ -65,6 +66,28 @@ export function useFeatureFlags(): {
   flags: Record<string, boolean>;
   storeType: string;
   isLoading: boolean;
+  /**
+   * Are these flags an ANSWER, or a guess?
+   *
+   * False means they are `optimisticDefaults()` — nothing has yet told this
+   * device what this store has switched on. `isLoading` deliberately does NOT
+   * say this: it goes false the moment there is something usable to render,
+   * which is the right behaviour for a guard that must not spin forever on an
+   * offline device, and the wrong signal for anything that must not act on a
+   * guess.
+   *
+   * The distinction matters wherever a `false` flag CHANGES WHAT A CUSTOMER IS
+   * SOLD rather than merely hiding a screen. `menu_items` is the case that
+   * found this: on a first-ever launch it reads false for a few hundred ms, and
+   * a sandwich scanned in that window is rung up as a plain line — no modifier
+   * sheet, no kitchen ticket, and the menu item's own meaningless stock
+   * decremented instead of its ingredients. That is audit P1-12's failure
+   * arriving one layer above the recipes.
+   *
+   * Same rule as `evaluateReconcile()` and `hydrated` in the data layer: an
+   * absent answer is not a negative answer.
+   */
+  flagsResolved: boolean;
   refresh: () => Promise<void>;
 } {
   const { user } = useAuth();
@@ -72,6 +95,7 @@ export function useFeatureFlags(): {
     flags: {},
     storeType: "general",
     isLoading: true,
+    flagsResolved: false,
   });
 
   const storeId = user?.storeId;
@@ -157,7 +181,7 @@ export function useFeatureFlags(): {
       setState((prev) =>
         prev.isLoading && Object.keys(prev.flags).length === 0
           ? prev
-          : { flags: {}, storeType: "general", isLoading: true }
+          : { flags: {}, storeType: "general", isLoading: true, flagsResolved: false }
       );
       return;
     }
@@ -170,7 +194,9 @@ export function useFeatureFlags(): {
     const initial: FeatureFlagsData = cached
       ? { flags: mergeFeaturesWithDefaults(cached.flags), storeType: cached.storeType }
       : { flags: optimisticDefaults(), storeType: "general" };
-    setState({ ...initial, isLoading: false });
+    // A cache is an ANSWER; the optimistic defaults are a guess. See
+    // `flagsResolved` on the return type for why the difference is load-bearing.
+    setState({ ...initial, isLoading: false, flagsResolved: cached !== null });
 
     // 2. Sync from database in background.
     loadFromDb().then((dbData) => {
@@ -179,10 +205,17 @@ export function useFeatureFlags(): {
         // Confirming what we already show costs a full re-render of everything
         // downstream — including the tab bar, whose height feeds the inventory
         // list's virtualiser. Only update when something actually differs.
-        if (prev.storeType === dbData.storeType && sameFlags(prev.flags, dbData.flags)) {
+        if (
+          prev.flagsResolved &&
+          prev.storeType === dbData.storeType &&
+          sameFlags(prev.flags, dbData.flags)
+        ) {
           return prev;
         }
-        return { ...prev, flags: dbData.flags, storeType: dbData.storeType };
+        // Even when the values match, `flagsResolved` may not have been true
+        // yet — the guess happened to be right, which is not the same as
+        // having been told.
+        return { ...prev, flags: dbData.flags, storeType: dbData.storeType, flagsResolved: true };
       });
     });
 
@@ -206,7 +239,12 @@ export function useFeatureFlags(): {
   const refresh = useCallback(async () => {
     const dbData = await loadFromDb();
     if (dbData) {
-      setState({ flags: dbData.flags, storeType: dbData.storeType, isLoading: false });
+      setState({
+        flags: dbData.flags,
+        storeType: dbData.storeType,
+        isLoading: false,
+        flagsResolved: true,
+      });
     }
   }, [loadFromDb]);
 
@@ -217,8 +255,17 @@ export function useFeatureFlags(): {
       flags: state.flags,
       storeType: state.storeType,
       isLoading: state.isLoading,
+      flagsResolved: state.flagsResolved,
       refresh,
     }),
-    [isEnabled, isDisabled, state.flags, state.storeType, state.isLoading, refresh]
+    [
+      isEnabled,
+      isDisabled,
+      state.flags,
+      state.storeType,
+      state.isLoading,
+      state.flagsResolved,
+      refresh,
+    ]
   );
 }

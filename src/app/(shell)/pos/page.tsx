@@ -48,12 +48,11 @@ import {
 } from "@/lib/pwa/persistentStorage";
 import { mapToCachedProduct, cachedToProduct } from "@/lib/products/refresh";
 import { isSellable, isIngredient } from "@/lib/products/kind";
-import { getCategories, refreshCategories } from "@/lib/categories/load";
-import type { Category } from "@/lib/categories/types";
-import { getCachedRecipes, refreshRecipes } from "@/lib/recipes/load";
-import { getCachedCombos, refreshCombos } from "@/lib/combos/load";
-import type { ComboMap } from "@/lib/combos/types";
-import type { RecipeMap } from "@/lib/recipes/types";
+import { categoriesResource } from "@/lib/categories/load";
+import { recipesResource } from "@/lib/recipes/load";
+import { combosResource } from "@/lib/combos/load";
+import { useResource } from "@/lib/data/useResource";
+import { awaitMenuData, FLAG_POLL_MS, MENU_HOLD_MS, type MenuData } from "@/lib/pos/menuData";
 import ProPOSLayout from "@/components/pos/pro/ProPOSLayout";
 import MenuBrowser from "@/components/pos/pro/MenuBrowser";
 import ModifierSheet from "@/components/pos/pro/ModifierSheet";
@@ -79,7 +78,7 @@ const FOCUS_SYNC_MIN_INTERVAL_MS = 60_000;
 export default function POSPage() {
   const router = useRouter();
   const { user, logout: authLogout, isLoading: authLoading } = useAuth();
-  const { isEnabled } = useFeatureFlags();
+  const { isEnabled, flagsResolved } = useFeatureFlags();
   const [isDesktopMode, setIsDesktopMode] = useState(false);
   const [isScannerActive, setIsScannerActive] = useState(() => {
     if (typeof window !== "undefined" && "localStorage" in window) {
@@ -89,10 +88,106 @@ export default function POSPage() {
     return true;
   });
   const [products, setProducts] = useState<Product[]>([]);
-  const [categories, setCategories] = useState<Category[]>([]);
-  const [recipes, setRecipes] = useState<RecipeMap>({});
-  const [combos, setCombos] = useState<ComboMap>({});
   const [isLoading, setIsLoading] = useState(true);
+
+  // ---- Menu data: the rail, the recipes, the combos ----
+  //
+  // Three `useResource` subscriptions replacing three `useState`s, two effects
+  // and six lines of cache-then-revalidate (Phase 3.2). Each one paints from
+  // localStorage on the FIRST render and revalidates behind, which is what the
+  // hand-rolled version was reaching for.
+  //
+  // `enabled` gates the NETWORK only; the cached value is always returned.
+  // That preserves the split the old code had for a good reason: the local
+  // reads are synchronous and free, but `product_categories` and `menu_items`
+  // both default to FALSE, so a plain retail store — most of them — was
+  // spending three round trips of its cold start on data it has no screen for.
+  //
+  // Gating on `isEnabled` inside the hook also keeps the old effect's other
+  // property: `useFeatureFlags` answers from localStorage instantly on a device
+  // that has been here before and from the optimistic defaults on one that has
+  // not, so a store whose flags resolve from the database a moment after mount
+  // still fetches — the hook re-runs when `enabled` flips.
+  const menuEnabled = isEnabled("menu_items");
+  const { data: categories } = useResource(categoriesResource, user?.storeId, {
+    enabled: isEnabled("product_categories"),
+  });
+  const { data: recipes, hydrated: recipesKnown } = useResource(
+    recipesResource,
+    user?.storeId,
+    { enabled: menuEnabled },
+  );
+  const { data: combos, hydrated: combosKnown } = useResource(
+    combosResource,
+    user?.storeId,
+    { enabled: menuEnabled },
+  );
+
+  /**
+   * Audit **P1-12**. Does this device actually KNOW what is on the menu?
+   *
+   * THREE things have to be known, and the first one is easy to miss:
+   *
+   * 1. **The flags.** `menu_items` reads false before anything has told this
+   *    device otherwise, and on a first-ever launch that guess stands for a few
+   *    hundred ms. Acting on it sells a sandwich as a bottle of water — the
+   *    P1-12 failure arriving one layer above the recipes. `flagsResolved`, not
+   *    `isLoading`, is the signal; see the note on it in useFeatureFlags.
+   * 2. **The recipes**, and 3. **the combos.** Not "are there any" — a shop can
+   *    genuinely have none, and that is an answer. This is "has this device
+   *    ever been told", which is false on a new, cleared or evicted device and
+   *    on one that launched with no internet.
+   *
+   * A store that is genuinely without `menu_items` has nothing to wait for, so
+   * once the flags are known it is never held again.
+   */
+  const menuDataReady =
+    flagsResolved && (!menuEnabled || (recipesKnown && combosKnown));
+
+  /**
+   * The latest of everything the hold below reads.
+   *
+   * A ref because the hold is asynchronous and must see values that arrive
+   * AFTER it started — which is the entire point of holding — while staying a
+   * stable callback, because `useMenuSheet` puts it in a dependency array that
+   * feeds the memoized scanner subtree.
+   */
+  const menuStateRef = useRef({
+    flagsResolved,
+    menuEnabled,
+    recipes,
+    combos,
+    storeId: user?.storeId,
+  });
+  // Written in an effect rather than during render — the React lint rule
+  // forbids the latter, and the hold always resumes after a commit.
+  useEffect(() => {
+    menuStateRef.current = {
+      flagsResolved,
+      menuEnabled,
+      recipes,
+      combos,
+      storeId: user?.storeId,
+    };
+  }, [flagsResolved, menuEnabled, recipes, combos, user?.storeId]);
+
+  const holdForMenuData = useCallback(async (): Promise<MenuData> => {
+    const deadline = Date.now() + MENU_HOLD_MS;
+
+    // Stage 1 — the flags. They live in React state, which has no promise to
+    // await, so this is a short bounded poll. It runs only on a device that has
+    // never loaded this store's flags, and never again afterwards.
+    while (!menuStateRef.current.flagsResolved && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, FLAG_POLL_MS));
+    }
+
+    // Stage 2 — the menu itself, which IS a resource and does have a promise.
+    const { menuEnabled: enabled, recipes: r, combos: c, storeId } = menuStateRef.current;
+    const remaining = deadline - Date.now();
+    if (!enabled || remaining <= 0) return { recipes: r, combos: c };
+
+    return awaitMenuData(storeId, remaining);
+  }, []);
   // Throttles the focus-triggered refresh (see the load effect below)
   const lastFocusSyncRef = useRef(0);
   const [highlightedItemId, setHighlightedItemId] = useState<string | null>(
@@ -226,13 +321,11 @@ export default function POSPage() {
           setStoreId(store_id);
           syncEngine.setStoreId(store_id);
 
-          // Local caches only. The three NETWORK refreshes that used to sit
-          // here moved into their own effect below, because they must be gated
-          // on the feature flags and re-run when those resolve — which this
-          // effect cannot do without re-running the whole catalogue load.
-          setCategories(getCategories(store_id));
-          setRecipes(getCachedRecipes(store_id));
-          setCombos(getCachedCombos(store_id));
+          // Categories, recipes and combos are NOT read here any more. They
+          // are `useResource` subscriptions (see below), which seed themselves
+          // from the same caches on the FIRST RENDER rather than after this
+          // effect's license check and localStorage parse — so the rail and
+          // the modifier sheet are right one paint sooner, not later.
 
           // ALWAYS load from local cache first for instant display
           const cached = await getCachedProducts(store_id);
@@ -523,8 +616,10 @@ export default function POSPage() {
     products: sellableProducts,
     productNames: ingredientNames,
     ingredientPrices,
-    enabled: isEnabled("menu_items"),
+    enabled: menuEnabled,
     onPlainAdd: handleProductAdd,
+    menuDataReady,
+    awaitMenuData: holdForMenuData,
   });
 
   // Resolve a scanned code to a product: the O(1) local index first, then a
@@ -706,50 +801,6 @@ export default function POSPage() {
       }
     };
   }, []);
-
-  // Menu data — fetched ONLY by stores that have the menu features on.
-  //
-  // These three requests fired unconditionally at every POS launch: categories,
-  // recipes and combos, each a full round trip with its own server-side caller
-  // resolution in front of it. `product_categories` and `menu_items` both
-  // default to FALSE, so a plain retail store — most of them — spent three
-  // requests of its cold start fetching data it has no screen for. The rail is
-  // already gated on `product_categories` (see `menuMode`) and the modifier
-  // sheet on the recipes being non-empty, so nothing rendered from them either.
-  //
-  // Its own effect, keyed on the flags, so that a store where the flags resolve
-  // from the database a moment after mount still fetches: useFeatureFlags
-  // answers from localStorage instantly on a device that has been here before,
-  // and from the optimistic defaults (both false) on one that has not.
-  //
-  // The local-cache reads stay in the load effect above and remain
-  // unconditional — they are synchronous, free, and keep the first frame right
-  // for a store that DOES have the features.
-  useEffect(() => {
-    const storeId = user?.storeId;
-    if (!storeId) return;
-
-    let cancelled = false;
-
-    if (isEnabled("product_categories")) {
-      void refreshCategories(storeId).then((c) => {
-        if (!cancelled) setCategories(c);
-      });
-    }
-
-    if (isEnabled("menu_items")) {
-      void refreshRecipes(storeId).then((r) => {
-        if (!cancelled) setRecipes(r);
-      });
-      void refreshCombos(storeId).then((c) => {
-        if (!cancelled) setCombos(c);
-      });
-    }
-
-    return () => {
-      cancelled = true;
-    };
-  }, [user?.storeId, isEnabled]);
 
   // Prefetch critical routes while online so they are available offline.
   //
@@ -1193,6 +1244,8 @@ export default function POSPage() {
         categories={categories}
         recipes={recipes}
         combos={combos}
+        menuDataReady={menuDataReady}
+        awaitMenuData={holdForMenuData}
         ingredientNames={ingredientNames}
         ingredients={ingredientProducts}
         ingredientPrices={ingredientPrices}

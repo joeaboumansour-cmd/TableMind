@@ -70,6 +70,17 @@ interface ProPOSLayoutProps {
   recipes: RecipeMap;
   /** Every combo in the store. Empty for a store that has none. */
   combos: ComboMap;
+  /**
+   * Does this device KNOW what is on the menu — audit P1-12.
+   *
+   * `recipes` and `combos` being empty is ambiguous on their own: it is either
+   * a retail store, or a device that has never been told. Only the second
+   * warrants holding a scan, so the page resolves the ambiguity and passes the
+   * answer down.
+   */
+  menuDataReady: boolean;
+  /** Wait — briefly, and capped — for the menu data. See `lib/pos/menuData`. */
+  awaitMenuData: () => Promise<{ recipes: RecipeMap; combos: ComboMap }>;
   /** Ingredient names for the modifier sheet, by product id. */
   ingredientNames: Map<string, string>;
   /** Every ingredient in inventory — anything can be added to anything. */
@@ -93,6 +104,8 @@ export default function ProPOSLayout({
   categories,
   recipes,
   combos,
+  menuDataReady,
+  awaitMenuData,
   ingredientNames,
   ingredients,
   ingredientPrices,
@@ -175,6 +188,8 @@ export default function ProPOSLayout({
     ingredientPrices,
     enabled: isEnabled("menu_items"),
     onPlainAdd: onProductAdd,
+    menuDataReady,
+    awaitMenuData,
   });
 
   const canEditInventory = isEnabled("inventory") && canAccess("inventory");
@@ -301,7 +316,12 @@ export default function ProPOSLayout({
           // leave the sale with modifiers=NULL so it is not a kitchen ticket.
           // Falls straight through to a plain add when there is no recipe, so
           // a retail wedge scanner is unaffected.
-          handleTileAdd(product);
+          //
+          // AWAITED, so the "resolving" state stays up for the P1-12 hold on a
+          // device that does not know the menu yet — otherwise the spinner
+          // would clear while the scan was still, correctly, waiting. It is
+          // already settled on every warm till, so this costs a microtask.
+          await handleTileAdd(product);
           // `hit` distinguishes this from the miss path below, which ends at a
           // prompt rather than a cart line and is a different measurement.
           logPerfScan(scanStartedAt, { outcome: "hit" });

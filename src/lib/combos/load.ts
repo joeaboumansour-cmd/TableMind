@@ -10,14 +10,13 @@
 // =============================================
 
 import { buildAuthHeaders } from "@/lib/auth/apiHeaders";
+import { connectivity } from "@/lib/connectivity";
+import { refreshResource, writeResource, type ResourceDefinition } from "@/lib/data/resource";
 import { compareComboComponents, type ComboComponent, type ComboMap } from "./types";
 
 function key(storeId: string): string {
   return `store_combos_${storeId}`;
 }
-
-/** One in-flight refresh per store, mirroring the other loaders. */
-const inFlight = new Map<string, Promise<ComboMap>>();
 
 /** The cached combos, synchronously. {} for anything unreadable. */
 export function getCachedCombos(storeId: string): ComboMap {
@@ -60,45 +59,77 @@ export function writeCachedCombos(storeId: string, combos: ComboMap): void {
 }
 
 /**
+ * Has this store's combos EVER been written to this device?
+ *
+ * The cache KEY's existence, not the map's size — a shop can genuinely sell no
+ * meals. See `hasCachedRecipes` for the full reasoning; this is audit P1-12's
+ * distinction applied to the other half of the menu.
+ */
+export function hasCachedCombos(storeId: string): boolean {
+  if (typeof window === "undefined" || !storeId) return false;
+  try {
+    return window.localStorage.getItem(key(storeId)) !== null;
+  } catch {
+    return false;
+  }
+}
+
+/** Combos change when the owner edits the menu. Rare. */
+const COMBOS_STALE_MS = 60_000;
+
+/** Stable empty reference — see ResourceDefinition.empty. */
+const NO_COMBOS: ComboMap = {};
+
+/**
+ * The combos resource.
+ *
+ * A combo that is not yet known is rung up as a plain product — one line at the
+ * meal's own price with none of its children, so nothing reaches the kitchen
+ * and no ingredient is deducted. Exactly the P1-12 failure, which is why this
+ * gets the same treatment as recipes rather than being left behind.
+ */
+export const combosResource: ResourceDefinition<ComboMap> = {
+  name: "combos",
+  empty: NO_COMBOS,
+  read: getCachedCombos,
+  has: hasCachedCombos,
+  write: writeCachedCombos,
+  staleTime: COMBOS_STALE_MS,
+  isOnline: () => connectivity.isOnline,
+
+  // No `storeId` parameter: /api/combos reads the tenant from the auth header
+  // via resolveCaller(), not from the URL, so taking one here would imply a
+  // scoping choice this call does not actually make.
+  async fetch(): Promise<ComboMap> {
+    const response = await fetch("/api/combos", { headers: buildAuthHeaders() });
+    if (!response.ok) throw new Error(`API error ${response.status}`);
+
+    const body = (await response.json()) as { combos?: ComboMap; truncated?: boolean };
+    if (!body.combos || typeof body.combos !== "object") throw new Error("Malformed response");
+
+    // A truncated set would sell a meal missing half its contents and
+    // under-deplete stock. REJECT rather than adopt it; the store keeps the
+    // previous copy, on the same rule as the product reconcile.
+    if (body.truncated) {
+      console.error("[Combos] Server reported a truncated set; keeping the cached copy");
+      throw new Error("Truncated combo set");
+    }
+
+    return body.combos;
+  },
+};
+
+/**
  * Fetch combos and update the cache.
  *
- * Never clears the cache on failure: an offline till keeps the combos it had.
- * Removing things requires positive evidence — the same rule as the product
- * reconcile and the recipe loader.
+ * Kept at its old signature for /pos/products (Phase 3.3). Delegates rather
+ * than duplicating, so there is one in-flight map; `force` keeps this path
+ * behaving exactly as it did before.
  */
 export async function refreshCombos(storeId: string): Promise<ComboMap> {
-  if (!storeId) return {};
-
-  const existing = inFlight.get(storeId);
-  if (existing) return existing;
-
-  const run = (async (): Promise<ComboMap> => {
-    try {
-      const response = await fetch("/api/combos", { headers: buildAuthHeaders() });
-      if (!response.ok) throw new Error(`API error ${response.status}`);
-
-      const body = (await response.json()) as { combos?: ComboMap; truncated?: boolean };
-      if (!body.combos || typeof body.combos !== "object") throw new Error("Malformed response");
-
-      // A truncated set would sell a meal missing half its contents and
-      // under-deplete stock. Keep the previous copy rather than adopt it.
-      if (body.truncated) {
-        console.error("[Combos] Server reported a truncated set; keeping the cached copy");
-        return getCachedCombos(storeId);
-      }
-
-      writeCachedCombos(storeId, body.combos);
-      return body.combos;
-    } catch (error) {
-      console.warn("[Combos] Refresh failed; keeping the cached copy:", error);
-      return getCachedCombos(storeId);
-    } finally {
-      inFlight.delete(storeId);
-    }
-  })();
-
-  inFlight.set(storeId, run);
-  return run;
+  if (!storeId) return NO_COMBOS;
+  const state = await refreshResource(combosResource, storeId, { force: true });
+  return state.data;
 }
 
 /** Replace one combo on the server, then update the cache. */
@@ -121,10 +152,12 @@ export async function saveCombo(
   const body = (await response.json()) as { components: ComboComponent[] };
   const saved = body.components || [];
 
-  const cache = getCachedCombos(storeId);
+  // Through the resource, so a till subscribed via useResource sees an edited
+  // meal without a reload.
+  const cache = { ...getCachedCombos(storeId) };
   if (saved.length > 0) cache[comboProductId] = saved;
   else delete cache[comboProductId];
-  writeCachedCombos(storeId, cache);
+  writeResource(combosResource, storeId, cache);
 
   return saved;
 }

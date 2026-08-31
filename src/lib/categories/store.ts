@@ -24,6 +24,22 @@ function key(storeId: string): string {
 }
 
 /**
+ * Has this store's rail EVER been written to this device?
+ *
+ * The cache KEY's existence, deliberately NOT "the list is non-empty": a shop
+ * can genuinely have no categories, which is an answer, while a device that has
+ * never loaded them has none. Conflating the two is the shape of audit P1-12.
+ */
+export function hasCachedCategories(storeId: string): boolean {
+  if (typeof window === "undefined" || !storeId) return false;
+  try {
+    return window.localStorage.getItem(key(storeId)) !== null;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * The cached categories for a store, in display order.
  *
  * Returns [] for anything unreadable or malformed rather than throwing: a
