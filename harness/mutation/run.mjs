@@ -63,11 +63,16 @@ const MUTATIONS = [
     why: "A device whose IndexedDB predates migration 030 would show an EMPTY catalogue on the busiest screen in the app.",
   },
   {
-    id: "modifiers-or-null",
-    invariant: "#17 — `?? null`, never `|| null`; [] and null differ",
+    id: "modifiers-empty-collapsed-to-null",
+    invariant: "#17 — [] and null mean different things to the kitchen board",
     file: "src/lib/pos/lineItems.ts",
     find: "modifiers: item.modifiers ?? null,",
-    replace: "modifiers: item.modifiers || null,",
+    // NOT `|| null`. An empty array is TRUTHY in JavaScript, so `[] || null`
+    // is `[]` and `??` and `||` behave identically for this field — that
+    // mutation changed nothing and "survived" for a reason that said nothing
+    // about the net. This is the real shape of the bug the invariant guards
+    // against: emptiness treated as absence.
+    replace: "modifiers: item.modifiers?.length ? item.modifiers : null,",
     suite: "unit",
     why: "Collapsing [] to null makes the kitchen board treat a menu line as an ordinary retail sale, so the ticket never appears.",
   },
@@ -110,6 +115,41 @@ function treeIsClean() {
   return out.trim() === "";
 }
 
+/**
+ * Put a file back, and do not give up quietly.
+ *
+ * A plain writeFileSync in a `finally` is not enough on Windows: the first run
+ * of this script hit `UNKNOWN: unknown error` (a transient lock — an editor,
+ * a watcher, or a virus scanner holding the handle) while restoring
+ * lineItems.ts, and LEFT THE MUTATION IN THE WORKING TREE. A tool that breaks
+ * code on purpose must be far more careful than that about putting it back.
+ *
+ * Retries, then falls back to `git checkout` of that ONE path, then shouts.
+ */
+function restore(path, original, id) {
+  for (let attempt = 1; attempt <= 5; attempt++) {
+    try {
+      writeFileSync(path, original);
+      return true;
+    } catch {
+      // Busy-wait briefly; this is a lock, not a logic error.
+      const until = Date.now() + 200 * attempt;
+      while (Date.now() < until) { /* spin */ }
+    }
+  }
+  try {
+    execSync(`git checkout -- "${path}"`, { cwd: ROOT, stdio: "ignore" });
+    console.error(`
+[mutation] ${id}: write failed; restored via git checkout.`);
+    return true;
+  } catch {
+    console.error(`
+[mutation] !!! COULD NOT RESTORE ${path} after mutation "${id}".`);
+    console.error(`[mutation] !!! RUN: git checkout -- ${path}`);
+    return false;
+  }
+}
+
 function runSuite(name) {
   const [cmd, args] = SUITES[name];
   const r = spawnSync(cmd, args, { cwd: ROOT, encoding: "utf8", shell: true });
@@ -150,8 +190,9 @@ for (const m of MUTATIONS) {
     results.push({ ...m, outcome: caught ? "CAUGHT" : "SURVIVED" });
     process.stdout.write(`\r  ${caught ? "CAUGHT  " : "SURVIVED"} ${m.id}${" ".repeat(30)}\n`);
   } finally {
-    // Always, from the text held in memory — never `git checkout`.
-    writeFileSync(path, original);
+    // Always, from the text held in memory. Falls back to git for this one
+    // path only if the write cannot be made to stick.
+    if (!restore(path, original, m.id)) process.exit(2);
   }
 }
 
