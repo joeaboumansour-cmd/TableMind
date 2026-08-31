@@ -840,7 +840,7 @@ these three it is achievable only in a real shop, on one store, watched.
 | 3.1 data primitive | DONE | a36e978 | | | `src/lib/data/`. 27 harness tests. No screen migrated yet — that is 3.2 |
 | 3.0 parallelise the boot delta+count | DONE | | ~600ms serial | **~300ms parallel** | Brought forward from 0.3's finding |
 | 3.2 migrate /pos | DONE | 17edb7b | 6 menu requests per remount | **3** | Closes audit **P1-12** + a second gap it uncovered in the feature flags |
-| 3.3 migrate /pos/products | DONE | | 9 menu requests per walk | **3** | Legacy loaders deleted. Also fixed a pre-existing race in the queued-sale test |
+| 3.3 migrate /pos/products | DONE | fb28138 | 9 menu requests per walk | **3** | Legacy loaders deleted. Also fixed a pre-existing race in the queued-sale test |
 | 3.4 migrate /transactions | NOT STARTED | | | | |
 | 3.5 migrate /pos/cash + /kitchen | NOT STARTED | | | | |
 | 4.1 memo boundaries | NOT STARTED | | | | |
