@@ -832,12 +832,13 @@ these three it is achievable only in a real shop, on one store, watched.
 | 1.5 visual snapshots | DONE | | | | 24 baselines, 3 viewports. Opt-in `harness:visual`, stable on re-run |
 | 1.6 offline/sync scenarios | DONE | | | | 6 scenarios incl. the wifi-with-no-upstream hang case |
 | 1.7 mutation check of the net | DONE | | | | **7/7 caught.** `npm run harness:mutation` |
-| 2.1 atomic sale RPC | NOT STARTED | | | | |
+| 2.1 atomic sale RPC | CODE DONE | e8bd0e7 | 1226ms median | pending | **Migration 038 not yet applied.** Fallback verified 13/13 |
 | 2.2 route kernel | NOT STARTED | | | | |
 | 2.3 generated DB types | NOT STARTED | | | | |
 | 2.4 index & query audit | NOT STARTED | | | | |
 | 2.5 edge runtime pass | NOT STARTED | | | | |
 | 3.1 data primitive | NOT STARTED | | | | |
+| 3.0 parallelise the boot delta+count | DONE | | ~600ms serial | **~300ms parallel** | Brought forward from 0.3's finding |
 | 3.2 migrate /pos | NOT STARTED | | | | |
 | 3.3 migrate /pos/products | NOT STARTED | | | | |
 | 3.4 migrate /transactions | NOT STARTED | | | | |
@@ -1042,6 +1043,56 @@ be tracked down.
 **iOS is unblocked** (WebKit installed 2026-08-31), so invariant #24 is
 satisfied for the flows written so far. The row stays PARTIAL because flows
 5-8 — cash shift, inventory, CSV import, kitchen — are still to write.
+
+### FIRST MEASURED SPEED WIN — the boot chain's serial pair (2026-08-31)
+
+Brought forward from Phase 3 because 0.3 had already measured it and the fix
+was three lines.
+
+`runRefresh()` in `src/lib/products/refresh.ts` awaited the product **delta**
+(`updated_at > since`) and the **live count** (`count(*)`) one after the other.
+Neither reads what the other writes — they were serialised purely by the order
+of two `await`s. The 0.3 trace caught it exactly: the count started at 468ms,
+one millisecond after the delta finished at 467ms.
+
+Now one `Promise.all`.
+
+| | Before | After |
+|---|---|---|
+| Second call starts at | **t+468ms** (after the first ends) | **t+~90ms** (with the first) |
+| Span of the pair | ~612ms (313 + 299, serial) | **~300ms** (median of 3: 373 / 298 / 302) |
+
+**~300ms saved on every till launch, and again every 30 seconds** while the
+shop is open, on every device. It is pure latency: no query changed, no less
+data is fetched, nothing about correctness moved.
+
+The local IndexedDB count is deliberately left out of the pair — it costs no
+network, and starting it early would only add main-thread work while the two
+network calls are in flight.
+
+> Worth noting how this was found. It is invisible to query tuning: both
+> queries were already fast. It is only visible in a **request-depth** trace,
+> which is why 0.3 recorded request depth as well as request count.
+
+### 2.1 atomic sale RPC — CODE READY, MIGRATION PENDING (2026-08-31)
+
+Migration **038** creates `create_sale(store_id, sale jsonb)`: resolve the
+shift, insert the transaction, insert the line items, apply the stock — one
+call, one database transaction, replacing THREE serial waves.
+
+It also closes **audit P1-4** (a sale can currently be half-written: the
+transaction commits, the items insert fails, and that failure is deliberately
+swallowed, leaving an empty receipt and no kitchen ticket) and **audit P1-11**
+(a `user_id` naming a deleted employee raises 23503 → 500 → the client reads
+it as offline → retries → dead-letters a sale whose money was taken).
+
+**Baseline to beat, measured on the fallback path** (`npm run harness:bench`,
+3-line sale): **median 1226ms, p90 1243ms**.
+
+The route falls back to the existing multi-step path when the function is
+absent, verified 13/13 on the sale contract suite with 038 unapplied — so the
+deploy is safe in either order, which is the only way to ship a money-path
+change without a coordinated migration window.
 
 ### 1.7 mutation check — PHASE 1 EXIT CRITERION MET (2026-08-31)
 

@@ -549,12 +549,30 @@ async function runRefresh(
   }
 
   const sinceIso = new Date(Math.max(0, lastSync - WATERMARK_SAFETY_MS)).toISOString();
-  const changedRows = await fetchProductsUpdatedSince(supabase, storeId, sinceIso);
+
+  // ── Two independent reads, ONE wave ──────────────────────────────────────
+  //
+  // The delta (`updated_at > since`) and the live count (`count(*)`) do not
+  // read anything the other writes, so nothing about them needed to be
+  // sequential — they were serialised purely by the order of two `await`s.
+  //
+  // Measured on the Phase 0.3 baseline, that cost a full extra round trip on
+  // the /pos boot chain: the count started at 468ms, one millisecond after the
+  // delta finished at 467ms. Against a remote Supabase that is ~300ms of pure
+  // waiting, on every till launch and again every 30 seconds while the shop is
+  // open.
+  //
+  // The local cache count stays out of this pair on purpose: it is an
+  // IndexedDB read, so it costs no network, and starting it early would only
+  // add main-thread work while the two network calls are in flight.
+  const [changedRows, liveCount] = await Promise.all([
+    fetchProductsUpdatedSince(supabase, storeId, sinceIso),
+    fetchLiveProductCount(supabase, storeId),
+  ]);
 
   // The delta only carries rows that changed. If the cache is missing products
   // for any other reason — a partial first fetch, seed data, a cleared DB — no
   // number of deltas will ever fill the gap, so compare against the real count.
-  const liveCount = await fetchLiveProductCount(supabase, storeId);
   if (liveCount !== null) {
     const cachedCount = await getCachedProductsCount(storeId);
     if (cachedCount < liveCount) {
