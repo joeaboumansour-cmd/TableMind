@@ -45,3 +45,7 @@ public/workbox-*.js
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Playwright run artifacts (traces, failure screenshots)
+/.playwright-artifacts/
+/playwright-report/

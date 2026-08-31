@@ -183,7 +183,15 @@ function buildProducts(count) {
     rows.push({
       id: productId(i), store_id: STORE,
       name: `Fixture Product ${String(i).padStart(4, "0")}`,
-      barcode: `FIX${String(i).padStart(9, "0")}`,
+      // DIGITS ONLY, and 13 of them.
+      //
+      // `looksLikeBarcode()` in SmartScanInput is /^[0-9]+$/ -- "anything with
+      // a letter in it is somebody typing a product name". A `FIX000000001`
+      // fixture barcode therefore routed to SEARCH rather than SCAN, so the
+      // whole wedge path went untested while the tests looked like they
+      // covered it. The 2-prefix is the in-store range a shop's own labels
+      // legitimately use.
+      barcode: `2${String(1000000000000 + i).slice(1)}`,
       cost_price: cost,
       selling_price: Math.round((cost * (1.2 + rand() * 0.8)) / 1000) * 1000,
       stock_quantity: Math.floor(rand() * 200),
@@ -204,23 +212,23 @@ function buildProducts(count) {
   });
 
   // USD-priced.
-  add({ id: productId(++n), name: "Fixture USD Item", barcode: "FIXUSD001",
+  add({ id: productId(++n), name: "Fixture USD Item", barcode: "2900000000011",
         cost_price: 2, selling_price: 5, currency: "USD", stock_quantity: 50 });
   // Zero cost — profit_percentage trigger must yield 0, not divide by zero.
-  add({ id: productId(++n), name: "Fixture Zero Cost", barcode: "FIXZERO01",
+  add({ id: productId(++n), name: "Fixture Zero Cost", barcode: "2900000000028",
         cost_price: 0, selling_price: 25_000, stock_quantity: 10 });
   // Above the old DECIMAL(10,2) ceiling.
-  add({ id: productId(++n), name: "Fixture Expensive", barcode: "FIXBIG001",
+  add({ id: productId(++n), name: "Fixture Expensive", barcode: "2900000000035",
         cost_price: 90_000_000, selling_price: 150_000_000, stock_quantity: 2 });
   // Discounted.
-  add({ id: productId(++n), name: "Fixture Discounted", barcode: "FIXDISC01",
+  add({ id: productId(++n), name: "Fixture Discounted", barcode: "2900000000042",
         cost_price: 10_000, selling_price: 40_000, discount_percentage: 25, stock_quantity: 30 });
   // Variant pair.
   const parent = productId(++n);
-  add({ id: parent, name: "Fixture Variant Parent", barcode: "FIXVAR001",
+  add({ id: parent, name: "Fixture Variant Parent", barcode: "2900000000059",
         cost_price: 8_000, selling_price: 20_000, stock_quantity: 12 });
   add({ id: productId(++n), name: "Fixture Variant Parent", variant_name: "Large",
-        parent_id: parent, barcode: "FIXVAR002",
+        parent_id: parent, barcode: "2900000000066",
         cost_price: 10_000, selling_price: 30_000, stock_quantity: 8 });
 
   // Ingredients, in grams — the unit IS the recipe unit (see CLAUDE.md §13).
@@ -235,11 +243,11 @@ function buildProducts(count) {
 
   // A made-to-order menu item, and a combo bundling it.
   const menu = productId(++n);
-  add({ id: menu, name: "Fixture Fries Sandwich", barcode: "FIXMENU01",
+  add({ id: menu, name: "Fixture Fries Sandwich", barcode: "2900000000073",
         cost_price: 15_000, selling_price: 60_000, stock_quantity: 0,
         category_id: categoryId(5) });
   const combo = productId(++n);
-  add({ id: combo, name: "Fixture Combo Meal", barcode: "FIXCOMBO1",
+  add({ id: combo, name: "Fixture Combo Meal", barcode: "2900000000080",
         cost_price: 25_000, selling_price: 95_000, stock_quantity: 0,
         category_id: categoryId(5) });
 

@@ -828,7 +828,7 @@ these three it is achievable only in a real shop, on one store, watched.
 | 1.1 fixtures & seeding | DONE | | | | 2,492 products / 300 txns. Determinism + tenant isolation both proven |
 | 1.2 pure-logic characterization | DONE | | | | 130 tests, 8 files, <1s. Vitest 4.1.11 under `harness/` |
 | 1.3 API contract snapshots | DONE | | | | 89 tests, ~47s. **Found audit P1-11** |
-| 1.4 E2E golden flows | NOT STARTED | | | | |
+| 1.4 E2E golden flows | PARTIAL | | | | 3 of 8 flows (1, 3, 4). Desktop+Android green; **iOS blocked on a WebKit download** |
 | 1.5 visual snapshots | NOT STARTED | | | | |
 | 1.6 offline/sync scenarios | NOT STARTED | | | | |
 | 1.7 mutation check of the net | NOT STARTED | | | | Prove it catches |
@@ -963,6 +963,58 @@ main-thread long tasks. Every Tier 1 and Tier 2 screen is behind auth. The
 `perf.*` events from 0.2 will supply the field version of these from real
 devices, which is the better number anyway; local traces remain useful for
 attributing a regression to a specific change.
+
+### 1.4 E2E golden flows — PARTIAL (2026-08-31)
+
+`npm run harness:e2e`. **12 passed, 4 skipped, 0 failed in ~21s** across
+desktop and Android.
+
+Flows 1 (scan → cart, total rounding), 3 (park a lane, serve another) and 4
+(unknown barcode prompts) are covered, plus a session smoke file and a tenancy
+check. Flows 2, 5, 6, 7 and 8 are still to write.
+
+**Auth without a password.** `harness/e2e/fixtures.ts` constructs the session
+directly — `goldensquirrel_user` plus the legacy `goldensquirrel_auth`, which
+IS the `x-auth-data` tenancy header for every API call (omitting it reproduces
+audit P1-10 exactly). Driving the login form would put a plaintext credential
+(audit P0-4) into Playwright traces and CI logs, and would make forty tests
+depend on one screen.
+
+**No browser download was needed.** `channel: "chrome"` drives the Chrome
+already installed, which is also the browser the plan mandates for desktop and
+Android (§1) — so it is the more honest target, not just the cheaper one.
+
+> ### Two things the suite exposed immediately
+>
+> 1. **The fixture barcodes were not barcode-shaped.** `looksLikeBarcode()` is
+>    `/^[0-9]+$/` — "anything with a letter in it is somebody typing a product
+>    name". `FIX000000001` therefore routed to **search**, not **scan**, so the
+>    wedge path was never exercised. Fixture barcodes are now 13 digits in the
+>    `2…` in-store range. Had I written the test around the search dropdown
+>    instead, it would have passed while testing the wrong code path entirely.
+> 2. **`/pos` has two layouts and the wedge only exists on one.** Mobile is
+>    camera-first; `SmartScanInput` is the desktop Pro till. The three wedge
+>    flows skip on Android via `requireWedge()`, which tests for **the absence
+>    of the UI**, not a hardcoded project name — so it follows the layout if
+>    that ever changes rather than silently skipping forever. Camera scanning
+>    is named in §9.1 as something the harness does not cover; pretending
+>    otherwise would read as coverage.
+
+**A console error to chase:** every `/pos` load logs
+`SyntaxError: Unexpected end of input` on both desktop and Android. Almost
+certainly a `JSON.parse` of a truncated localStorage value. Recorded rather
+than failed on — this is characterization — but it is a real defect and should
+be tracked down.
+
+> **iOS is BLOCKED and is not silently dropped.** The WebKit build installed on
+> this machine does not match Playwright 1.62.1, and every browser on iOS is
+> required to use WebKit — so testing Chromium at a 375px width would test an
+> engine no iPhone runs. One command fixes it:
+> ```
+> npx playwright install webkit
+> ```
+> Until then invariant #24 is **not** satisfied for this step, which is why the
+> row is PARTIAL rather than DONE.
 
 ### 1.3 API contract snapshots (2026-08-31)
 
