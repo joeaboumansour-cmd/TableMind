@@ -831,7 +831,7 @@ these three it is achievable only in a real shop, on one store, watched.
 | 1.4 E2E golden flows | DONE | | | | All 8 flows. E2E 20 desktop / 1.8min; contract 119 / 131s |
 | 1.5 visual snapshots | DONE | | | | 24 baselines, 3 viewports. Opt-in `harness:visual`, stable on re-run |
 | 1.6 offline/sync scenarios | DONE | | | | 6 scenarios incl. the wifi-with-no-upstream hang case |
-| 1.7 mutation check of the net | NOT STARTED | | | | Prove it catches |
+| 1.7 mutation check of the net | DONE | | | | **7/7 caught.** `npm run harness:mutation` |
 | 2.1 atomic sale RPC | NOT STARTED | | | | |
 | 2.2 route kernel | NOT STARTED | | | | |
 | 2.3 generated DB types | NOT STARTED | | | | |
@@ -1042,6 +1042,40 @@ be tracked down.
 **iOS is unblocked** (WebKit installed 2026-08-31), so invariant #24 is
 satisfied for the flows written so far. The row stays PARTIAL because flows
 5-8 — cash shift, inventory, CSV import, kitchen — are still to write.
+
+### 1.7 mutation check — PHASE 1 EXIT CRITERION MET (2026-08-31)
+
+`npm run harness:mutation`. Breaks one §1 invariant at a time, runs the suite
+that should notice, and asserts it **fails**. A mutation that survives is a
+hole in the net.
+
+**7 of 7 caught**: total-only rounding (#2), the SELL/RETURN rate spread (#3),
+`isSellable` strict equality (#16), `[]` collapsed to null (#17), reconcile
+deleting on partial evidence (#8), per-unit stock rounding (#9), and a
+permission granted on truthiness rather than the literal `true` (#21/#23).
+
+> **Running it found two defects in the runner itself, and the second is a
+> finding about the invariant.**
+>
+> 1. **The revert failed silently and left a mutation in the tree.** A plain
+>    `writeFileSync` in a `finally` hit `UNKNOWN: unknown error` on Windows — a
+>    transient file lock — and `src/lib/pos/lineItems.ts` was left carrying the
+>    per-unit rounding bug. Caught by checking `git status` straight after, not
+>    by the script. A tool that breaks code on purpose has to be far more
+>    careful about putting it back: `restore()` now retries, falls back to
+>    `git checkout` of that one path, then shouts and exits 2.
+> 2. **The `|| null` vs `?? null` mutation was a no-op.** An empty array is
+>    **truthy** in JavaScript, so `[] || null` is `[]` — the two operators
+>    behave identically for that field. It "survived" for a reason that said
+>    nothing about the net. The rule in CLAUDE.md is still worth keeping as a
+>    habit, but the bug it guards against has a different shape: *emptiness
+>    treated as absence*, i.e. `modifiers?.length ? modifiers : null`. That is
+>    what is mutated now, and the net catches it.
+
+**Phase 1's exit criterion is met**, and independently of this: the net caught
+**three real production bugs** during construction — P1-11, P1-12 and P2-20 —
+none of which anyone went looking for. That is stronger evidence than a
+deliberate mutation, because nobody planted them.
 
 ### 1.5 visual snapshots (2026-08-31)
 
