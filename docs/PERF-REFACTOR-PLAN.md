@@ -828,7 +828,7 @@ these three it is achievable only in a real shop, on one store, watched.
 | 1.1 fixtures & seeding | DONE | | | | 2,492 products / 300 txns. Determinism + tenant isolation both proven |
 | 1.2 pure-logic characterization | DONE | | | | 130 tests, 8 files, <1s. Vitest 4.1.11 under `harness/` |
 | 1.3 API contract snapshots | DONE | | | | 108 tests, ~92s. **Found audit P1-11** |
-| 1.4 E2E golden flows | PARTIAL | | | | Flows 1-5, 8 of 8. E2E 22/20/0 in 1.2min; contract 108 in 92s. Flows 6, 7 remain |
+| 1.4 E2E golden flows | PARTIAL | | | | Flows 1-5, 7, 8 of 8. **Found audit P2-20.** Only flow 6 (inventory) remains |
 | 1.5 visual snapshots | NOT STARTED | | | | |
 | 1.6 offline/sync scenarios | NOT STARTED | | | | |
 | 1.7 mutation check of the net | NOT STARTED | | | | Prove it catches |
@@ -1042,6 +1042,42 @@ be tracked down.
 **iOS is unblocked** (WebKit installed 2026-08-31), so invariant #24 is
 satisfied for the flows written so far. The row stays PARTIAL because flows
 5-8 — cash shift, inventory, CSV import, kitchen — are still to write.
+
+### Flow 7 — CSV import (2026-08-31)
+
+`harness/contract/csv-import.test.ts`. **Genuinely destructive**: it really
+does replace the fixture catalogue, because a test for a destructive operation
+that does not perform it proves nothing. It re-seeds in `afterAll`, which is
+why it is slow and lives in its own file.
+
+**The claim it exists to hold, verified:** `replace_all` replaced 2,492
+products with 3 and **every one of the 300 transactions and 592 sold lines
+survived**. The orphaned lines keep their denormalised name, quantity and
+price and simply stop pointing at a catalogue row, so a receipt is still
+printable for a product that no longer exists — migration 028 working as
+intended. This used to delete the store's entire sales history.
+
+> ### Third finding — audit **P2-20**
+>
+> `replace_all` returns **500** for any store that has recipes. The bulk
+> product delete collides with `recipe_components_ingredient_product_id_fkey`
+> (`ON DELETE RESTRICT`, migration 031). That constraint is correct — deleting
+> an in-use ingredient should be refused — the two features were just never
+> tried together.
+>
+> It hits bakeries, coffee shops and snack counters: exactly the store types
+> §13 exists for. It **fails safe** (single statement, nothing deleted), which
+> is why it is P2 rather than P1 — what is lost is the feature and an
+> afternoon, not data. The error says only *"Failed to clear existing
+> products"*, naming neither cause nor remedy.
+
+The route's **lack of authentication is also pinned** (audit P0-2): it accepts
+a caller with no `x-auth-data` at all and takes `storeId` from the body. The
+test asserts today's behaviour so Phase 2.2's route kernel has a
+before-and-after, and flipping it to expect a 401 will be a deliberate, visible
+change. It deliberately does **not** demonstrate the hole against another
+tenant — proving it by wiping a real store's catalogue is not a test, it is the
+damage.
 
 ### Flows 5 and 8 — placed in the CONTRACT suite (2026-08-31)
 
