@@ -828,9 +828,9 @@ these three it is achievable only in a real shop, on one store, watched.
 | 1.1 fixtures & seeding | DONE | | | | 2,492 products / 300 txns. Determinism + tenant isolation both proven |
 | 1.2 pure-logic characterization | DONE | | | | 130 tests, 8 files, <1s. Vitest 4.1.11 under `harness/` |
 | 1.3 API contract snapshots | DONE | | | | 108 tests, ~92s. **Found audit P1-11** |
-| 1.4 E2E golden flows | PARTIAL | | | | Flows 1-5, 7, 8 of 8. **Found audit P2-20.** Only flow 6 (inventory) remains |
+| 1.4 E2E golden flows | DONE | | | | All 8 flows. E2E 20 desktop / 1.8min; contract 119 / 131s |
 | 1.5 visual snapshots | NOT STARTED | | | | |
-| 1.6 offline/sync scenarios | NOT STARTED | | | | |
+| 1.6 offline/sync scenarios | DONE | | | | 6 scenarios incl. the wifi-with-no-upstream hang case |
 | 1.7 mutation check of the net | NOT STARTED | | | | Prove it catches |
 | 2.1 atomic sale RPC | NOT STARTED | | | | |
 | 2.2 route kernel | NOT STARTED | | | | |
@@ -1042,6 +1042,71 @@ be tracked down.
 **iOS is unblocked** (WebKit installed 2026-08-31), so invariant #24 is
 satisfied for the flows written so far. The row stays PARTIAL because flows
 5-8 — cash shift, inventory, CSV import, kitchen — are still to write.
+
+### 1.6 offline & sync scenarios (2026-08-31)
+
+`harness/e2e/offline.spec.ts` — **6 scenarios**, driving the REAL service
+worker and the REAL Dexie queue against a production build. Nothing mocked:
+every failure this protects against lives in the seams between those pieces.
+
+Covered:
+
+| Scenario | What it holds |
+|---|---|
+| Sell with no internet | Sale completes, is durable in `offline_queue`, and has NOT reached the server |
+| Reconnect | **Exactly one** server row, and `created_at` is the SALE moment (audit P1-1), not the flush moment |
+| Stock on replay | Decremented **exactly once** — the `UNIQUE(store_id, transaction_number)` + 23505 idempotency |
+| Wifi with no upstream | The app detects the outage while `navigator.onLine` still says `true` |
+| Cold launch offline | The till opens from the app shell |
+| Server rejecting everything | A queued sale is **never deleted**, and is not dead-lettered early (invariant #6) |
+
+**Four things had to be right for this to test anything**, each of which was
+wrong first and is now documented in the file:
+
+1. **The device must be genuinely warm before going offline.** The "Loading…"
+   gate drops when the load *finishes*, which on an empty IndexedDB is before
+   the network pull lands — the till then renders with zero products and a scan
+   falls through to the unknown-barcode prompt. `openTill()` now waits for
+   `products_cache` to be non-empty.
+2. **Navigate by CLICKING, not `page.goto`.** A full navigation needs the
+   network or an already-warm worker; a cashier clicks Checkout, which is a
+   client-side route change and works offline. Using `goto` tested the service
+   worker by accident and failed for an unrelated reason.
+3. **F4, not a click, to take payment.** The Process Payment button is
+   deliberately disabled until the tender covers the total — a disabled control
+   on the button that takes money is the point. F4 records the exact amount.
+4. **`context.route`, not `page.route`.** `/api/health` is `NetworkOnly`, so
+   the probe is issued BY the service worker, and `page.route()` does not
+   intercept service-worker-originated requests. This one silently made the
+   hang case look like a product bug.
+
+The hang case is worth its own note: the probe is left **pending**, not
+aborted, because that is what a dead upstream actually does and it is the case
+`navigator.onLine` gets wrong. The heartbeat's own 5s `AbortSignal` is what has
+to save it — which is exactly why connectivity is a heartbeat and why
+`/api/health` must never be cached (invariant #12).
+
+Desktop-only, deliberately: completing a sale needs the wedge and keypad. The
+offline MECHANISMS are platform-independent (Dexie + sync engine); the
+platform-specific half — iOS's 7-day storage clear, quota eviction — is Phase
+6.3's shelf-life drill on real devices, where it honestly belongs.
+
+### Flow 6 — inventory (2026-08-31)
+
+`harness/contract/inventory.test.ts`, 6 tests. The mirror of flow 7's claim:
+**deleting a sold product must not delete what it sold.** A product is created,
+sold, then discontinued; the sale and its line survive with `product_id` NULL
+and the denormalised name, quantity and price intact — so a receipt still
+prints for a product that no longer exists.
+
+Also pins the offline-capable write path: a **client-generated id makes
+`POST /api/products` an idempotent upsert** (which is what lets a reprice be
+queued and replayed), a reprice updates rather than duplicating, the store is
+taken from the caller and not the body, and `profit_percentage` is
+**trigger-computed** — sending 99999 yields the formula's 400.
+
+And the counterpart to P2-20: an in-use ingredient **cannot** be deleted
+(`ON DELETE RESTRICT`), refused rather than cascaded.
 
 ### Flow 7 — CSV import (2026-08-31)
 
