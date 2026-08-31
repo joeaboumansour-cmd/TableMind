@@ -26,7 +26,8 @@
     "harness:e2e": "playwright test --config harness/e2e/playwright.config.ts",
     "harness:visual": "playwright test --config harness/visual/playwright.config.ts",
     "harness:visual:update": "playwright test --config harness/visual/playwright.config.ts --update-snapshots",
-    "harness:mutation": "node harness/mutation/run.mjs"
+    "harness:mutation": "node harness/mutation/run.mjs",
+    "harness:bench": "node harness/bench/sale-latency.mjs"
   },
   "dependencies": {
     "@ducanh2912/next-pwa": "^10.2.9",

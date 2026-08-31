@@ -244,6 +244,72 @@ export async function POST(request: Request) {
     const { store_id } = JSON.parse(authData);
     const body = await request.json();
 
+    // ── ONE ROUND TRIP, ONE DATABASE TRANSACTION ────────────────────────────
+    //
+    // `create_sale` (migration 038) does the whole sale — resolve the shift,
+    // insert the transaction, insert the line items, apply the stock — in a
+    // single call. The path below it takes THREE serial waves to Postgres
+    // while a customer stands at the counter, and none of them had to be
+    // separate trips.
+    //
+    // It also makes the sale ATOMIC. The fallback can half-write one: the
+    // transaction row commits, the items insert fails, and that failure is
+    // deliberately swallowed because the sale already exists — leaving an
+    // empty receipt, no kitchen ticket, and analytics quietly under-counting
+    // (audit P1-4). Inside the function all three writes share one
+    // transaction.
+    //
+    // And it closes audit P1-11: a `user_id` naming a deleted employee is
+    // coerced to NULL rather than raising 23503, which today returns 500, is
+    // read by the client as an offline condition, and dead-letters a sale
+    // whose money was already taken.
+    //
+    // FALLING BACK IS NOT OPTIONAL. Until 038 is applied the function does not
+    // exist, and every sale in every shop goes through the path below. The
+    // deploy is therefore safe in either order — which is the only way to ship
+    // a change to the money path without a coordinated migration window.
+    {
+      const { data: rpcResult, error: rpcError } = await supabase.rpc("create_sale", {
+        p_store_id: store_id,
+        p_sale: body,
+      });
+
+      if (!rpcError) {
+        const result = rpcResult as { transaction: unknown; duplicated: boolean } | null;
+        if (result?.transaction) {
+          // Same shapes and same status codes the multi-step path returns, so
+          // nothing downstream can tell which one ran.
+          if (result.duplicated) {
+            console.log(`[API] Duplicate ${body.transaction_number} (atomic path)`);
+            return NextResponse.json(
+              { transaction: result.transaction, duplicated: true },
+              { status: 200 }
+            );
+          }
+          maybeRunRetentionCleanup(supabase, store_id);
+          return NextResponse.json({ transaction: result.transaction }, { status: 201 });
+        }
+      } else {
+        const missing =
+          rpcError.code === "PGRST202" ||
+          rpcError.code === "42883" ||
+          /could not find the function|does not exist/i.test(rpcError.message || "");
+
+        if (!missing) {
+          // A REAL failure inside the function. Do not fall through: the
+          // function is atomic, so nothing was written, but retrying the whole
+          // sale down a different code path risks writing it twice if the
+          // error came after a partial commit in some future edit. Surface it.
+          console.error("[API] create_sale failed:", rpcError);
+          return NextResponse.json({ error: rpcError.message }, { status: 500 });
+        }
+
+        console.warn(
+          "[API] create_sale not available (migration 038 not applied?) — using the multi-step path"
+        );
+      }
+    }
+
     // When the sale actually happened.
     //
     // Offline sales sit in the local queue until the shop reconnects, and this
