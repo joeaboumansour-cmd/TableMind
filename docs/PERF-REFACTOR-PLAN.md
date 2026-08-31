@@ -1044,6 +1044,44 @@ be tracked down.
 satisfied for the flows written so far. The row stays PARTIAL because flows
 5-8 — cash shift, inventory, CSV import, kitchen — are still to write.
 
+### /api/my-shift — 3 serial trips to 1 wave (2026-08-31)
+
+The slowest call on the Phase 0.3 boot trace (599ms), for a fact a cashier does
+not need in order to scan anything.
+
+It took THREE serial round trips: `resolveCaller`, then the shift (whose filter
+depended on knowing whether the caller was the owner), then the register (whose
+id came from the shift).
+
+Two changes collapse it to one wave:
+
+1. **The register is EMBEDDED in the shift query.** PostgREST follows
+   `cash_shifts.register_id` in the same request, so that trip never had to
+   exist.
+2. **Auth runs ALONGSIDE the read**, through the `callerAndRead` helper that
+   already existed in `src/lib/auth/apiRoute.ts` and that this route simply was
+   not using. The filter used to depend on the caller, so the read had to wait;
+   now the query asks for BOTH candidate rows — the owner's shift and this
+   user's — and the answer is selected once the caller is known.
+
+Safe for exactly the reason CLAUDE.md gives for the routes that already do it:
+the read is scoped to the `store_id` the caller is **claiming**, so a failed
+auth discards a read of their own store, and nothing is returned before the
+caller is confirmed. The chosen row is matched against the **resolved** caller,
+never the header, so it cannot be used to read someone else's assignment.
+
+**Controlled comparison** — same fixture, same assignment, shift found, median
+of 12, old code rebuilt and measured on the same machine minutes apart:
+
+| | Before | After |
+|---|---:|---:|
+| median | **922 ms** | **308 ms** |
+| p90 | 1021 ms | 340 ms |
+| min | 840 ms | 272 ms |
+
+**−67%, 614 ms.** The response body is byte-identical: the two fields used only
+for matching are stripped, and `register` is lifted out of the embed.
+
 ### FIRST MEASURED SPEED WIN — the boot chain's serial pair (2026-08-31)
 
 Brought forward from Phase 3 because 0.3 had already measured it and the fix
