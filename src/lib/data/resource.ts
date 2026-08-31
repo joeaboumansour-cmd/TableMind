@@ -86,13 +86,13 @@ export interface ResourceDefinition<T> {
    * The network read. **MUST reject on failure** — including on a partial or
    * malformed payload.
    *
-   * This inversion is what makes the primitive worth having. Today's loaders
-   * (`refreshCategories`, `refreshRecipes`, `refreshCombos`) catch their own
-   * errors and RESOLVE with the cached copy, so a caller's `.then()` says
-   * nothing about whether the fetch worked and a `.catch()` beside it is dead
-   * code. That is precisely the trap the first P1-12 attempt fell into. Here
-   * the swallow happens in ONE place, below, where it can also record `error`
-   * and leave `hydrated` alone.
+   * This inversion is what makes the primitive worth having. The loaders this
+   * replaced (`refreshCategories`, `refreshRecipes`, `refreshCombos`) each
+   * caught their own errors and RESOLVED with the cached copy, so a caller's
+   * `.then()` said nothing about whether the fetch worked and a `.catch()`
+   * beside it was dead code. That is precisely the trap the first P1-12
+   * attempt fell into. Here the swallow happens in ONE place, below, where it
+   * can also record `error` and leave `hydrated` alone.
    */
   fetch(storeId: string): Promise<T>;
 

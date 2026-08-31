@@ -223,6 +223,21 @@ describe("one request per (resource, store)", () => {
     expect(h.fetches).toHaveLength(2);
   });
 
+  it("NOTIFIES subscribers on a local write", () => {
+    // The inventory page depends on exactly this: since Phase 3.3 `saveRecipe`
+    // and `saveCombo` write through the resource and the page keeps no copy of
+    // its own, so a save that did not notify would leave the editor showing the
+    // recipe as it was before the edit.
+    const h = makeResource();
+    const listener = vi.fn();
+    subscribeResource(h.def, "store-a", listener);
+
+    writeResource(h.def, "store-a", ["cheese"]);
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(getResourceState(h.def, "store-a").data).toEqual(["cheese"]);
+  });
+
   it("does not extend the stale window on a local write", async () => {
     const h = makeResource({ staleTime: 60_000 });
 

@@ -11,7 +11,7 @@
 
 import { buildAuthHeaders } from "@/lib/auth/apiHeaders";
 import { connectivity } from "@/lib/connectivity";
-import { refreshResource, writeResource, type ResourceDefinition } from "@/lib/data/resource";
+import { writeResource, type ResourceDefinition } from "@/lib/data/resource";
 import { compareComboComponents, type ComboComponent, type ComboMap } from "./types";
 
 function key(storeId: string): string {
@@ -118,19 +118,6 @@ export const combosResource: ResourceDefinition<ComboMap> = {
     return body.combos;
   },
 };
-
-/**
- * Fetch combos and update the cache.
- *
- * Kept at its old signature for /pos/products (Phase 3.3). Delegates rather
- * than duplicating, so there is one in-flight map; `force` keeps this path
- * behaving exactly as it did before.
- */
-export async function refreshCombos(storeId: string): Promise<ComboMap> {
-  if (!storeId) return NO_COMBOS;
-  const state = await refreshResource(combosResource, storeId, { force: true });
-  return state.data;
-}
 
 /** Replace one combo on the server, then update the cache. */
 export async function saveCombo(

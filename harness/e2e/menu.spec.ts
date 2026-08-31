@@ -22,14 +22,14 @@ const scanBox = (page: import("@playwright/test").Page) =>
  * Open the till AND wait for the recipe cache to arrive.
  *
  * The till reads recipes from `store_recipes_<id>` in localStorage, which is
- * EMPTY on a cold device — `refreshRecipes()` fills it in the background after
- * first paint. A menu item scanned before that lands is added as a PLAIN line:
- * no modifier sheet, `modifiers` NULL so the kitchen never sees a ticket, and
- * the menu item's own meaningless stock decremented instead of its
- * ingredients.
+ * EMPTY on a cold device — `recipesResource` fills it in the background after
+ * first paint. Since Phase 3.2 a menu item scanned before that lands is HELD
+ * rather than added plain, but a hold is still a wait, and these tests are
+ * about the modifier flow rather than about the wait.
  *
- * Waiting here keeps this test about the modifier flow rather than about a
- * race. The race itself is real and is recorded separately below.
+ * The cold-device window itself is covered separately below, in both
+ * directions: what happens when the recipes arrive, and what happens when they
+ * never do.
  */
 async function openTill(page: import("@playwright/test").Page) {
   await page.goto("/pos");
@@ -45,12 +45,13 @@ async function openTill(page: import("@playwright/test").Page) {
     )
     .toBeGreaterThan(0);
 
-  // Then RELOAD. The cache landing in localStorage is not the same as React
-  // holding it: `refreshRecipes()` writes storage and calls setRecipes()
-  // separately, so a scan can still race the state update. After a reload the
-  // till reads the now-warm cache synchronously during its catalogue load,
-  // which is both deterministic and exactly the state a real till is in on
-  // every launch after its first.
+  // Then RELOAD, so the till starts from an already-warm cache. That is both
+  // deterministic and exactly the state a real till is in on every launch after
+  // its first. (Before Phase 3.2 this reload was load-bearing for a second
+  // reason: the cache landing in localStorage was not the same as React holding
+  // it, because the loader wrote storage and called setRecipes() separately.
+  // `useResource` seeds from the cache during the first render, so that
+  // particular race is gone.)
   await page.reload();
   await expect(page.getByText("Loading…")).toHaveCount(0, { timeout: 30_000 });
 }
@@ -199,7 +200,7 @@ test.describe("cold device with no recipes — deterministic, not a race", () =>
    * Nothing errors. The sale completes and looks entirely normal.
    *
    * The first version of this test simply scanned quickly and hoped to beat
-   * `refreshRecipes()`. That passed or failed depending on network timing —
+   * the background recipe fetch. That passed or failed depending on timing —
    * flaky by construction, and the plan has zero tolerance for that because
    * one intermittent test teaches everyone to ignore red. Blocking the request
    * removes the race AND models the worse real case: a device that is offline

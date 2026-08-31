@@ -302,10 +302,17 @@ test.describe("queued sales are never silently dropped", () => {
     // a transport-shaped failure: it must NOT burn the retry budget to zero
     // and must never delete the row — each one is a completed sale whose money
     // was taken (invariant #6).
-    await context.setOffline(false);
+    //
+    // ROUTE FIRST, THEN reconnect. The other order is a race the sync engine
+    // usually wins: restoring connectivity triggers a push immediately, and the
+    // POST goes out during the round trip that installs the route — so the sale
+    // syncs for real, the queue empties, and the test fails claiming the queued
+    // sale was dropped. Observed 2026-08-31; the timing was always this close,
+    // and it only needed a small shift elsewhere to tip over.
     await page.route("**/api/transactions**", (route) =>
       route.fulfill({ status: 500, body: JSON.stringify({ error: "harness" }) })
     );
+    await context.setOffline(false);
 
     await page.waitForTimeout(8_000);
 

@@ -840,7 +840,7 @@ these three it is achievable only in a real shop, on one store, watched.
 | 3.1 data primitive | DONE | a36e978 | | | `src/lib/data/`. 27 harness tests. No screen migrated yet — that is 3.2 |
 | 3.0 parallelise the boot delta+count | DONE | | ~600ms serial | **~300ms parallel** | Brought forward from 0.3's finding |
 | 3.2 migrate /pos | DONE | 17edb7b | 6 menu requests per remount | **3** | Closes audit **P1-12** + a second gap it uncovered in the feature flags |
-| 3.3 migrate /pos/products | NOT STARTED | | | | |
+| 3.3 migrate /pos/products | DONE | | 9 menu requests per walk | **3** | Legacy loaders deleted. Also fixed a pre-existing race in the queued-sale test |
 | 3.4 migrate /transactions | NOT STARTED | | | | |
 | 3.5 migrate /pos/cash + /kitchen | NOT STARTED | | | | |
 | 4.1 memo boundaries | NOT STARTED | | | | |
@@ -1046,6 +1046,66 @@ be tracked down.
 **iOS is unblocked** (WebKit installed 2026-08-31), so invariant #24 is
 satisfied for the flows written so far. The row stays PARTIAL because flows
 5-8 — cash shift, inventory, CSV import, kitchen — are still to write.
+
+### 3.3 migrate /pos/products — Phase 3’s number, end to end (2026-08-31)
+
+The inventory page joins the same three subscriptions the till uses, so both
+screens now share one entry, one request and one answer.
+
+#### Measured — the whole walk, three trees, same machine
+
+`/pos` → Inventory → `/pos`, **client-side** navigation, counting requests to
+`/api/categories`, `/api/recipes` and `/api/combos`. Cumulative:
+
+| Tree | after `/pos` | after Inventory | after returning |
+|---|---:|---:|---:|
+| Before Phase 3 (`a96b1db`) | 3 | 6 | **9** |
+| After 3.2 (`17edb7b`) | 3 | 6 | **6** |
+| After 3.3 | 3 | **3** | **3** |
+
+**9 → 3.** Every leg after the first is now free, and the till and the
+inventory screen cannot disagree about the menu because there is only one copy.
+A FULL page load still revalidates, by design.
+
+#### What got deleted
+
+`refreshRecipes`, `refreshCombos` and `getCategories` had no callers left and
+are gone. `refreshCategories` stays for exactly one caller,
+`CategoryManagerDialog`, which re-reads straight after an edit — `force` is the
+point there: a re-read the stale window could answer would show the list as it
+was BEFORE the change the user just made.
+
+That dialog also lost its `onCategoriesChange` prop, and the products page lost
+its `setRecipes`/`setCombos` calls after a save. All three wrote a second copy
+of data the resource already owns, which is how two copies drift. `saveRecipe`
+and `saveCombo` write THROUGH the resource, so the inventory page and the till
+are both notified without anyone knowing they exist. There is a unit test
+pinning that notify, because the editor's post-save display now rests on it.
+
+#### A pre-existing race in a money test, surfaced not caused
+
+`offline.spec.ts` "a failing server does NOT delete the queued sale" — invariant
+#6, the one that says a completed sale is never dropped — went red once in the
+full run and passed alone. The queue was **empty**, meaning the sale had synced
+for real:
+
+```
+await context.setOffline(false);          // sync engine pushes IMMEDIATELY
+await page.route("**/api/transactions**", …500…);   // installed too late
+```
+
+Restoring connectivity triggers a push at once, and the POST went out during
+the round trip that installs the route. The two lines are now the other way
+round. The timing was always this close; it only needed a small shift elsewhere
+to tip over, and the failure mode was maximally misleading — a test that
+guards against dropped sales reporting that a sale was dropped, because it had
+actually been sold successfully.
+
+**Verified:** 21/21 E2E desktop, 11 passed / 30 skipped on android+ios with only
+the pre-existing iOS WebKit failure, 158/158 harness unit (one new), the
+inventory page rendered and screenshotted with zero console errors and all three
+caches populated, typecheck clean, lint unchanged at main’s 207/77/130, build
+green.
 
 ### 3.2 migrate /pos — and P1-12 is closed (2026-08-31)
 

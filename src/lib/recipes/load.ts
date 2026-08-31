@@ -13,7 +13,7 @@
 
 import { buildAuthHeaders } from "@/lib/auth/apiHeaders";
 import { connectivity } from "@/lib/connectivity";
-import { refreshResource, writeResource, type ResourceDefinition } from "@/lib/data/resource";
+import { writeResource, type ResourceDefinition } from "@/lib/data/resource";
 import { compareComponents, type RecipeComponent, type RecipeMap } from "./types";
 
 function key(storeId: string): string {
@@ -29,9 +29,8 @@ function key(storeId: string): string {
  * those as the same thing is audit P1-12.
  *
  * The KEY's existence is the proof, because `writeCachedRecipes()` runs only
- * after a successful fetch — and `refreshRecipes()` cannot be used for this,
- * since it catches its own errors and RESOLVES with the cached copy, so a
- * failed refresh is indistinguishable from a successful one at the call site.
+ * after a successful fetch. This is `recipesResource.has`, which is what makes
+ * `hydrated` mean what it says.
  */
 export function hasCachedRecipes(storeId: string): boolean {
   if (typeof window === "undefined" || !storeId) return false;
@@ -137,20 +136,6 @@ export const recipesResource: ResourceDefinition<RecipeMap> = {
     return body.recipes;
   },
 };
-
-/**
- * Fetch recipes and update the cache.
- *
- * Kept at its old signature — never throws, resolves with whatever the caller
- * should render — for /pos/products, which moves to `useResource` in Phase 3.3.
- * It DELEGATES rather than duplicating, so there is one in-flight map. `force`
- * keeps this path behaving exactly as it did before.
- */
-export async function refreshRecipes(storeId: string): Promise<RecipeMap> {
-  if (!storeId) return NO_RECIPES;
-  const state = await refreshResource(recipesResource, storeId, { force: true });
-  return state.data;
-}
 
 /** Replace one product's recipe on the server, then update the cache. */
 export async function saveRecipe(

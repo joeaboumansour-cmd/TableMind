@@ -69,22 +69,17 @@ export const categoriesResource: ResourceDefinition<Category[]> = {
   },
 };
 
-/** The cached list, synchronously. Safe on first paint and with no internet. */
-export function getCategories(storeId: string): Category[] {
-  return readCachedCategories(storeId);
-}
-
 /**
  * Fetch categories and update the cache.
  *
- * Kept at its old signature — never throws, resolves with whatever the caller
- * should render — for the callers not yet migrated to `useResource`:
- * /pos/products (Phase 3.3) and `CategoryManagerDialog`, which calls it right
- * after a save and must not be answered from the stale window.
+ * The one caller left is `CategoryManagerDialog`, which calls this straight
+ * after creating, renaming, reordering or deleting a category. `force` is the
+ * point: a re-read that the stale window could answer would show the list as
+ * it was BEFORE the edit the user just made.
  *
- * It DELEGATES rather than duplicating, so there is one in-flight map rather
- * than one per mechanism. `force` keeps this path behaving exactly as it did
- * before — no stale-window skip, no offline skip.
+ * It writes through the resource, so the inventory page behind the dialog and
+ * the till's rail both update without being told — which is why the dialog no
+ * longer has an `onCategoriesChange` prop.
  */
 export async function refreshCategories(storeId: string): Promise<Category[]> {
   if (!storeId) return NO_CATEGORIES;
