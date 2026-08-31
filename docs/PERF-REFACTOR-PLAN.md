@@ -829,7 +829,7 @@ these three it is achievable only in a real shop, on one store, watched.
 | 1.2 pure-logic characterization | DONE | | | | 130 tests, 8 files, <1s. Vitest 4.1.11 under `harness/` |
 | 1.3 API contract snapshots | DONE | | | | 108 tests, ~92s. **Found audit P1-11** |
 | 1.4 E2E golden flows | DONE | | | | All 8 flows. E2E 20 desktop / 1.8min; contract 119 / 131s |
-| 1.5 visual snapshots | NOT STARTED | | | | |
+| 1.5 visual snapshots | DONE | | | | 24 baselines, 3 viewports. Opt-in `harness:visual`, stable on re-run |
 | 1.6 offline/sync scenarios | DONE | | | | 6 scenarios incl. the wifi-with-no-upstream hang case |
 | 1.7 mutation check of the net | NOT STARTED | | | | Prove it catches |
 | 2.1 atomic sale RPC | NOT STARTED | | | | |
@@ -1042,6 +1042,38 @@ be tracked down.
 **iOS is unblocked** (WebKit installed 2026-08-31), so invariant #24 is
 satisfied for the flows written so far. The row stays PARTIAL because flows
 5-8 — cash shift, inventory, CSV import, kitchen — are still to write.
+
+### 1.5 visual snapshots (2026-08-31)
+
+`npm run harness:visual` — **separate config, separate command, deliberately
+out of the default run.** These are the high-maintenance part of the harness
+and legitimately break on every intentional UI change; keeping them opt-in
+means a redesign is one considered `npm run harness:visual:update`, not a wall
+of red on unrelated work. Phase 9 branch A asks for exactly this, so it may as
+well be true from the start.
+
+**24 baselines** across three viewports (desktop 1440, tablet 768, mobile 375):
+`/pos`, `/pos` with a cart line, `/checkout`, `/transactions`, `/pos/products`,
+`/pos/cash`, `/kitchen`, the modifier sheet, and `/login`. Mobile has 6 rather
+than 9 — the three wedge-driven captures skip there, because the Pro till does
+not exist on a phone.
+
+> **The rule that keeps these compatible with Phase 5: snapshots assert
+> SETTLED states only, never mid-load.** Phase 5 exists to change what appears
+> *while* something is arriving; a snapshot that pinned a spinner in place
+> would forbid the improvement it sits next to. Every capture waits for the
+> screen to finish, for `document.fonts.ready`, and for one idle frame.
+
+Volatile regions are **masked, not stubbed**: clocks, relative times, the
+connectivity pill, generated ids. A masked box honestly says "this varied and
+was not asserted"; freezing the clock would claim coverage that does not exist.
+`maxDiffPixelRatio` is 0.01, because a few pixels of antialiasing is not a UI
+change and too tight a threshold is how a visual suite becomes noise people
+learn to ignore.
+
+**Verified stable**: a second full run against the freshly written baselines
+passed 22/22 with exit 0. A visual suite that is not reproducible is worse than
+none, so this is the check that mattered.
 
 ### 1.6 offline & sync scenarios (2026-08-31)
 

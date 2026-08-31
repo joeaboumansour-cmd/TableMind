@@ -23,7 +23,10 @@
     "harness:unit:watch": "vitest --config harness/vitest.config.mts",
     "harness:all": "npm run harness:guard && npm run harness:unit",
     "harness:contract": "vitest run --config harness/contract/vitest.config.mts",
-    "harness:e2e": "playwright test --config harness/e2e/playwright.config.ts"
+    "harness:e2e": "playwright test --config harness/e2e/playwright.config.ts",
+    "harness:visual": "playwright test --config harness/visual/playwright.config.ts",
+    "harness:visual:update": "playwright test --config harness/visual/playwright.config.ts --update-snapshots",
+    "harness:mutation": "node harness/mutation/run.mjs"
   },
   "dependencies": {
     "@ducanh2912/next-pwa": "^10.2.9",
