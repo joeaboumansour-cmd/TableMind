@@ -22,6 +22,28 @@ function key(storeId: string): string {
 const inFlight = new Map<string, Promise<RecipeMap>>();
 
 /**
+ * Have this store's recipes EVER been written to this device?
+ *
+ * Deliberately distinct from `getCachedRecipes()` returning an empty map. A
+ * store can have `menu_items` on and no recipes authored, which is a real
+ * answer; a device that has never loaded them has no answer at all. Treating
+ * those as the same thing is audit P1-12.
+ *
+ * The KEY's existence is the proof, because `writeCachedRecipes()` runs only
+ * after a successful fetch — and `refreshRecipes()` cannot be used for this,
+ * since it catches its own errors and RESOLVES with the cached copy, so a
+ * failed refresh is indistinguishable from a successful one at the call site.
+ */
+export function hasCachedRecipes(storeId: string): boolean {
+  if (typeof window === "undefined" || !storeId) return false;
+  try {
+    return window.localStorage.getItem(key(storeId)) !== null;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * The cached recipes, synchronously. Returns {} for anything unreadable — a
  * broken cache must degrade to "no modifiers", never to a broken till.
  */
