@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { readAuthHeader, resolveCaller } from "@/lib/auth/apiCaller";
+import { createServiceRoleClient as createCallerClient } from "@/lib/supabase/server";
 
 interface ProductImportData {
   id?: string;
@@ -117,7 +119,10 @@ export async function POST(request: NextRequest) {
     const { 
       products, 
       mode, 
-      storeId,
+      // Renamed and unused: tenancy comes from the resolved caller below, not
+      // from the request that also names the rows. Kept in the destructuring
+      // only so the shape of what clients send stays documented.
+      storeId: _ignoredBodyStoreId,
       fileName,
       fileSize 
     } = await request.json() as { 
@@ -128,8 +133,41 @@ export async function POST(request: NextRequest) {
       fileSize?: number;
     };
 
+    // ── AUTHENTICATION (audit P0-2) ────────────────────────────────────────
+    //
+    // This route had none, held the service-role key, and took `storeId` from
+    // the BODY. `mode: 'replace_all'` DELETES a store's entire catalogue, so
+    // anyone who knew a store id could wipe and replace it from an
+    // unauthenticated request.
+    //
+    // The caller is now resolved from the header and the body's storeId is
+    // IGNORED entirely — taking tenancy from the same request that names the
+    // rows is what made the hole. Everything below uses `storeId` from the
+    // resolved caller.
+    const callerClient = await createCallerClient();
+    const { storeId: callerStoreId, userId } = readAuthHeader(request);
+    if (!callerStoreId) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    const caller = await resolveCaller(callerClient, callerStoreId, userId);
+    if (!caller) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    // Importing a catalogue IS a pricing action — it sets what every customer
+    // is charged — so it takes the same permission the till uses to gate a
+    // price edit.
+    if (!caller.isOwner && caller.permissions?.inventory !== true) {
+      return NextResponse.json(
+        { error: "Inventory permission is required to import products" },
+        { status: 403 }
+      );
+    }
+
+    const storeId = callerStoreId;
+    void _ignoredBodyStoreId;
+
     // Validate inputs
-    if (!storeId || !products || !Array.isArray(products)) {
+    if (!products || !Array.isArray(products)) {
       return NextResponse.json(
         { error: 'Invalid request parameters' },
         { status: 400 }

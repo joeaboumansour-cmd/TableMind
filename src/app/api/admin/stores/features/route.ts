@@ -1,5 +1,25 @@
+// =============================================
+// Store feature flags. (audit P0-2)
+//
+// This route had NO authentication of any kind while holding the service-role
+// key: anyone who knew a store id could read or FLIP any store's feature flags
+// and store_type. Closing it needs care, because the two verbs have genuinely
+// different audiences:
+//
+//   GET   — the ADMIN console reads any store's flags, and every TILL reads
+//           its OWN via useFeatureFlags. That hook drives the nav, the POS
+//           layout, the cash page and the kitchen board, so gating this on an
+//           admin session alone would switch the product off in every shop.
+//   PATCH — administration. Admin only.
+//
+// So GET accepts either an admin session OR a resolved store caller asking
+// for THEIR OWN store, and refuses a store caller asking about anyone else.
+// =============================================
+
 import { createServiceRoleClient } from "@/lib/supabase/server";
 import { NextResponse } from "next/server";
+import { verifyAdminSession } from "@/lib/auth/adminSession";
+import { readAuthHeader, resolveCaller } from "@/lib/auth/apiCaller";
 
 export async function GET(request: Request) {
   try {
@@ -10,6 +30,23 @@ export async function GET(request: Request) {
 
     if (!storeId) {
       return NextResponse.json({ error: "store_id is required" }, { status: 400 });
+    }
+
+    // An admin may read any store. Checked first because it is a cookie
+    // verification with no database round trip.
+    const admin = await verifyAdminSession(request);
+    if (!admin) {
+      // Otherwise the caller must BE this store. resolveCaller runs
+      // concurrently with nothing here — the read below cannot start until we
+      // know which store is allowed, and that is the point.
+      const { storeId: callerStore, userId } = readAuthHeader(request);
+      if (!callerStore || callerStore !== storeId) {
+        return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      }
+      const caller = await resolveCaller(supabase, callerStore, userId);
+      if (!caller) {
+        return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      }
     }
 
     const { data, error } = await supabase
@@ -35,6 +72,13 @@ export async function GET(request: Request) {
 
 export async function PATCH(request: Request) {
   try {
+    // Flipping another store's flags is pure administration — there is no
+    // legitimate till-side caller, so this is admin-only with no store path.
+    const admin = await verifyAdminSession(request);
+    if (!admin) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
     const supabase = await createServiceRoleClient();
 
     const body = await request.json();

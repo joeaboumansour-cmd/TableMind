@@ -185,28 +185,80 @@ describe("replace_all on a store with no recipes", () => {
   });
 });
 
-describe("known exposure, recorded not fixed", () => {
+describe("authentication — audit P0-2, FIXED", () => {
   /**
-   * ⚠️ audit P0-2. This route has NO authentication of any kind, uses the
-   * service-role key, and takes `storeId` from the request BODY. Anyone who
-   * knows a store id can wipe and replace that store's catalogue.
+   * This route had NO authentication of any kind, used the service-role key,
+   * and took `storeId` from the request BODY. With `mode: 'replace_all'`
+   * deleting a store's whole catalogue, anyone who knew a store id could wipe
+   * and replace it from an unauthenticated request.
    *
-   * Pinned here so the state of the hole is explicit and so Phase 2.2's route
-   * kernel — which is what will close it — has a before-and-after. The test
-   * asserts the CURRENT behaviour; when the kernel lands this should flip to
-   * expecting a 401, and that change should be deliberate and visible.
+   * Now the caller is resolved from the header and the body's storeId is
+   * ignored outright — taking tenancy from the same request that names the
+   * rows is what made the hole.
    *
-   * Deliberately does NOT exercise the hole against another tenant: proving it
-   * by wiping a real store's catalogue is not a test, it is the damage.
+   * These deliberately do NOT demonstrate the old hole against another tenant:
+   * proving it by wiping a real store's catalogue is not a test, it is the
+   * damage.
    */
-  it("CURRENTLY accepts a caller with no auth header at all", async () => {
+  it("refuses a caller with no auth header", async () => {
     const r = await call("POST", "/api/products/import", {
-      headers: { "content-type": "application/json" }, // no x-auth-data
-      body: {
-        storeId: STORE_ID,
-        mode: "create_only",
-        products: [importProduct(99)],
+      headers: { "content-type": "application/json" },
+      body: { storeId: STORE_ID, mode: "create_only", products: [importProduct(97)] },
+    });
+    expect(r.status).toBe(401);
+  });
+
+  it("refuses an unparseable auth header", async () => {
+    const r = await call("POST", "/api/products/import", {
+      headers: { "content-type": "application/json", "x-auth-data": "{nope" },
+      body: { storeId: STORE_ID, mode: "create_only", products: [importProduct(96)] },
+    });
+    expect(r.status).toBeGreaterThanOrEqual(400);
+    expect(r.status).toBeLessThan(500);
+  });
+
+  it("refuses an unknown store", async () => {
+    const r = await call("POST", "/api/products/import", {
+      headers: {
+        "content-type": "application/json",
+        "x-auth-data": JSON.stringify({
+          store_id: "00000000-0000-4000-8000-0000deadbeef",
+          user_id: "00000000-0000-4000-8000-0000deadbeef",
+        }),
       },
+      body: { storeId: STORE_ID, mode: "create_only", products: [importProduct(95)] },
+    });
+    expect(r.status).toBe(401);
+  });
+
+  it("IGNORES a body storeId naming another store — the caller decides", async () => {
+    // The whole shape of the old bug. An authenticated caller pointing the
+    // import at someone else's store must affect only their own.
+    const before = await count("products", `&store_id=neq.${STORE_ID}`);
+
+    const r = await call("POST", "/api/products/import", {
+      body: {
+        storeId: "00000000-0000-4000-8000-0000deadbeef",
+        mode: "create_only",
+        products: [importProduct(94)],
+      },
+    });
+    expect(r.status).toBeLessThan(300);
+
+    // No other tenant touched...
+    expect(await count("products", `&store_id=neq.${STORE_ID}`)).toBe(before);
+    // ...and the row landed in the CALLER's store.
+    const mine = await fetch(
+      `${SB}/rest/v1/products?select=store_id&store_id=eq.${STORE_ID}&name=eq.Imported Product 94`,
+      { headers: DB }
+    ).then((x) => x.json());
+    expect(mine.length).toBe(1);
+    expect(mine[0].store_id).toBe(STORE_ID);
+  });
+
+  it("still accepts a properly authenticated caller", async () => {
+    const r = await call("POST", "/api/products/import", {
+      body: { storeId: STORE_ID, mode: "create_only", products: [importProduct(93)] },
     });
     expect(r.status).toBeLessThan(300);
   });

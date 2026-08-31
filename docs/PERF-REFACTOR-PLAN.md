@@ -833,7 +833,7 @@ these three it is achievable only in a real shop, on one store, watched.
 | 1.6 offline/sync scenarios | DONE | | | | 6 scenarios incl. the wifi-with-no-upstream hang case |
 | 1.7 mutation check of the net | DONE | | | | **7/7 caught.** `npm run harness:mutation` |
 | 2.1 atomic sale RPC | DONE | | **1226ms** median | **307ms** median | **-75%.** Closes audit P1-4 and P1-11 |
-| 2.2 route kernel | NOT STARTED | | | | |
+| 2.2 route kernel | PARTIAL | | | | **Closed audit P0-2** (4 unauthenticated routes). Serial→wave conversions still to do |
 | 2.3 generated DB types | NOT STARTED | | | | |
 | 2.4 index & query audit | NOT STARTED | | | | |
 | 2.5 edge runtime pass | NOT STARTED | | | | |
@@ -1043,6 +1043,53 @@ be tracked down.
 **iOS is unblocked** (WebKit installed 2026-08-31), so invariant #24 is
 satisfied for the flows written so far. The row stays PARTIAL because flows
 5-8 — cash shift, inventory, CSV import, kitchen — are still to write.
+
+### 2.2 (part 1) — closing the four unauthenticated routes, audit P0-2 (2026-08-31)
+
+A survey of all 26 API routes by auth pattern found the shape of the remaining
+work, and one thing the audit had missed:
+
+| Pattern | Count |
+|---|---|
+| `callerAndRead` (one wave) | 3 |
+| **serial `resolveCaller` then read** | 7 — the remaining speed work |
+| `requireAdmin` | 1 |
+| raw header only | 3 |
+| genuinely public | 4 (`health`, admin login/logout, the two `public/*`) |
+| **no auth, service role** | **4 — audit P0-2** |
+
+All four are now gated, each needing a different answer:
+
+- **`admin/store-users`** — `verifyAdminSession()` on all four verbs. Confirmed
+  nothing till-side calls it.
+- **`admin/stores/features`** — GET accepts an admin session **or** a resolved
+  store caller asking for their OWN store; PATCH is admin-only.
+- **`products/import`** — `resolveCaller()`, the body's `storeId` **ignored**,
+  and the `inventory` permission required: importing a catalogue sets what
+  customers are charged, so it is a pricing action.
+- **`products/export`** — `resolveCaller()`, body `storeId` ignored.
+
+> ### The near-miss worth recording
+>
+> `stores/features` GET could not simply become admin-only. `useFeatureFlags`
+> calls it **from the till**, and it drives the nav, the POS layout, the cash
+> page and the kitchen board across ten components. Admin-only returns 401,
+> every flag silently falls back to its default, and the menu, cash page and
+> kitchen board stop existing **in every shop**.
+>
+> I spotted the till caller before writing the gate — but I still shipped it
+> without the client header, and **the E2E suite caught it**: five menu tests
+> went red. A grep found the caller; only running the app found the
+> consequence.
+
+Three client call sites now send `x-auth-data` via `buildAuthHeaders()`:
+`CSVImportDialog`, the products page's export logging, and `useFeatureFlags`.
+The admin console needed no change — it uses the httpOnly session cookie, which
+same-origin fetch sends automatically.
+
+**Still to do in 2.2:** the seven routes still doing a serial
+`resolveCaller`-then-read. Each is the same one-wave conversion `/api/my-shift`
+just had, worth a few hundred milliseconds apiece.
 
 ### /api/my-shift — 3 serial trips to 1 wave (2026-08-31)
 

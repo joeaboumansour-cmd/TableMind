@@ -85,6 +85,7 @@ import { getCachedCombos, refreshCombos, saveCombo } from "@/lib/combos/load";
 import type { ComboMap } from "@/lib/combos/types";
 import CategoryManagerDialog from "@/components/inventory/CategoryManagerDialog";
 import MenuQrDialog from "@/components/inventory/MenuQrDialog";
+import { buildAuthHeaders } from "@/lib/auth/apiHeaders";
 
 interface Product {
   id: string;
@@ -985,6 +986,7 @@ function StoreProductsPageContent() {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          ...buildAuthHeaders(),
         },
         body: JSON.stringify({
           storeId,

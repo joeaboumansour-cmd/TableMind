@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useMemo } from "react";
 import { useAuth } from "@/lib/auth/AuthContext";
 import { mergeFeaturesWithDefaults } from "@/lib/features";
 import { connectivity } from "@/lib/connectivity";
+import { buildAuthHeaders } from "@/lib/auth/apiHeaders";
 
 interface FeatureFlagsState {
   flags: Record<string, boolean>;
@@ -103,7 +104,14 @@ export function useFeatureFlags(): {
 
     const request = (async (): Promise<FeatureFlagsData | null> => {
       try {
-        const response = await fetch(`/api/admin/stores/features?store_id=${storeId}`);
+        // GET is open to the ADMIN console or to a store reading its OWN
+        // flags, so the till has to identify itself (audit P0-2). Without this
+        // header the route answers 401 and every flag silently falls back to
+        // its default -- which reads as the menu, cash page and kitchen board
+        // simply not existing.
+        const response = await fetch(`/api/admin/stores/features?store_id=${storeId}`, {
+          headers: buildAuthHeaders(),
+        });
         if (!response.ok) return null;
 
         const data = await response.json();
