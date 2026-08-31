@@ -828,7 +828,7 @@ these three it is achievable only in a real shop, on one store, watched.
 | 1.1 fixtures & seeding | DONE | | | | 2,492 products / 300 txns. Determinism + tenant isolation both proven |
 | 1.2 pure-logic characterization | DONE | | | | 130 tests, 8 files, <1s. Vitest 4.1.11 under `harness/` |
 | 1.3 API contract snapshots | DONE | | | | 89 tests, ~47s. **Found audit P1-11** |
-| 1.4 E2E golden flows | PARTIAL | | | | 3 of 8 flows (1, 3, 4). Desktop+Android green; **iOS blocked on a WebKit download** |
+| 1.4 E2E golden flows | PARTIAL | | | | Flows 1-4 of 8, all THREE platforms. 22 pass / 20 skip / 0 fail in 1.2min. **Found audit P1-12** |
 | 1.5 visual snapshots | NOT STARTED | | | | |
 | 1.6 offline/sync scenarios | NOT STARTED | | | | |
 | 1.7 mutation check of the net | NOT STARTED | | | | Prove it catches |
@@ -1000,21 +1000,48 @@ Android (§1) — so it is the more honest target, not just the cheaper one.
 >    is named in §9.1 as something the harness does not cover; pretending
 >    otherwise would read as coverage.
 
+**Flow 2 (made-to-order) added, and iOS unblocked.** WebKit is installed, so
+all three profiles run: **22 passed, 20 skipped, 0 failed in 1.2 minutes**. The
+skips are the wedge and modifier flows on Android/iOS, which is honest — the
+Pro till does not exist on a phone.
+
+> ### Second finding — audit **P1-12**
+>
+> A menu item scanned **before the recipe cache loads** is sold as a plain
+> line: no modifier sheet, `modifiers` NULL so the kitchen never sees a ticket,
+> and the menu item's own meaningless stock decremented instead of its
+> ingredients. Nothing errors.
+>
+> The window is small on a warm till but widest exactly when a device is new,
+> cleared, or evicted — and a device offline on first launch has no recipes at
+> all, so every menu item it sells that day takes this path.
+>
+> The root cause is a conflation: an absent cache and an absent recipe look
+> identical. Belongs in **Phase 3**, where the data layer gains a real loading
+> state. Recorded, not fixed.
+
+**Two testing lessons worth keeping:**
+
+1. **A cache landing in localStorage is not the same as React holding it.**
+   `refreshRecipes()` writes storage and calls `setRecipes()` separately, so
+   polling storage still races the state update. `openTill()` reloads after the
+   cache arrives — deterministic, and exactly the state a real till is in on
+   every launch after its first.
+2. **`getByText` is not specific enough in this app.** A product name appears on
+   the quick-grid tile *and* in the dialog heading, so a bare text locator hits
+   Playwright's strict-mode violation. Scope to the dialog and match by role.
+
 **A console error to chase:** every `/pos` load logs
-`SyntaxError: Unexpected end of input` on both desktop and Android. Almost
+`SyntaxError: Unexpected end of input` on desktop and Android, and
+`Unexpected end of script` on iOS/WebKit — the same defect in two engines'
+wording, so it is real rather than an artefact. Almost
 certainly a `JSON.parse` of a truncated localStorage value. Recorded rather
 than failed on — this is characterization — but it is a real defect and should
 be tracked down.
 
-> **iOS is BLOCKED and is not silently dropped.** The WebKit build installed on
-> this machine does not match Playwright 1.62.1, and every browser on iOS is
-> required to use WebKit — so testing Chromium at a 375px width would test an
-> engine no iPhone runs. One command fixes it:
-> ```
-> npx playwright install webkit
-> ```
-> Until then invariant #24 is **not** satisfied for this step, which is why the
-> row is PARTIAL rather than DONE.
+**iOS is unblocked** (WebKit installed 2026-08-31), so invariant #24 is
+satisfied for the flows written so far. The row stays PARTIAL because flows
+5-8 — cash shift, inventory, CSV import, kitchen — are still to write.
 
 ### 1.3 API contract snapshots (2026-08-31)
 

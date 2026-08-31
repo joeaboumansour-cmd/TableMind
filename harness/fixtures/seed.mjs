@@ -379,6 +379,29 @@ async function main() {
 
   console.log(`\n[seed] seeding store ${STORE} (${argCount} products)`);
 
+  // EVERY feature flag ON for the fixture store.
+  //
+  // Five of the thirteen default to false -- menu_items, cash_register,
+  // kitchen_display, product_categories, transaction_analytics -- so a store
+  // seeded without an explicit `features` blob cannot reach the modifier
+  // sheet, the cash page, the kitchen board or the category rail at all. The
+  // E2E suite would then be quietly testing about half the product while
+  // looking like it covered it.
+  //
+  // The 13 keys mirror FEATURES in src/lib/features.ts. If a flag is added
+  // there and not here, mergeFeaturesWithDefaults() supplies its default and
+  // the corresponding surface silently drops out of the harness -- so add it.
+  await req("PATCH", `stores?id=eq.${STORE}`, {
+    features: {
+      pos: true, inventory: true, transactions: true, receipts: true,
+      product_discount: true, transaction_analytics: true,
+      desktop_shortcuts: true, cash_register: true, activity_logging: true,
+      product_categories: true, menu_items: true,
+      recipe_stock_depletion: true, kitchen_display: true,
+    },
+  }, { Prefer: "return=minimal" });
+  console.log("  all 13 feature flags enabled");
+
   // Retention OFF for the fixture store.
   //
   // GET /api/transactions filters on store.transaction_retention_days, so with
