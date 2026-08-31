@@ -837,7 +837,7 @@ these three it is achievable only in a real shop, on one store, watched.
 | 2.3 generated DB types | NOT STARTED | | | | |
 | 2.4 index & query audit | NOT STARTED | | | | |
 | 2.5 edge runtime pass | NOT STARTED | | | | |
-| 3.1 data primitive | DONE | | | | `src/lib/data/`. 27 harness tests. No screen migrated yet — that is 3.2 |
+| 3.1 data primitive | DONE | a36e978 | | | `src/lib/data/`. 27 harness tests. No screen migrated yet — that is 3.2 |
 | 3.0 parallelise the boot delta+count | DONE | | ~600ms serial | **~300ms parallel** | Brought forward from 0.3's finding |
 | 3.2 migrate /pos | NOT STARTED | | | | |
 | 3.3 migrate /pos/products | NOT STARTED | | | | |
