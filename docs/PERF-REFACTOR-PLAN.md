@@ -833,7 +833,7 @@ these three it is achievable only in a real shop, on one store, watched.
 | 1.6 offline/sync scenarios | DONE | | | | 6 scenarios incl. the wifi-with-no-upstream hang case |
 | 1.7 mutation check of the net | DONE | | | | **7/7 caught.** `npm run harness:mutation` |
 | 2.1 atomic sale RPC | DONE | | **1226ms** median | **307ms** median | **-75%.** Closes audit P1-4 and P1-11 |
-| 2.2 route kernel | PARTIAL | | | | **Closed audit P0-2** (4 unauthenticated routes). Serial→wave conversions still to do |
+| 2.2 route kernel | DONE | | 576-594ms | **303-318ms** | Closed audit P0-2; 4 GETs converted to one wave |
 | 2.3 generated DB types | NOT STARTED | | | | |
 | 2.4 index & query audit | NOT STARTED | | | | |
 | 2.5 edge runtime pass | NOT STARTED | | | | |
@@ -1043,6 +1043,41 @@ be tracked down.
 **iOS is unblocked** (WebKit installed 2026-08-31), so invariant #24 is
 satisfied for the flows written so far. The row stays PARTIAL because flows
 5-8 — cash shift, inventory, CSV import, kitchen — are still to write.
+
+### 2.2 (part 2) — serial GETs become one wave (2026-08-31)
+
+Four routes resolved the caller and *then* read, two serial round trips for
+every request. Converted to `callerAndRead`, which issues both together.
+
+**Controlled comparison** — old code rebuilt and measured on the same machine
+minutes apart, median of 10 each:
+
+| Route | Before | After | Saved |
+|---|---:|---:|---:|
+| `/api/transactions/analytics` | 594 ms | **318 ms** | −276 ms |
+| `/api/cash-registers` | 576 ms | **307 ms** | −269 ms |
+| `/api/cash-registers/analytics` | 576 ms | **303 ms** | −273 ms |
+| `/api/my-shift` (earlier) | 922 ms | **308 ms** | −614 ms |
+
+Consistently ~270 ms and ~47% apiece. The floor is now one round trip for all
+of them — the ~300 ms is the network, not the code.
+
+Safe for the reason CLAUDE.md gives for the routes already doing it: the read
+is scoped to the `store_id` the caller is **claiming**, so a failed auth
+discards a read of their own store and nothing is returned before the caller is
+confirmed. On `transactions/analytics` the `transactions` section check still
+gates the RESPONSE, so a cashier without it gets 403 and never sees the
+numbers.
+
+> **`/api/register-requests` was deliberately NOT converted.** Its GET calls
+> `expireStale()` — a **write** — before the read. Running auth alongside a
+> write means writing to a store before confirming the caller owns it, which
+> trades a real safety property for latency on a low-traffic approval panel.
+> Not worth it.
+>
+> `/api/cash-shifts` needed nothing: its GET is already three parallel waves.
+> The earlier survey flagged it on its POST, which is a write path and
+> correctly serial.
 
 ### 2.2 (part 1) — closing the four unauthenticated routes, audit P0-2 (2026-08-31)
 

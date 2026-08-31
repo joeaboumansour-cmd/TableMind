@@ -1,6 +1,7 @@
 import { createServiceRoleClient } from "@/lib/supabase/server";
 import { NextResponse } from "next/server";
-import { resolveCaller, readAuthHeader, canAccessSection } from "@/lib/auth/apiCaller";
+import { canAccessSection } from "@/lib/auth/apiCaller";
+import { callerAndRead } from "@/lib/auth/apiRoute";
 import { productCostInLL } from "@/lib/analytics/profit";
 
 interface AnalyticsResponse {
@@ -104,33 +105,8 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: "Supabase not configured" }, { status: 500 });
     }
 
-    const supabase = await createServiceRoleClient();
-
-    const authData = request.headers.get("x-auth-data");
-    if (!authData) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-
-    let store_id: string;
-    try {
-      const parsed = JSON.parse(authData);
-      store_id = parsed.store_id;
-    } catch {
-      return NextResponse.json({ error: "Invalid auth data" }, { status: 401 });
-    }
-
-    // Hiding the History link is not a guard — enforce the section here too.
-    // A cashier with transactions:false who knows this URL used to get every
-    // sale in the store, and the analytics route used to hand them the profit.
-    const caller = await resolveCaller(supabase, store_id, readAuthHeader(request).userId);
-    if (!caller) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-    if (!canAccessSection(caller, "transactions")) {
-      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-    }
-
-    // Get date filter from query params
+    // Query params first: parsing a URL costs no I/O, so everything the report
+    // needs is known before a single round trip is spent.
     const url = new URL(request.url);
     const dateFilter = url.searchParams.get("dateFilter") || "all";
 
@@ -179,11 +155,33 @@ export async function GET(request: Request) {
     // as raw (cost_price, quantity) pairs so productCostInLL() converts each
     // one exactly as it did before — converting a pre-summed USD total would
     // round once instead of per product and quietly move the figure.
-    const rpc = await supabase.rpc("get_transaction_analytics", {
-      p_store_id: store_id,
-      p_from: cutoff ? cutoff.toISOString() : null,
-      p_tz: timeZone,
-    });
+    // ── Auth and the report go out TOGETHER, not one after the other ────────
+    //
+    // This used to resolve the caller, then run the aggregate — two serial
+    // round trips for a screen the shop owner opens daily. The report is
+    // scoped to the `store_id` the caller is CLAIMING, so a failed auth
+    // discards a read of their own store and nothing is returned before the
+    // caller is confirmed. Same pattern GET /api/cash-shifts already uses.
+    //
+    // The section check still gates the RESPONSE: a cashier with
+    // transactions:false gets 403 and never sees the numbers, exactly as
+    // before. Hiding the History link was never the guard.
+    const outcome = await callerAndRead(request, (client, storeId) =>
+      client.rpc("get_transaction_analytics", {
+        p_store_id: storeId,
+        p_from: cutoff ? cutoff.toISOString() : null,
+        p_tz: timeZone,
+      })
+    );
+
+    if ("error" in outcome) return outcome.error;
+
+    const { caller, storeId: store_id, result: rpc } = outcome;
+    if (!canAccessSection(caller, "transactions")) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+
+    const supabase = await createServiceRoleClient();
 
     if (!rpc.error && rpc.data) {
       return NextResponse.json(buildFromAggregate(rpc.data as AggregateRow));
