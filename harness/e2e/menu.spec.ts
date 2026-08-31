@@ -162,45 +162,54 @@ test.describe("flow 2 — menu item and modifiers", () => {
   });
 });
 
-test.describe("cold-device race — recorded, not asserted as correct", () => {
+test.describe("cold device with no recipes — deterministic, not a race", () => {
   /**
-   * ⚠️ FINDING. On a device with no cached recipes, a menu item scanned before
-   * `refreshRecipes()` completes is added as an ORDINARY line:
+   * ⚠️ FINDING (audit P1-12), reproduced deterministically.
+   *
+   * With no cached recipes and none obtainable, a menu item is added as an
+   * ORDINARY line:
    *
    *   - no modifier sheet, so the cashier cannot say "no pickles"
    *   - `modifiers` is NULL, so the kitchen board never shows the ticket
    *     (it filters on `modifiers IS NOT NULL`)
-   *   - stock decrements the MENU ITEM's own meaningless quantity rather than
+   *   - stock decrements the MENU ITEM's own meaningless quantity instead of
    *     its ingredients
    *
-   * The window is small on a warm till and closes for good once the cache is
-   * populated, so this is unlikely to be a daily problem — but it is widest
-   * exactly when a device is new, has just been cleared, or has been evicted,
-   * and it is silent when it happens.
+   * Nothing errors. The sale completes and looks entirely normal.
    *
-   * Recorded rather than fixed: Phase 1 freezes behaviour. Worth a decision in
-   * Phase 3 when the data layer is rebuilt — the natural fix is for the till to
-   * treat "recipes not yet loaded" as distinct from "no recipe", rather than
-   * letting an absent cache mean the same thing as an absent recipe.
+   * The first version of this test simply scanned quickly and hoped to beat
+   * `refreshRecipes()`. That passed or failed depending on network timing —
+   * flaky by construction, and the plan has zero tolerance for that because
+   * one intermittent test teaches everyone to ignore red. Blocking the request
+   * removes the race AND models the worse real case: a device that is offline
+   * on its first launch has no recipes at all, and every menu item it sells
+   * that day takes this path.
+   *
+   * Recorded, not fixed. Phase 1 freezes behaviour; the fix belongs in Phase 3
+   * where the data layer can distinguish "not loaded yet" from "no recipe".
    */
-  test("a menu item scanned before recipes load is added plain", async ({ signedIn: page }) => {
+  test("a menu item is sold as a plain line when recipes cannot load", async ({ signedIn: page }) => {
+    // Deterministic: the recipe fetch never succeeds, so the cache stays empty.
+    await page.route("**/api/recipes**", (route) => route.abort());
+
     await page.goto("/pos");
     await expect(page.getByText("Loading…")).toHaveCount(0, { timeout: 30_000 });
     await requireWedge(page);
 
-    const recipesReady = await page.evaluate((store) => {
+    const cached = await page.evaluate((store) => {
       const raw = localStorage.getItem(`store_recipes_${store}`);
-      return !!raw && Object.keys(JSON.parse(raw)).length > 0;
+      return raw ? Object.keys(JSON.parse(raw)).length : 0;
     }, STORE_ID);
-
-    test.skip(recipesReady, "recipe cache already warm; the race window is closed");
+    expect(cached).toBe(0);
 
     await scan(page, FIXTURE.menuBarcode);
     await expect.poll(async () => (await activeItems(page)).length, { timeout: 15_000 }).toBe(1);
 
     const items = await activeItems(page);
-    // The finding, stated plainly: no sheet, no modifiers, plain line.
+    // No sheet was offered, and the line carries no modifiers -- so the
+    // kitchen will never see it and stock will move on the wrong product.
     expect(items[0].modifiers ?? null).toBeNull();
+    expect(items[0].line_uid ?? null).toBeNull();
   });
 });
 

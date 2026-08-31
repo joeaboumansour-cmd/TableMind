@@ -827,8 +827,8 @@ these three it is achievable only in a real shop, on one store, watched.
 | 0.4 budget gates | DONE | | | | `verify:budgets` in `npm run build`. Permanent — survives Phase 9. API-depth budget deferred to Phase 1 |
 | 1.1 fixtures & seeding | DONE | | | | 2,492 products / 300 txns. Determinism + tenant isolation both proven |
 | 1.2 pure-logic characterization | DONE | | | | 130 tests, 8 files, <1s. Vitest 4.1.11 under `harness/` |
-| 1.3 API contract snapshots | DONE | | | | 89 tests, ~47s. **Found audit P1-11** |
-| 1.4 E2E golden flows | PARTIAL | | | | Flows 1-4 of 8, all THREE platforms. 22 pass / 20 skip / 0 fail in 1.2min. **Found audit P1-12** |
+| 1.3 API contract snapshots | DONE | | | | 108 tests, ~92s. **Found audit P1-11** |
+| 1.4 E2E golden flows | PARTIAL | | | | Flows 1-5, 8 of 8. E2E 22/20/0 in 1.2min; contract 108 in 92s. Flows 6, 7 remain |
 | 1.5 visual snapshots | NOT STARTED | | | | |
 | 1.6 offline/sync scenarios | NOT STARTED | | | | |
 | 1.7 mutation check of the net | NOT STARTED | | | | Prove it catches |
@@ -1042,6 +1042,45 @@ be tracked down.
 **iOS is unblocked** (WebKit installed 2026-08-31), so invariant #24 is
 satisfied for the flows written so far. The row stays PARTIAL because flows
 5-8 — cash shift, inventory, CSV import, kitchen — are still to write.
+
+### Flows 5 and 8 — placed in the CONTRACT suite (2026-08-31)
+
+Golden flows **5 (cash shift)** and **8 (kitchen ticket states)** are covered
+by `harness/contract/cash.test.ts` and `harness/contract/kitchen.test.ts`
+rather than by a browser, and that is a deliberate placement rather than a
+shortcut.
+
+Both flows' rules **are** API contracts. The kitchen's legal transitions, its
+409-on-stale, and its lazy row creation are decided entirely server-side; the
+board is a renderer for them. The drawer's figures come from RPCs
+(`get_shift_totals`, `get_register_performance`) for the explicit reason that
+summing a PostgREST select in JS is capped at 1,000 rows. Driving four cards
+across three columns in a browser would assert the same facts far more slowly
+and far more fragilely. The plan's §1 rule — *no test asserts on
+implementation detail, only on behaviour visible to a cashier or to an API
+caller* — is satisfied either way; these are the API-caller half.
+
+**Kitchen (12 tests):** the full walk `new → in_progress → ready → served`,
+backwards moves allowed (a cook who mistaps must be able to undo) without
+clearing `ready_at`, `served`/`voided` terminal, illegal transitions 400, a
+stale move 409 **carrying `current`** so the losing station can retry from the
+real state, and a forged `transaction_id` from another store refused with no
+row created.
+
+**Cash (7 tests):** one open shift per register enforced by the partial unique
+index rather than the API, a close recording the counted amount, a **second
+close returning 409 without overwriting the physical count** (the offline queue
+can push a close twice), a negative count rejected, another store's shift
+refused, and nothing auto-closing. It restores the fixture's open shift in
+`afterAll`, because other suites read it.
+
+> **One flaky test was rewritten rather than kept or deleted.** The first
+> version of the P1-12 cold-device test scanned quickly and hoped to beat
+> `refreshRecipes()` — it passed or failed on network timing. The plan has zero
+> tolerance for that, because one intermittent test teaches everyone to ignore
+> red. Blocking `/api/recipes` with `page.route(...abort())` makes it
+> deterministic **and** models the worse real case: a device offline on its
+> first launch has no recipes at all.
 
 ### 1.3 API contract snapshots (2026-08-31)
 

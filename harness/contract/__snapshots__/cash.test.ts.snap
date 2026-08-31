@@ -1,0 +1,98 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`closing a shift > records the counted amount and cannot be closed twice 1`] = `
+{
+  "shift": {
+    "assigned_to_owner": "boolean",
+    "assigned_user_id": "null",
+    "assigned_user_name": "null",
+    "business_date": "string",
+    "closed_at": "string",
+    "closed_by": "string",
+    "closed_by_name": "string",
+    "closing_ll": "number",
+    "closing_usd": "number",
+    "created_at": "string",
+    "id": "string",
+    "label": "null",
+    "notes": "null",
+    "opened_at": "string",
+    "opened_by": "string",
+    "opened_by_name": "string",
+    "opening_ll": "number",
+    "opening_usd": "number",
+    "register_id": "string",
+    "status": "string",
+    "store_id": "string",
+    "verified": "boolean",
+  },
+}
+`;
+
+exports[`drawer totals never double-count USD > the shift totals expose LL and USD as separate components 1`] = `
+{
+  "adjustments": {},
+  "employees": [
+    {
+      "display_name": "string",
+      "id": "string",
+      "permissions": {
+        "cash_register": "boolean",
+        "inventory": "boolean",
+        "kitchen": "boolean",
+        "pos": "boolean",
+        "receipts": "boolean",
+        "transactions": "boolean",
+      },
+      "username": "string",
+    },
+    "...",
+  ],
+  "pendingByRegister": {},
+  "registers": [
+    {
+      "created_at": "string",
+      "created_by": "null",
+      "created_by_name": "string",
+      "id": "string",
+      "is_active": "boolean",
+      "name": "string",
+      "sort_order": "number",
+      "store_id": "string",
+    },
+    "...",
+  ],
+  "shifts": [
+    {
+      "assigned_to_owner": "boolean",
+      "assigned_user_id": "null",
+      "assigned_user_name": "null",
+      "business_date": "string",
+      "closed_at": "string",
+      "closed_by": "string",
+      "closed_by_name": "string",
+      "closing_ll": "number",
+      "closing_usd": "number",
+      "created_at": "string",
+      "id": "string",
+      "label": "null",
+      "notes": "null",
+      "opened_at": "string",
+      "opened_by": "string",
+      "opened_by_name": "string",
+      "opening_ll": "number",
+      "opening_usd": "number",
+      "register_id": "string",
+      "status": "string",
+      "store_id": "string",
+      "verified": "boolean",
+    },
+    "...",
+  ],
+  "totals": {},
+  "unassigned": {
+    "count": "number",
+    "total": "number",
+  },
+}
+`;
