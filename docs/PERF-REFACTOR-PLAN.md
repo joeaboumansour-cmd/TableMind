@@ -863,8 +863,8 @@ these three it is achievable only in a real shop, on one store, watched.
 | 7.2 import audit /pos, /checkout | NOT STARTED | | | | Audited: Supabase 52.6KB gz + Dexie 30.2KB gz on every route. NOT the bottleneck — see the note |
 | 7.3 precache tiering | NOT STARTED | | | | |
 | 8.1 PostgREST cap audit | DONE | 5300c53 | | | **No money figure is truncated.** One real gap found, on the public menu |
-| 8.2 IndexedDB read strategy | NOT STARTED | | | | |
-| 8.3 pagination gaps | NOT STARTED | | | | |
+| 8.2 IndexedDB read strategy | DONE | | | | Premise no longer holds: 33ms read, 0 long tasks. Measured, not done |
+| 8.3 pagination gaps | DONE | | truncated at 1,000 | **1,304 of 1,304** | `.limit()` above 1,000 is a LIE. Two live truncations fixed + a gate |
 | 9.1 promote permanent gates | DONE | 2569e42 | 2 gates | **3 gates, 7 checks** | `verify:invariants`. All 7 mutation-checked. Found 2 real violations |
 | 9.2 final numbers | DONE | b7330df | see the note | | Assembled from one build. Two things are honestly NOT comparable — said so |
 | 9.3 keep-or-delete decision | NOT STARTED | | | | Branch A expected; tag first either way |
@@ -1052,6 +1052,96 @@ be tracked down.
 **iOS is unblocked** (WebKit installed 2026-08-31), so invariant #24 is
 satisfied for the flows written so far. The row stays PARTIAL because flows
 5-8 — cash shift, inventory, CSV import, kitchen — are still to write.
+
+### 8.2 / 8.3 — `.limit()` above 1,000 does not do what it looks like it does (2026-09-01)
+
+#### 8.2: the premise no longer holds
+
+*"The full catalogue read at boot is the largest main-thread block on a phone;
+consider a worker or an indexed partial read."*
+
+Measured instead: `getAll` over 2,492 products is **33 ms**, and after Phase 4.2
+there are **zero long tasks** during boot on desktop or android. There is no
+block left to move to a worker. Recorded as measured-and-declined rather than
+done for the row's sake — at the 20,000-product target it may return, and
+`harness:bench:till` is there to say so.
+
+#### 8.3: the finding
+
+Chasing pagination gaps turned up something worse than a gap. **Supabase
+configures PostgREST with `db-max-rows = 1000`, and that is a CEILING, not a
+default.** Measured against the live project, on a table with 2,492 matching
+rows:
+
+| Request | Rows returned |
+|---|---:|
+| no limit | 1,000 |
+| `.limit(2500)` | **1,000** |
+| `.limit(5000)` | **1,000** |
+
+So this shape, which appears three times in the codebase, is broken twice over:
+
+```ts
+.limit(RECIPE_CAP)                      // RECIPE_CAP = 5000
+truncated: rows.length >= RECIPE_CAP    // can NEVER be true
+```
+
+The read is silently cut at 1,000 **and** the guard that exists to notice it
+cannot fire. It reads as careful and is not.
+
+**Live consequences, on stock:**
+
+- **`/api/recipes`** (cap 5000) — a store past 1,000 recipe components served a
+  short recipe set flagged `truncated: false`. The client adopts it, and
+  `buildStockDecrements()` then deducts nothing for the components that fell off
+  the end. Silent, and invisible until a stock take.
+- **`/api/combos`** (cap 2000) — a meal missing half its contents, flagged
+  complete.
+- **The public menu** — and this one is mine: 8.1 "fixed" its unbounded read
+  three commits ago by adding `.limit(2000)`, which changed nothing. I made the
+  same mistake while fixing it, which is the best argument for the gate below.
+
+#### The fix
+
+`src/lib/supabase/paginate.ts` — `fetchAllPages()`, the `.range()` loop
+`fetchAllProducts()` has always had, extracted so the next caller cannot get it
+wrong. All three reads now page, with `.order("id")` added as the **tiebreaker**
+that `sort_order` cannot provide: without it, equal rows shift between requests
+and are skipped or duplicated across a page boundary.
+
+`callerAndRead` now also returns its `supabase` client, so later pages are read
+**after** the caller is confirmed — strictly safer than the first page, which
+deliberately races auth.
+
+**Proven against the live database**, not argued: 1,300 extra components seeded
+into the fixture store, read back through the real route, then deleted.
+
+| | Rows in the DB | Rows the API returned |
+|---|---:|---:|
+| Before | 1,304 | **1,000** *(truncated, flagged complete)* |
+| First attempt | 1,304 | **2,304** *(page 1 read twice)* |
+| After | 1,304 | **1,304** ✓ |
+
+The middle row is the point of testing at all. `fetchAllPages` started at row 0
+while `callerAndRead` had already read rows 0–999, so the first page came back
+twice. It takes a `startAt` now, and the reason is written above it. Fixture
+restored to its original 4 components, verified 17/17.
+
+> A second trap, recorded because it cost two attempts: **PostgREST `like` does
+> not apply to a `uuid` column.** The seed cleanup filtered `id=like.eeee000b*`,
+> matched nothing, deleted nothing, and returned 204 — leaving 1,300 rows behind
+> until they were removed by explicit id list. A DELETE that "succeeds" having
+> deleted nothing is a bad way to find that out.
+
+#### And a gate, because I made the mistake myself
+
+`verify:invariants` gains an **eighth** check: no `.limit()` with a literal above
+1,000, anywhere in `src/`. Mutation-checked — reintroducing `.limit(5000)` fails
+the build with the file and line.
+
+**Verified:** 17/17 fixture integrity, 124/124 contract, 26/26 E2E desktop,
+175/175 unit, typecheck clean, lint unchanged at 207, build green with all three
+gates and 8 invariant checks.
 
 ### 5.1 / 5.2 the wait register — and the one that was still real (2026-09-01)
 

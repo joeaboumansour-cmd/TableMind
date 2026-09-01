@@ -168,6 +168,29 @@ const CHECKS = [
     ],
   },
   {
+    name: "invariant 19 — no PostgREST .limit() above the 1,000-row ceiling",
+    run: () => {
+      const found = [];
+      for (const f of files) {
+        f.code.split("\n").forEach((line, i) => {
+          const m = /\.limit\(\s*(\d+)\s*\)/.exec(line);
+          if (m && Number(m[1]) > 1000) found.push(`${f.path}:${i + 1}  .limit(${m[1]})`);
+        });
+      }
+      return found;
+    },
+    why: [
+      "Supabase configures PostgREST with db-max-rows = 1000, and that is a",
+      "CEILING, not a default: `.limit(5000)` still returns 1,000 rows —",
+      "measured against the live project. So the read is silently truncated AND",
+      "any `truncated: rows.length >= CAP` guard computed from it can never",
+      "fire, which reads as careful and is not. /api/recipes and /api/combos",
+      "both shipped exactly this, serving short recipe and combo sets flagged",
+      "as complete — the till then under-deducted stock on what fell off the",
+      "end. Page it with .range() instead: see src/lib/supabase/paginate.ts.",
+    ],
+  },
+  {
     name: "bundle rule — nothing imports from @/components/BarcodeScanner",
     run: () => hits(/from\s+["']@\/components\/BarcodeScanner["']/),
     why: [
