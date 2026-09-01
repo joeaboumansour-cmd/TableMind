@@ -841,7 +841,7 @@ these three it is achievable only in a real shop, on one store, watched.
 | 3.0 parallelise the boot delta+count | DONE | | ~600ms serial | **~300ms parallel** | Brought forward from 0.3's finding |
 | 3.2 migrate /pos | DONE | 17edb7b | 6 menu requests per remount | **3** | Closes audit **P1-12** + a second gap it uncovered in the feature flags |
 | 3.3 migrate /pos/products | DONE | fb28138 | 9 menu requests per walk | **3** | Legacy loaders deleted. Also fixed a pre-existing race in the queued-sale test |
-| 3.4 migrate /transactions | NOT STARTED | | | | |
+| 3.4 migrate /transactions | DONE | | 2 fetches per mount | **1** | **Migration assessed and deliberately NOT done** — see the note. Fixed the real defect instead, which also fixed /kitchen |
 | 3.5 migrate /pos/cash + /kitchen | NOT STARTED | | | | |
 | 4.1 memo boundaries | NOT STARTED | | | | |
 | 4.2 History virtualization | NOT STARTED | | | | |
@@ -1046,6 +1046,88 @@ be tracked down.
 **iOS is unblocked** (WebKit installed 2026-08-31), so invariant #24 is
 satisfied for the flows written so far. The row stays PARTIAL because flows
 5-8 — cash shift, inventory, CSV import, kitchen — are still to write.
+
+### 3.4 /transactions — the migration was the wrong tool, and measuring said so (2026-08-31)
+
+**The step as written was "migrate /transactions onto the data layer". It should
+not be, and the measurement is why.** Recorded in full so this is a decision
+rather than a step someone skipped.
+
+#### What /transactions actually does on mount — measured first
+
+| Request | Count |
+|---|---:|
+| `/api/transactions?limit=50` | **2** |
+| `/api/transactions/analytics` | 1 |
+| `/api/admin/stores/features` | 1 |
+
+The duplicate is real and it is the whole finding. It is **not** the shape the
+primitive fixes, though:
+
+- **In-flight dedup would not have caught it.** The two calls are 500 ms apart,
+  by an explicit `setTimeout`. The first has usually resolved before the second
+  starts.
+- **`staleTime` would have caught it — and been wrong.** History is the screen
+  a cashier opens *to see the sale they just made*. A stale window that skips
+  the revalidate is a correct optimisation for a menu that changes weekly and a
+  behaviour regression for a list of today's takings.
+
+So the primitive would have masked the bug with a mechanism that costs freshness
+on the one screen whose job is freshness. **Tier 3 also says do not gold-plate
+the back office.** The fit is poor in three further ways: the cache is Dexie
+(async, while `read()` is synchronous by design so the first paint is right),
+the list is cursor-paginated with `loadMore` appending, and the feed is merged
+with the offline queue before it is rendered.
+
+#### The actual defect: a replay mistaken for a transition
+
+`connectivity.subscribe()` calls its listener **once immediately with the
+current status**. That is right for a subscriber asking *"am I online?"* — an
+indicator, a banner, a disabled button. It is wrong for one acting on a
+*transition*, and two screens read it as "the network just came back":
+
+```ts
+// mount effect: fetch page 1
+// connectivity effect: subscribe(...) -> replays "online" -> fetch page 1 AGAIN
+```
+
+`subscribe` now takes `{ replay: false }`. Purely additive; the default is
+unchanged, and each call site opts in explicitly.
+
+**Controlled comparison, old code rebuilt and measured on the same machine
+minutes apart:**
+
+| Screen | Before | After |
+|---|---:|---:|
+| `/transactions` — `/api/transactions?limit=50` per mount | **2** | **1** |
+| `/kitchen` — `/api/kitchen/tickets` per mount | **2** | **1** |
+
+`/kitchen` was the same bug, found by grepping the other subscribers rather than
+by looking for it: `start()` loads the board, then the replay loads it again.
+
+#### What was deliberately NOT changed
+
+- **`syncEngine`** replays into `syncNow()` at boot. Left alone: the code says
+  in a comment that it is guarded by `syncInProgress` and that the listener may
+  fire alongside `initialize()`, `initialize()` has a `count === 0` fallback for
+  exactly that case, and there is no measured defect. It is the money path;
+  a speculative change there is the trade §11 forbids.
+- **The activity flusher** replays into `drainActivityBuffer()`. It wants the
+  boot trigger, the buffer is expendable, and it has its own interval anyway.
+
+#### Still open on this screen, deliberately
+
+`/api/admin/stores/features` is fetched again on **every screen mount** —
+three times across a `/pos` → History → `/pos` walk. `useFeatureFlags` dedups
+in flight but has no stale window. That IS a textbook resource: small,
+store-scoped, already localStorage-cached, read synchronously. It is also the
+highest-blast-radius module on the client — it gates the menu, the cash page and
+the kitchen board across ten components, and §2.2 already records one near-miss
+there. **Worth doing, worth doing on its own, and not worth bolting onto a step
+about the History screen.**
+
+**Verified:** 21/21 E2E desktop, 158/158 harness unit, typecheck clean, lint
+unchanged at main’s 207/77/130, build green.
 
 ### 3.3 migrate /pos/products — Phase 3’s number, end to end (2026-08-31)
 

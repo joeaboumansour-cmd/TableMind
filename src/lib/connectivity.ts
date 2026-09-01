@@ -144,10 +144,29 @@ class Connectivity {
     return this._status === "offline";
   }
 
-  subscribe(listener: ConnectivityListener): () => void {
+  /**
+   * Watch connectivity.
+   *
+   * By default the listener is called ONCE IMMEDIATELY with the current status,
+   * which is what a subscriber asking "am I online?" wants — an indicator, a
+   * banner, a disabled button.
+   *
+   * `{ replay: false }` suppresses that first call, for a subscriber that acts
+   * on a TRANSITION rather than on a value. The two are easy to conflate and
+   * the conflation costs real requests: `/transactions` and `/kitchen` both
+   * reloaded on the replay as though the network had just come back, so every
+   * mount of either screen fetched its list TWICE. Measured 2026-08-31.
+   *
+   * Deliberately opt-in, and deliberately not the default: `syncEngine` and the
+   * activity flusher both WANT the boot-time trigger, and the sync engine's is
+   * explicitly guarded by `syncInProgress`.
+   */
+  subscribe(
+    listener: ConnectivityListener,
+    options: { replay?: boolean } = {}
+  ): () => void {
     this.listeners.add(listener);
-    // Immediately notify with current status
-    listener(this._status);
+    if (options.replay !== false) listener(this._status);
     return () => {
       this.listeners.delete(listener);
     };

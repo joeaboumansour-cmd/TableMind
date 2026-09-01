@@ -617,6 +617,12 @@ function TransactionHistoryPageContent() {
   useEffect(() => {
     setIsOffline(!connectivity.isOnline);
 
+    // `replay: false` — this handler acts on a TRANSITION. The default replays
+    // the current status immediately, which this read as "the network just came
+    // back" and answered with a second full fetch 500ms after the one the mount
+    // effect above had already issued. Every visit to History fetched page 1,
+    // with its nested line items, twice. The initial UI state is set from
+    // `connectivity.isOnline` on the line above, so nothing is lost.
     const unsubscribe = connectivity.subscribe((status) => {
       if (status === "online") {
         setIsOffline(false);
@@ -627,7 +633,7 @@ function TransactionHistoryPageContent() {
       } else {
         setIsOffline(true);
       }
-    });
+    }, { replay: false });
 
     return unsubscribe;
   }, [fetchTransactions, loadPendingTransactions]);
