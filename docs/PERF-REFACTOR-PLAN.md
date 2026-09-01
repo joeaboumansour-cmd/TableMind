@@ -836,6 +836,7 @@ these three it is achievable only in a real shop, on one store, watched.
 | 2.2 route kernel | DONE | | 576-594ms | **303-318ms** | Closed audit P0-2; 4 GETs converted to one wave |
 | 2.3 generated DB types | NOT STARTED | | | | |
 | 2.4 index & query audit | NOT STARTED | | | | |
+| 2.2b finish the serial-GET conversion | DONE | | 543ms each | **325 / 275ms** | `features` and `kitchen/tickets`. Found by measuring, not by the survey |
 | 2.5 edge runtime pass | NOT STARTED | | | | |
 | 3.1 data primitive | DONE | a36e978 | | | `src/lib/data/`. 27 harness tests. No screen migrated yet — that is 3.2 |
 | 3.0 parallelise the boot delta+count | DONE | | ~600ms serial | **~300ms parallel** | Brought forward from 0.3's finding |
@@ -857,7 +858,7 @@ these three it is achievable only in a real shop, on one store, watched.
 | 6.2 quota & eviction order | NOT STARTED | | | | Queued sales never shed |
 | 6.3 three-week shelf-life drill | NOT STARTED | | | | All three platforms |
 | 7.1 route budgets enforced | NOT STARTED | | | | |
-| 7.2 import audit /pos, /checkout | NOT STARTED | | | | |
+| 7.2 import audit /pos, /checkout | NOT STARTED | | | | Audited: Supabase 52.6KB gz + Dexie 30.2KB gz on every route. NOT the bottleneck — see the note |
 | 7.3 precache tiering | NOT STARTED | | | | |
 | 8.1 PostgREST cap audit | NOT STARTED | | | | |
 | 8.2 IndexedDB read strategy | NOT STARTED | | | | |
@@ -1049,6 +1050,109 @@ be tracked down.
 **iOS is unblocked** (WebKit installed 2026-08-31), so invariant #24 is
 satisfied for the flows written so far. The row stays PARTIAL because flows
 5-8 — cash shift, inventory, CSV import, kitchen — are still to write.
+
+### Where the time actually is, after Phase 4 (2026-09-01)
+
+Phase 7 was next by the plan's order. Measuring first said otherwise, and
+pointed at unfinished Phase 2 work instead.
+
+#### The client is no longer the problem
+
+| | Desktop | Android |
+|---|---:|---:|
+| Boot (honest metric, median) | 283 ms | **128 ms** |
+| Scan → paint | 27 ms | — (camera till) |
+| Route change | **21 ms** | — |
+| Main-thread blocking during boot | **0 ms** | **0 ms** |
+
+Route changes were never measured before and needed nothing: 21 ms across
+`/pos`, `/transactions`, `/pos/products` and `/pos/cash`.
+
+#### Phase 7 audited, and deliberately not done yet
+
+`/pos` first load is 362 KB gz over 30 chunks, of which 155 KB is shared by
+every route (framework). The two biggest route-specific chunks are on **every**
+screen:
+
+| Chunk | gz | Why it is there |
+|---|---:|---|
+| `@supabase/ssr` | **52.6 KB** | `AuthContext` calls `createClient()` at MODULE SCOPE, and AuthContext is in the root providers |
+| `dexie` | **30.2 KB** | The offline queue and the products cache. Genuinely needed on `/pos` and `/checkout` |
+
+Getting Supabase off the initial parse means lazy-importing it in AuthContext,
+the sync engine, `frequentlyUsed` and the till's barcode fallback — four
+modules, two of them money-adjacent. **The payoff is parse time only**: the
+bundle is precached, so after the first install it is read from Cache Storage
+and never re-downloaded. With boot at 283/128 ms and **zero** long tasks, there
+is no measured parse cost left to reclaim. Audited, recorded, and left NOT
+STARTED rather than done on principle.
+
+#### What the measurement DID find: the server
+
+Every `/api/*` call in a normal session, wall time from the browser:
+
+| Route | ms |
+|---|---:|
+| `/api/cash-shifts` | 849 |
+| `/api/register-requests` | 838 |
+| `/api/admin/stores/features` | 613 |
+| `/api/transactions` | 577 |
+| categories / combos / recipes | ~320-350 |
+
+The plan's own §2.2 established the floor at **one round trip, ~300 ms**, and
+said seven routes still did a serial `resolveCaller`-then-read. Two of the
+worst offenders were never converted — and neither was on that survey's list,
+because the survey looked at the shape of the code and this looked at the
+clock.
+
+**Controlled comparison, same script, same machine, minutes apart:**
+
+| Route | Before | After | Saved |
+|---|---:|---:|---:|
+| `/api/admin/stores/features` | 543 ms | **325 ms** | −218 ms (−40%) |
+| `/api/kitchen/tickets` | 543 ms | **275 ms** | −268 ms (−49%) |
+| `/api/categories` *(control, already one wave)* | 275 ms | 277 ms | unchanged |
+
+The control is the point: it did not move, so the two that did, moved for the
+reason claimed.
+
+**`kitchen/tickets`** polls all service long on a screen a cook stands in front
+of, and paid full latency twice on every poll. Converted with `callerAndRead`;
+the `kitchen` section check still gates the RESPONSE, so a cashier without it
+gets 403 and never sees a ticket.
+
+**`admin/stores/features`** carried a comment asserting the serial shape was
+necessary — *"the read below cannot start until we know which store is
+allowed, and that is the point"*. It is not, for the till's path, and the fix
+turns on **why**:
+
+> The read must be scoped to the store the caller is **claiming in their own
+> header**, so that a failed auth discards a read of *their own* store. Here
+> the store id arrives as a **query parameter**, which a caller controls
+> independently of their header — so racing auth against a read scoped to the
+> parameter would be a genuinely weaker property than the one §2.2 established,
+> not the same one.
+>
+> So the equality check `callerStore === storeId` comes FIRST. It costs no
+> round trip, and once it holds, the parameter *is* the caller's own claim and
+> the race is exactly the established pattern. Any other store means an admin,
+> and that path stays serial on purpose: `verifyAdminSession` is a cookie
+> verification with no database round trip, so racing it would save nothing and
+> would start a read of a store the caller has not claimed.
+
+#### Still open, with numbers
+
+- **`/api/cash-shifts` at 849 ms** — three parallel waves, but the waves are
+  serial with respect to each other (register ids → shifts → totals), so it is
+  ~3 round trips. Collapsing it needs an RPC, i.e. a migration.
+- **`/api/register-requests` at 838 ms** — §2.2 deliberately declined to
+  convert it because its GET calls `expireStale()`, a WRITE, before the read.
+  That reasoning still holds; the number is now recorded against it.
+- **`/api/transactions` at 577 ms** — already one wave for caller + retention;
+  the remainder is the nested `transaction_items` read.
+
+**Verified:** 124/124 contract, 23/23 E2E desktop, 161/161 unit, typecheck
+clean, lint unchanged at 208, build green.
 
 ### Phase 4 — the till grid, and the metric that was lying (2026-09-01)
 

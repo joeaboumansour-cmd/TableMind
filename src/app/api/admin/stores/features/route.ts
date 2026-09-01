@@ -32,28 +32,47 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: "store_id is required" }, { status: 400 });
     }
 
-    // An admin may read any store. Checked first because it is a cookie
-    // verification with no database round trip.
-    const admin = await verifyAdminSession(request);
-    if (!admin) {
-      // Otherwise the caller must BE this store. resolveCaller runs
-      // concurrently with nothing here — the read below cannot start until we
-      // know which store is allowed, and that is the point.
-      const { storeId: callerStore, userId } = readAuthHeader(request);
-      if (!callerStore || callerStore !== storeId) {
-        return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-      }
-      const caller = await resolveCaller(supabase, callerStore, userId);
+    const readFeatures = () =>
+      supabase.from("stores").select("features, store_type").eq("id", storeId).single();
+
+    const { storeId: callerStore, userId } = readAuthHeader(request);
+
+    // THE TILL'S PATH, and the hot one: a store reading its OWN flags.
+    //
+    // One wave, not two. This resolved the caller and THEN read, so every
+    // caller paid full network latency twice — measured at 613 ms against a
+    // ~300 ms single-round-trip floor, on a route `useFeatureFlags` puts on the
+    // boot path of every screen.
+    //
+    // Safe for exactly the reason CLAUDE.md gives for the routes already doing
+    // it, and note WHY the equality check comes first: it makes the read scoped
+    // to the store the caller is CLAIMING IN THEIR OWN HEADER. A failed auth
+    // then discards a read of their own store — which is the property that
+    // makes racing auth acceptable, and it would be lost if the read were
+    // scoped to the query parameter before knowing the two agree.
+    let result;
+    if (callerStore && callerStore === storeId) {
+      const [caller, read] = await Promise.all([
+        resolveCaller(supabase, callerStore, userId),
+        Promise.resolve(readFeatures()),
+      ]);
       if (!caller) {
         return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
       }
+      result = read;
+    } else {
+      // Any OTHER store means an admin, and only an admin. Left serial on
+      // purpose: `verifyAdminSession` is a cookie verification with no database
+      // round trip, so racing it would save nothing and would start a read of
+      // a store the caller has not claimed.
+      const admin = await verifyAdminSession(request);
+      if (!admin) {
+        return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      }
+      result = await readFeatures();
     }
 
-    const { data, error } = await supabase
-      .from("stores")
-      .select("features, store_type")
-      .eq("id", storeId)
-      .single();
+    const { data, error } = result;
 
     if (error) {
       console.error("Error fetching store features:", error);
