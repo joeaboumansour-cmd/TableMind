@@ -866,7 +866,7 @@ these three it is achievable only in a real shop, on one store, watched.
 | 8.2 IndexedDB read strategy | NOT STARTED | | | | |
 | 8.3 pagination gaps | NOT STARTED | | | | |
 | 9.1 promote permanent gates | DONE | 2569e42 | 2 gates | **3 gates, 7 checks** | `verify:invariants`. All 7 mutation-checked. Found 2 real violations |
-| 9.2 final numbers | NOT STARTED | | | | Per platform |
+| 9.2 final numbers | DONE | | see the note | | Assembled from one build. Two things are honestly NOT comparable — said so |
 | 9.3 keep-or-delete decision | NOT STARTED | | | | Branch A expected; tag first either way |
 | 9.4 update CLAUDE.md §8 + audit | NOT STARTED | | | | §8 becomes false if kept |
 
@@ -1052,6 +1052,118 @@ be tracked down.
 **iOS is unblocked** (WebKit installed 2026-08-31), so invariant #24 is
 satisfied for the flows written so far. The row stays PARTIAL because flows
 5-8 — cash shift, inventory, CSV import, kitchen — are still to write.
+
+### 9.2 final numbers (2026-09-01)
+
+All from **one build**, production (`npm run start`), against the harness store:
+**2,492 products, 300 transactions**. Static assets are local; every API and
+Supabase call is the real remote project.
+
+#### Read this first — two things are NOT comparable
+
+1. **The Phase 0 boot baseline measures a different thing.** It recorded
+   `perf.boot` at 167 ms, and Phase 4.0 established that the metric was firing
+   when AUTH resolved rather than when the till was usable — every sample
+   carried `products: 0` while IndexedDB held 2,492. The honest pre-refactor
+   number for the same event is **970 ms**, measured during 4.0 on the pre-fix
+   build. Comparing today's figure to 167 ms would invent a regression;
+   comparing it to 970 ms is the real comparison, and that is the one used
+   below.
+2. **The Phase 0 runtime baseline was a different store** (`daoud`: 2,280
+   products, 93 transactions). Request *structure* is comparable; absolute paint
+   timings are not, and the plan already warns that localhost paint numbers are
+   a floor no shop will see.
+
+#### The client
+
+| | Phase 0 | Now | |
+|---|---:|---:|---|
+| Boot → usable till, desktop | 970 ms *(honest metric)* | **129 ms** | −87% |
+| Boot → usable till, android | not measured | **129 ms** | — |
+| Scan → paint, desktop | 37 ms *(pre-4.2)* | **29 ms** | −22% |
+| Route change | not measured | **21 ms** | — |
+| DOM nodes on the till | 12,666 | **361** | −97% |
+| Main-thread blocking during boot | 833 ms | **0 ms** | — |
+
+Boot improved twice: Phase 4.2 took it 970 → 283 ms by virtualising the grid,
+and the API work took it 283 → 129 ms, because the feature-flag fetch sits on
+the boot path.
+
+#### The server — every route at the one-round-trip floor but one
+
+| Route | Phase 0 / session start | Now |
+|---|---:|---:|
+| `/api/cash-shifts` | 849 ms | **293 ms** |
+| `/api/register-requests` | 817 ms | **275 ms** |
+| `/api/kitchen/tickets` | 543 ms | **271 ms** |
+| `/api/admin/stores/features` | 543 ms | **270 ms** |
+| `/api/categories` *(control, unchanged all session)* | 275 ms | **268 ms** |
+| `/api/recipes` | — | 268 ms |
+| `/api/cash-registers/analytics` | 576 ms → 303 ms *(2.2)* | 269 ms |
+| **`/api/transactions`** | — | **544 ms** — still open |
+
+The control is what makes the rest readable: `categories` was already one wave
+and did not move, so the routes that did, moved for the reason claimed.
+`/api/transactions` is the one outlier left — already one wave for caller and
+retention; the remainder is its nested `transaction_items` read.
+
+#### Requests per journey
+
+A **full page load** is unchanged by design — 4 API calls on `/pos`, same as
+Phase 0 — because `staleTime` is per-tab and a cold launch must never show a
+stale menu.
+
+The win is on **client-side navigation**, which is how a cashier actually moves:
+
+| Journey | Before | Now |
+|---|---:|---:|
+| `/pos` → Inventory → `/pos` (menu data) | 9 requests | **3** |
+| Same walk (feature flags) | 3 | **1** |
+| `/transactions` per mount | 2 | **1** |
+| `/kitchen` per mount | 2 | **1** |
+
+#### Bundles
+
+| Route | Phase 0 gz | Now gz | |
+|---|---:|---:|---|
+| `/pos` | 344.2 KB | 355.3 KB | **+11.1**, deliberate |
+| `/pos/products` | 356.7 KB | 359.4 KB | +2.7 |
+| `/checkout` | 336.0 KB | 337.2 KB | +1.2 |
+| `/pos/cash` | 334.4 KB | 335.4 KB | +1.0 |
+| `/transactions` | 329.6 KB | 330.7 KB | +1.1 |
+| `/kitchen` | 322.5 KB | 323.5 KB | +1.0 |
+
+**Bundles grew, and that is the right answer.** ~1 KB everywhere is the data
+layer and the durability code in the shared shell. The +11 KB on `/pos` is
+`@tanstack/react-virtual`, bought deliberately: it removed 833 ms of
+main-thread blocking per launch and made every scan 22% faster. `verify:budgets`
+blocked the build until that was recorded, which is exactly its job.
+
+The precache is **unchanged at 3.28 MB** — the 864 KB of iOS launch screens are
+excluded from it, and `verify-sw` asserts that.
+
+#### What did NOT move, and why
+
+- **`/api/transactions` at 544 ms** — nested read, not a wave problem.
+- **Supabase at 52.6 KB gz on every route** — audited in Phase 7 and left:
+  the payoff is parse time only (the bundle is precached), and with zero long
+  tasks there is no measured parse cost to reclaim.
+- **13 raw `* SELL_RATE` sites** — recorded in 9.1, needs a money audit.
+- **iOS numbers** — Playwright's WebKit posts no activity events, so `perf.*`
+  cannot be read there at all. Every iOS figure in this plan is desktop or
+  Android; the real device belongs to 6.3.
+
+#### Bugs found and fixed along the way
+
+Not the goal, but the more valuable half of the result: **P1-12**, **P1-13**,
+the till rendering with an empty catalogue, the cash page bouncing cashiers on a
+cold device, the unknown-barcode prompt inviting duplicate products, a
+`.limit()` that could hide a register's last shift, an unbounded read on the
+public menu, a double fetch on two screens, and a money test that passed for the
+wrong reason.
+
+Five of those are one root cause, now written down in three places and gated in
+one: **an absent answer is not a negative answer.**
 
 ### 9.1 the permanent gates — and two things they caught on the way in (2026-09-01)
 
