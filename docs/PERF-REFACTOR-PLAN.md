@@ -842,6 +842,7 @@ these three it is achievable only in a real shop, on one store, watched.
 | 3.2 migrate /pos | DONE | 17edb7b | 6 menu requests per remount | **3** | Closes audit **P1-12** + a second gap it uncovered in the feature flags |
 | 3.3 migrate /pos/products | DONE | fb28138 | 9 menu requests per walk | **3** | Legacy loaders deleted. Also fixed a pre-existing race in the queued-sale test |
 | 3.4 migrate /transactions | DONE | deb9c71 | 2 fetches per mount | **1** | **Migration assessed and deliberately NOT done** — see the note. Fixed the real defect instead, which also fixed /kitchen |
+| 3.4b feature flags onto the data layer | DONE | | 3 flag fetches per walk | **1** | Found and fixed audit **P1-13** — the cash page bounced on a cold device |
 | 3.5 migrate /pos/cash + /kitchen | NOT STARTED | | | | |
 | 4.1 memo boundaries | NOT STARTED | | | | |
 | 4.2 History virtualization | NOT STARTED | | | | |
@@ -1046,6 +1047,77 @@ be tracked down.
 **iOS is unblocked** (WebKit installed 2026-08-31), so invariant #24 is
 satisfied for the flows written so far. The row stays PARTIAL because flows
 5-8 — cash shift, inventory, CSV import, kitchen — are still to write.
+
+### 3.4b feature flags onto the data layer — and a live bug fell out (2026-09-01)
+
+Flagged as "still open, deliberately" by 3.4 and taken next, because it was the
+biggest remaining win: `useFeatureFlags` is mounted by around ten components and
+had no stale window, so **every screen mount re-fetched the flags**.
+
+#### Measured
+
+Controlled comparison, old code rebuilt on the same machine minutes apart.
+`/pos` → History → `/pos`, client-side, counting `/api/admin/stores/features`:
+
+| | Before | After |
+|---|---:|---:|
+| after `/pos` | 1 | 1 |
+| after History | 2 | **1** |
+| after returning | **3** | **1** |
+
+The hook lost its own in-flight map, its own cache read/write, its own
+`sameFlags` re-render guard and its own state machine — all of which the
+resource already had — and kept only the mapping from `ResourceState` to what
+its callers expect.
+
+#### Two additions to the primitive, both earned by this migration
+
+1. **`equals`.** Without it a revalidate replaces `data` with a new object and
+   re-renders every subscriber even when the server confirmed exactly what was
+   already on screen. `useFeatureFlags` had this as a hand-written check with a
+   comment explaining why it could not afford to lose it — confirming the flags
+   re-renders the tab bar, whose height feeds the inventory list's virtualiser.
+   It is now a property of the primitive, available to every resource.
+2. **`loading` means a FIRST load, not any load.** `fetchedAt` moved out of the
+   public state (nothing read it; it is `staleTime` bookkeeping) and a
+   revalidation of already-hydrated data no longer announces itself. Together
+   these mean a revalidate that changes nothing costs **zero renders** where it
+   previously cost two — one when it started, one when it finished — for every
+   subscriber. It also matches Phase 5 rule 2: nobody should spin for work that
+   cannot change what they do next.
+
+#### The bug it found — audit P1-13
+
+**`cash_register` defaults to FALSE**, and the cash page's guard keyed on
+`isLoading`, which goes false as soon as there is something renderable — the
+*guess*. Opening `/pos/cash` on a device that had never cached this store's
+flags threw the cashier back to `/pos` with "Cash Register is not enabled for
+this store", for a store that has it switched on.
+
+Reproduced on the pre-fix build: the browser lands on `/pos`. It self-corrects
+on the next visit, once a flags cache exists, which is exactly why it would have
+read as flakiness rather than a bug.
+
+**Third instance of one root cause**, and it keeps recurring because the code
+had no word for it until this refactor gave it one:
+
+| Where | What was mistaken for an answer |
+|---|---|
+| `evaluateReconcile()` | a truncated id list read as "these products were deleted" |
+| P1-12 | an unloaded recipe cache read as "this product has no recipe" |
+| **P1-13** | an unresolved feature flag read as "this feature is off" |
+
+`isLoading` keeps its meaning on purpose: a guard that waited for a real answer
+on a device offline with no cache would spin forever. The two signals are
+genuinely different questions, which is why the fix is a second signal rather
+than a redefinition of the first.
+
+Regression-guarded by `harness/e2e/flags.spec.ts` on a fresh context — the
+population that hits it.
+
+**Verified:** 23/23 E2E desktop (two new), 15 passed / 30 skipped on
+android+ios with only the pre-existing iOS WebKit failure, 161/161 harness unit
+(four new), typecheck clean, lint unchanged at main’s 207/77/130, build green.
 
 ### 3.4 /transactions — the migration was the wrong tool, and measuring said so (2026-08-31)
 

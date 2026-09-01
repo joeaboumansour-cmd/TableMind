@@ -148,7 +148,6 @@ describe("a failed revalidate never empties the cache", () => {
     expect(state.hydrated).toBe(true);
     expect(state.loading).toBe(false);
     expect(state.error?.message).toBe("network down");
-    expect(state.fetchedAt).toBeNull();
   });
 
   it("never rejects, whatever the fetch does", async () => {
@@ -249,6 +248,52 @@ describe("one request per (resource, store)", () => {
     expect(h.fetches).toEqual(["store-a"]);
   });
 
+  it("keeps the OLD reference, and notifies nobody, when equals says nothing changed", async () => {
+    const h = makeResource({ equals: (a, b) => a.join() === b.join() });
+    h.cache["store-a"] = ["cheese"];
+    const before = getResourceState(h.def, "store-a").data;
+    const listener = vi.fn();
+    subscribeResource(h.def, "store-a", listener);
+
+    const run = refreshResource(h.def, "store-a");
+    // Not even a loading notify: this resource is already hydrated.
+    expect(listener).not.toHaveBeenCalled();
+    h.settle(["cheese"]); // same ANSWER, different object
+    const state = await run;
+
+    expect(state.data).toBe(before);
+    expect(state.hydrated).toBe(true);
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it("still restarts the stale window when equals says nothing changed", async () => {
+    // The fetch DID happen — confirming the answer is as good as changing it,
+    // as far as "do we need to ask again" is concerned.
+    const h = makeResource({
+      staleTime: 60_000,
+      equals: (a, b) => a.join() === b.join(),
+    });
+    h.cache["store-a"] = ["cheese"];
+
+    const run = refreshResource(h.def, "store-a");
+    h.settle(["cheese"]);
+    await run;
+    expect(h.fetches).toHaveLength(1);
+
+    await refreshResource(h.def, "store-a");
+    expect(h.fetches).toHaveLength(1);
+  });
+
+  it("still adopts a genuinely different value", async () => {
+    const h = makeResource({ equals: (a, b) => a.join() === b.join() });
+    h.cache["store-a"] = ["cheese"];
+
+    const run = refreshResource(h.def, "store-a");
+    h.settle(["pickles"]);
+
+    expect((await run).data).toEqual(["pickles"]);
+  });
+
   it("a synchronous throw in fetch does not strand the resource in flight", async () => {
     const h = makeResource({
       fetch: () => {
@@ -300,7 +345,7 @@ describe("subscriptions", () => {
     subscribeResource(h.def, "store-a", listener);
 
     void refreshResource(h.def, "store-a");
-    expect(listener).toHaveBeenCalledTimes(1); // loading: true
+    expect(listener).toHaveBeenCalledTimes(1); // loading: true — nothing cached
 
     // A second caller joining an in-flight request must not push a render
     // through everyone already watching it.
@@ -341,15 +386,18 @@ describe("isAwaitingFirstLoad — the P1-12 distinction", () => {
     expect(isAwaitingFirstLoad(getResourceState(h.def, "store-a"))).toBe(false);
   });
 
-  it("is false once a hydrated resource is merely revalidating", async () => {
+  it("a hydrated resource revalidating in the background reports nothing", async () => {
     const h = makeResource();
     h.cache["store-a"] = ["cheese"];
 
     void refreshResource(h.def, "store-a");
     const state = getResourceState(h.def, "store-a");
 
-    expect(state.loading).toBe(true);
+    // `loading` is a FIRST load, not any load. Nobody should spin for a refresh
+    // of what is already on screen, and saying so would re-render them twice.
+    expect(state.loading).toBe(false);
     expect(isAwaitingFirstLoad(state)).toBe(false);
+    expect(h.fetches).toEqual(["store-a"]); // it IS fetching, quietly
   });
 });
 

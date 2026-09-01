@@ -26,12 +26,15 @@ import { useAuth } from "@/lib/auth/AuthContext";
 
 export default function RegisterIndicator() {
   const { user } = useAuth();
-  const { isEnabled, isLoading: flagsLoading } = useFeatureFlags();
+  const { isEnabled, flagsResolved } = useFeatureFlags();
 
   const [registerName, setRegisterName] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
 
-  const enabled = !flagsLoading && isEnabled("cash_register");
+  // `flagsResolved` rather than `!isLoading` — same reason as the cash page's
+  // guard: `cash_register` defaults to false, so acting before a real answer
+  // arrives means acting on a guess.
+  const enabled = flagsResolved && isEnabled("cash_register");
 
   useEffect(() => {
     if (!enabled || !user?.storeId || !connectivity.isOnline) return;

@@ -32,7 +32,7 @@
 // =============================================
 
 /**
- * What a caller sees. Always all five fields; there is no undefined state.
+ * What a caller sees. Always all four fields; there is no undefined state.
  *
  * The distinction that matters, and the one the hand-rolled copies could not
  * make:
@@ -41,8 +41,9 @@
  * |---|---|---|
  * | false | false | **Nothing known and nothing coming.** Offline on a fresh device, or the fetch failed. `data` is the empty value. |
  * | false | true  | **Nothing known, an answer is on its way.** The only state in which a caller should consider WAITING — see `whenResourceSettles`. |
- * | true  | false | Settled. `data` is the last good value. |
- * | true  | true  | Settled, revalidating behind. `data` stays usable throughout. |
+ * | true  | *false* | Settled. `data` is the last good value — whether or not a revalidation happens to be in flight behind it. |
+ *
+ * `hydrated: true, loading: true` does not occur, on purpose: see `loading`.
  */
 export interface ResourceState<T> {
   /** Always renderable. The cached value, the fetched value, or `empty`. */
@@ -55,13 +56,26 @@ export interface ResourceState<T> {
    * answer at all. Conflating those two is audit P1-12.
    */
   readonly hydrated: boolean;
-  /** A revalidation is in flight right now. */
+  /**
+   * A FIRST load is in flight — this device has nothing yet and an answer is
+   * coming.
+   *
+   * A background revalidation of data you already have is deliberately NOT
+   * reported. Nobody should spin for it (a spinner for work that cannot change
+   * what the user does next is a spinner that only makes the app feel slower),
+   * and reporting it would re-render every subscriber twice per revalidate for
+   * a screen that never visibly changes.
+   */
   readonly loading: boolean;
   /** The last attempt failed. `data` is untouched — still the last good value. */
   readonly error: Error | null;
-  /** Epoch ms of the last SUCCESSFUL fetch **in this tab**. Not persisted. */
-  readonly fetchedAt: number | null;
 }
+
+// The time of the last successful fetch is deliberately NOT here. It is
+// internal bookkeeping for `staleTime`, nothing reads it, and having it in the
+// state would defeat `equals`: every successful revalidate would change the
+// state object and re-render every subscriber even when the answer was
+// identical to the one already on screen.
 
 export interface ResourceDefinition<T> {
   /** Stable name. Forms half of the entry key; the store id is the other half. */
@@ -111,6 +125,25 @@ export interface ResourceDefinition<T> {
   readonly staleTime?: number;
 
   /**
+   * Is a freshly fetched value the same ANSWER as the one already held?
+   *
+   * Without this every successful revalidate replaces `data` with a new object
+   * and re-renders every subscriber, even when the server confirmed exactly
+   * what was already on screen — which is the common case for data that changes
+   * a few times a week. `useFeatureFlags` had this as a hand-written check for
+   * precisely that reason: confirming the flags re-rendered the tab bar, whose
+   * height feeds the inventory list's virtualiser.
+   *
+   * When it returns true the OLD reference is kept, so `===` still holds for
+   * anything memoising on it, and no listener is notified. `hydrated` is still
+   * set and the stale window still restarts — the fetch DID happen.
+   *
+   * Omit it and every fetch counts as a change, which is only ever wasteful,
+   * never wrong.
+   */
+  equals?(a: T, b: T): boolean;
+
+  /**
    * Optional connectivity probe. Supplied by the resource rather than imported
    * here, so this file stays dependency-free and the offline path stays
    * testable.
@@ -128,6 +161,8 @@ interface Entry<T> {
   state: ResourceState<T>;
   listeners: Set<() => void>;
   inFlight: Promise<ResourceState<T>> | null;
+  /** Epoch ms of the last SUCCESSFUL fetch in this tab. Internal; see above. */
+  fetchedAt: number | null;
 }
 
 /**
@@ -165,7 +200,6 @@ function emptyStateFor<T>(def: ResourceDefinition<T>): ResourceState<T> {
     hydrated: false,
     loading: false,
     error: null,
-    fetchedAt: null,
   });
   emptyStates.set(def as ResourceDefinition<unknown>, fresh as ResourceState<unknown>);
   return fresh;
@@ -190,9 +224,10 @@ function ensureEntry<T>(def: ResourceDefinition<T>, storeId: string): Entry<T> {
 
   const entry: Entry<T> = {
     def,
-    state: { data, hydrated, loading: false, error: null, fetchedAt: null },
+    state: { data, hydrated, loading: false, error: null },
     listeners: new Set(),
     inFlight: null,
+    fetchedAt: null,
   };
   entries.set(key, entry as Entry<unknown>);
   return entry;
@@ -203,8 +238,7 @@ function sameState<T>(a: ResourceState<T>, b: ResourceState<T>): boolean {
     a.data === b.data &&
     a.hydrated === b.hydrated &&
     a.loading === b.loading &&
-    a.error === b.error &&
-    a.fetchedAt === b.fetchedAt
+    a.error === b.error
   );
 }
 
@@ -276,7 +310,8 @@ export function refreshResource<T>(
   if (entry.inFlight) return entry.inFlight;
 
   if (!options.force) {
-    const { fetchedAt, hydrated } = entry.state;
+    const { fetchedAt } = entry;
+    const { hydrated } = entry.state;
 
     if (fetchedAt !== null && Date.now() - fetchedAt < (def.staleTime ?? 0)) {
       return Promise.resolve(entry.state);
@@ -291,7 +326,10 @@ export function refreshResource<T>(
     }
   }
 
-  commit(entry, { loading: true });
+  // Only a FIRST load is announced. A revalidation of data already on screen
+  // changes nothing anyone can see, so saying so would cost every subscriber
+  // two renders — one when it starts, one when it ends — per refresh.
+  if (!entry.state.hydrated) commit(entry, { loading: true });
 
   const run = attempt(def, storeId, entry);
   entry.inFlight = run;
@@ -318,12 +356,17 @@ async function attempt<T>(
       // Quota, private mode, a full disk. The value is still good for this
       // session; only the next cold start loses it.
     }
+    entry.fetchedAt = Date.now();
+
+    // The server confirmed what is already on screen. Keep the OLD reference so
+    // `===` still holds downstream, and notify nobody.
+    const unchanged = def.equals?.(entry.state.data, value) === true;
+
     return commit(entry, {
-      data: value,
+      data: unchanged ? entry.state.data : value,
       hydrated: true,
       loading: false,
       error: null,
-      fetchedAt: Date.now(),
     });
   } catch (cause) {
     // Offline, a 500, a truncated payload. Keep everything: `data` stays the
@@ -338,8 +381,8 @@ async function attempt<T>(
  * Adopt a value the caller already has — a save that returned the new rows, a
  * local edit. Writes the cache and notifies, exactly as a fetch would.
  *
- * Deliberately does NOT touch `fetchedAt`: a local write is not a revalidation,
- * and it must not extend the stale window past the next mount.
+ * Deliberately does NOT restart the stale window: a local write is not a
+ * revalidation, and it must not suppress the next mount's refresh.
  */
 export function writeResource<T>(
   def: ResourceDefinition<T>,
@@ -354,7 +397,8 @@ export function writeResource<T>(
   } catch {
     /* see attempt() — an uncacheable value is still a usable one */
   }
-  commit(entry, { data: value, hydrated: true, error: null });
+  const unchanged = def.equals?.(entry.state.data, value) === true;
+  commit(entry, { data: unchanged ? entry.state.data : value, hydrated: true, error: null });
 }
 
 export interface SettleOptions extends RefreshOptions {
@@ -444,12 +488,12 @@ export function clearResourceCache(storeId?: string): void {
     // remounts. React re-subscribes only when the subscribe function's identity
     // changes, which a logout does not guarantee.
     entry.inFlight = null;
+    entry.fetchedAt = null;
     commit(entry, {
       data: entry.def.empty,
       hydrated: false,
       loading: false,
       error: null,
-      fetchedAt: null,
     });
 
     // Nothing is watching, so there is no orphan to create and the entry is

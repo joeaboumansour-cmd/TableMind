@@ -1,37 +1,20 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import { useAuth } from "@/lib/auth/AuthContext";
 import { mergeFeaturesWithDefaults } from "@/lib/features";
 import { connectivity } from "@/lib/connectivity";
 import { buildAuthHeaders } from "@/lib/auth/apiHeaders";
-
-interface FeatureFlagsState {
-  flags: Record<string, boolean>;
-  storeType: string;
-  isLoading: boolean;
-  flagsResolved: boolean;
-}
+import { useResource } from "@/lib/data/useResource";
+import type { ResourceDefinition } from "@/lib/data/resource";
 
 interface FeatureFlagsData {
   flags: Record<string, boolean>;
   storeType: string;
 }
 
-/**
- * In-flight DB reads, keyed by store.
- *
- * Every component that calls useFeatureFlags() gets its own instance, and there
- * are at least two live on the inventory route (BottomTabBar, plus the
- * product_discount gate on the page itself). Each was issuing its own request
- * to the same endpoint and resolving on its own tick, so the UI settled twice.
- */
-const inFlightByStore = new Map<string, Promise<FeatureFlagsData | null>>();
-
-function sameFlags(a: Record<string, boolean>, b: Record<string, boolean>): boolean {
-  const keys = Object.keys(b);
-  if (Object.keys(a).length !== keys.length) return false;
-  return keys.every((k) => a[k] === b[k]);
+function cacheKey(storeId: string): string {
+  return `store_features_${storeId}`;
 }
 
 /**
@@ -49,6 +32,84 @@ function sameFlags(a: Record<string, boolean>, b: Record<string, boolean>): bool
 function optimisticDefaults(): Record<string, boolean> {
   return mergeFeaturesWithDefaults({});
 }
+
+/** A guess, and a stable reference — see ResourceDefinition.empty. */
+const NO_FLAGS: FeatureFlagsData = { flags: {}, storeType: "general" };
+
+function sameFlags(a: Record<string, boolean>, b: Record<string, boolean>): boolean {
+  const keys = Object.keys(b);
+  if (Object.keys(a).length !== keys.length) return false;
+  return keys.every((k) => a[k] === b[k]);
+}
+
+/**
+ * The feature-flags resource.
+ *
+ * This was the last hand-rolled cache-then-revalidate on the client, and the
+ * most expensive one: `useFeatureFlags` is mounted by around ten components and
+ * had no stale window, so **every screen mount re-fetched the flags** — three
+ * times across a /pos → History → /pos walk.
+ *
+ * `equals` is not an optimisation here, it is the behaviour the hand-rolled
+ * version already had and could not afford to lose: confirming flags that have
+ * not changed re-renders the tab bar, whose height feeds the inventory list's
+ * virtualiser.
+ */
+const flagsResource: ResourceDefinition<FeatureFlagsData> = {
+  name: "features",
+  empty: NO_FLAGS,
+  staleTime: 60_000,
+  isOnline: () => connectivity.isOnline,
+
+  has: (storeId) => {
+    try {
+      return localStorage.getItem(cacheKey(storeId)) !== null;
+    } catch {
+      return false;
+    }
+  },
+
+  read: (storeId) => {
+    try {
+      const raw = localStorage.getItem(cacheKey(storeId));
+      if (!raw) return NO_FLAGS;
+      const parsed = JSON.parse(raw);
+      return {
+        flags: mergeFeaturesWithDefaults(parsed.flags || {}),
+        storeType: parsed.storeType || "general",
+      };
+    } catch {
+      return NO_FLAGS;
+    }
+  },
+
+  write: (storeId, value) => {
+    try {
+      localStorage.setItem(cacheKey(storeId), JSON.stringify(value));
+    } catch {
+      /* quota or private mode — the flags still work for this session */
+    }
+  },
+
+  equals: (a, b) => a.storeType === b.storeType && sameFlags(a.flags, b.flags),
+
+  async fetch(storeId) {
+    // GET is open to the ADMIN console or to a store reading its OWN flags, so
+    // the till has to identify itself (audit P0-2). Without this header the
+    // route answers 401 and every flag silently falls back to its default —
+    // which reads as the menu, cash page and kitchen board simply not existing.
+    const response = await fetch(`/api/admin/stores/features?store_id=${storeId}`, {
+      headers: buildAuthHeaders(),
+    });
+    if (!response.ok) throw new Error(`API error ${response.status}`);
+
+    const data = await response.json();
+    return {
+      flags: mergeFeaturesWithDefaults(data.features),
+      storeType: data.store_type || "general",
+    };
+  },
+};
 
 /**
  * Hook to read and check store-level feature flags.
@@ -91,144 +152,52 @@ export function useFeatureFlags(): {
   refresh: () => Promise<void>;
 } {
   const { user } = useAuth();
-  const [state, setState] = useState<FeatureFlagsState>({
-    flags: {},
-    storeType: "general",
-    isLoading: true,
-    flagsResolved: false,
-  });
-
   const storeId = user?.storeId;
 
-  // Load from localStorage (offline-first)
-  const loadFromCache = useCallback((): FeatureFlagsData | null => {
-    if (!storeId) return null;
+  const { data, hydrated, refresh } = useResource(flagsResource, storeId);
 
-    try {
-      const cached = localStorage.getItem(`store_features_${storeId}`);
-      if (cached) {
-        const parsed = JSON.parse(cached);
-        return {
-          flags: parsed.flags || {},
-          storeType: parsed.storeType || "general",
-        };
-      }
-    } catch {
-      // Ignore parse errors
-    }
-    return null;
-  }, [storeId]);
+  /**
+   * "No store yet" is NOT an answer — it is the absence of one, and it must not
+   * be reported as finished loading with nothing enabled.
+   *
+   * On a cold direct load of a guarded route (opening /pos/cash from a
+   * bookmark, a refresh, or the PWA icon) AuthContext has not hydrated the user
+   * from localStorage yet, so storeId is briefly undefined. This used to report
+   * isLoading:false with flags:{}, which reads as "loading finished, nothing is
+   * enabled". The route guard runs on the very next render — user is now
+   * present, flagsLoading is already false, flags still empty — and bounces the
+   * cashier to /pos claiming the feature is not enabled for a store that has it
+   * switched on. Reaching the same page by clicking through worked, because the
+   * flags were loaded by then.
+   *
+   * Same rule as evaluateReconcile(): never act destructively on unknown.
+   */
+  const isLoading = !storeId;
 
-  // Load from database (online sync), deduped across hook instances
-  const loadFromDb = useCallback(async (): Promise<FeatureFlagsData | null> => {
-    if (!storeId || !connectivity.isOnline) return null;
+  /**
+   * A cache or a DB answer is an ANSWER; anything else is a guess.
+   *
+   * This is exactly `hydrated` from the data layer — "has this device ever been
+   * told" — which is the same distinction, arrived at from the same direction.
+   */
+  const flagsResolved = !!storeId && hydrated;
 
-    const existing = inFlightByStore.get(storeId);
-    if (existing) return existing;
+  /**
+   * With no store, nothing is enabled and nothing claims to be resolved. With a
+   * store but no answer yet, the OPTIMISTIC DEFAULTS stand in, because that is
+   * what the API produces for a store whose features have never been set — a
+   * guess that is usually right, marked as a guess.
+   */
+  const flags = useMemo(() => {
+    if (!storeId) return NO_FLAGS.flags;
+    return hydrated ? data.flags : optimisticDefaults();
+  }, [storeId, hydrated, data]);
 
-    const request = (async (): Promise<FeatureFlagsData | null> => {
-      try {
-        // GET is open to the ADMIN console or to a store reading its OWN
-        // flags, so the till has to identify itself (audit P0-2). Without this
-        // header the route answers 401 and every flag silently falls back to
-        // its default -- which reads as the menu, cash page and kitchen board
-        // simply not existing.
-        const response = await fetch(`/api/admin/stores/features?store_id=${storeId}`, {
-          headers: buildAuthHeaders(),
-        });
-        if (!response.ok) return null;
-
-        const data = await response.json();
-        const flags = mergeFeaturesWithDefaults(data.features);
-        const storeType = data.store_type || "general";
-
-        // Cache to localStorage
-        localStorage.setItem(
-          `store_features_${storeId}`,
-          JSON.stringify({ flags, storeType })
-        );
-
-        return { flags, storeType };
-      } catch {
-        return null;
-      } finally {
-        inFlightByStore.delete(storeId);
-      }
-    })();
-
-    inFlightByStore.set(storeId, request);
-    return request;
-  }, [storeId]);
-
-  // Initialize
-  useEffect(() => {
-    if (!storeId) {
-      // "No store yet" is NOT an answer — it is the absence of one, and it must
-      // not be reported as finished loading with nothing enabled.
-      //
-      // On a cold direct load of a guarded route (opening /pos/cash from a
-      // bookmark, a refresh, or the PWA icon) AuthContext has not hydrated the
-      // user from localStorage yet, so storeId is briefly undefined. This used
-      // to set isLoading:false with flags:{}, which reads as "loading finished,
-      // nothing is enabled". The route guard runs on the very next render —
-      // user is now present, flagsLoading is already false, flags are still
-      // empty — and bounces the cashier to /pos claiming the feature is not
-      // enabled for a store that has it switched on. Reaching the same page by
-      // clicking through worked, because the flags were loaded by then.
-      //
-      // Same rule as evaluateReconcile(): never act destructively on unknown.
-      // A guard may only deny once the flags have actually been resolved.
-      setState((prev) =>
-        prev.isLoading && Object.keys(prev.flags).length === 0
-          ? prev
-          : { flags: {}, storeType: "general", isLoading: true, flagsResolved: false }
-      );
-      return;
-    }
-
-    let active = true;
-
-    // 1. Resolve something usable immediately — cache if we have one, otherwise
-    //    the same defaults the API would produce for an unconfigured store.
-    const cached = loadFromCache();
-    const initial: FeatureFlagsData = cached
-      ? { flags: mergeFeaturesWithDefaults(cached.flags), storeType: cached.storeType }
-      : { flags: optimisticDefaults(), storeType: "general" };
-    // A cache is an ANSWER; the optimistic defaults are a guess. See
-    // `flagsResolved` on the return type for why the difference is load-bearing.
-    setState({ ...initial, isLoading: false, flagsResolved: cached !== null });
-
-    // 2. Sync from database in background.
-    loadFromDb().then((dbData) => {
-      if (!active || !dbData) return;
-      setState((prev) => {
-        // Confirming what we already show costs a full re-render of everything
-        // downstream — including the tab bar, whose height feeds the inventory
-        // list's virtualiser. Only update when something actually differs.
-        if (
-          prev.flagsResolved &&
-          prev.storeType === dbData.storeType &&
-          sameFlags(prev.flags, dbData.flags)
-        ) {
-          return prev;
-        }
-        // Even when the values match, `flagsResolved` may not have been true
-        // yet — the guess happened to be right, which is not the same as
-        // having been told.
-        return { ...prev, flags: dbData.flags, storeType: dbData.storeType, flagsResolved: true };
-      });
-    });
-
-    return () => {
-      active = false;
-    };
-  }, [storeId, loadFromCache, loadFromDb]);
+  const storeType = storeId && hydrated ? data.storeType : "general";
 
   const isEnabled = useCallback(
-    (featureKey: string): boolean => {
-      return state.flags[featureKey] === true;
-    },
-    [state.flags]
+    (featureKey: string): boolean => flags[featureKey] === true,
+    [flags]
   );
 
   const isDisabled = useCallback(
@@ -236,36 +205,21 @@ export function useFeatureFlags(): {
     [isEnabled]
   );
 
-  const refresh = useCallback(async () => {
-    const dbData = await loadFromDb();
-    if (dbData) {
-      setState({
-        flags: dbData.flags,
-        storeType: dbData.storeType,
-        isLoading: false,
-        flagsResolved: true,
-      });
-    }
-  }, [loadFromDb]);
+  /** Re-read from the server, ignoring the stale window. */
+  const refreshFlags = useCallback(async () => {
+    await refresh({ force: true });
+  }, [refresh]);
 
   return useMemo(
     () => ({
       isEnabled,
       isDisabled,
-      flags: state.flags,
-      storeType: state.storeType,
-      isLoading: state.isLoading,
-      flagsResolved: state.flagsResolved,
-      refresh,
+      flags,
+      storeType,
+      isLoading,
+      flagsResolved,
+      refresh: refreshFlags,
     }),
-    [
-      isEnabled,
-      isDisabled,
-      state.flags,
-      state.storeType,
-      state.isLoading,
-      state.flagsResolved,
-      refresh,
-    ]
+    [isEnabled, isDisabled, flags, storeType, isLoading, flagsResolved, refreshFlags]
   );
 }
