@@ -1,7 +1,8 @@
 # Moving the database to Europe — runbook
 
-**Status:** ready to run · **Written:** 2026-09-01 · **Owner runs it; this
-document is the plan.**
+**Status:** **database migrated and verified 2026-09-01.** Steps 1–3 are done;
+Ireland holds a byte-for-byte copy of production. Steps 4–7 (the app cutover)
+are still to do. · **Written:** 2026-09-01
 
 Supabase is in **Seoul (`ap-northeast-2`)**. The shops are in **Lebanon**. That
 is the single largest performance fact in this application, and it is the reason
@@ -136,76 +137,88 @@ Worth stating, because each of these normally dominates a Supabase migration:
 - [ ] Pick a window when the shops are **closed**. The queue makes selling safe,
       but a quiet window makes verification honest.
 
-### Step 1 — Dump the live database
+### Step 1 — Dump the live database ✅ done
+
+Run through Docker, so no local Postgres client version has to match:
 
 ```bash
-# Schema AND data, no owners, no privileges (the new project owns its roles).
-pg_dump "postgresql://postgres:PASSWORD@OLD-HOST:5432/postgres" \
-  --schema=public \
-  --no-owner --no-privileges \
-  --format=custom \
-  --file=gs-seoul-$(date +%Y%m%d-%H%M).dump
+docker run --rm -v "$TEMP/gsmig:/work" postgres:17-alpine   pg_dump "postgresql://USER:PASSWORD@OLD-HOST:5432/postgres"   --schema=public --no-owner --format=custom --file=/work/gs-seoul-priv.dump
 ```
 
-Keep this file. It is the rollback.
+Write it **outside the repository**. It contains every customer's sales.
 
-### Step 2 — Restore into Ireland
+> **`--no-privileges` is wrong here, and the first dump used it.** It strips the
+> `GRANT`s on every table — and PostgREST reaches the data *as* `anon`,
+> `authenticated` or `service_role`, so a restore without them gives a database
+> that is complete over psql and returns nothing at all to the app. `--no-owner`
+> alone is what you want: the new project owns its own roles, but the grants to
+> them must come across.
+
+### Step 2 — Restore into Ireland ✅ done
+
+A plain `pg_restore` **fails**, twice, for reasons that are not obvious:
+
+| Error | Cause | Fix |
+|---|---|---|
+| `schema "public" already exists` | Supabase creates it | Filter the `SCHEMA`/`COMMENT`/`ACL` entries for `public` out of the TOC |
+| `permission denied to change default privileges` | The `ALTER DEFAULT PRIVILEGES` entries are owned by `supabase_admin` | Filter the six `DEFAULT ACL` entries |
+
+**Do not "fix" the first one by dropping and recreating `public`.** That destroys
+Supabase's own `USAGE` grants to `anon` / `authenticated` / `service_role`, and
+the failure mode is the same silent one as `--no-privileges`.
+
+Filter the table of contents instead — it changes nothing about the data:
 
 ```bash
-pg_restore \
-  --dbname="postgresql://postgres:PASSWORD@NEW-HOST:5432/postgres" \
-  --no-owner --no-privileges \
-  --single-transaction \
-  gs-seoul-TIMESTAMP.dump
+docker run --rm -v "$TEMP/gsmig:/work" postgres:17-alpine sh -c '
+  pg_restore -l /work/gs-seoul-priv.dump     | grep -v "SCHEMA - public"     | grep -v "COMMENT - SCHEMA public"     | grep -v "ACL - public"     | grep -v "DEFAULT ACL" > /work/toc.txt
+
+  pg_restore --dbname="postgresql://USER:PASSWORD@NEW-HOST:5432/postgres"     --no-owner --single-transaction -L /work/toc.txt /work/gs-seoul-priv.dump'
 ```
 
-`--single-transaction` so a partial restore cannot leave a half-built database.
+Before filtering the default-privilege entries, **confirm the new project already
+has them** — Supabase sets identical ones on a fresh project, which is why
+dropping them is safe. It was checked and they matched byte for byte.
 
-### Step 3 — Verify the restore before switching anything
+`--single-transaction` is what makes the failed attempts harmless: each one
+rolled back completely, so there was never a half-built database.
 
-Row counts must match exactly on the tables that carry money and stock:
+### Step 3 — Verify the restore before switching anything ✅ done
 
-```sql
-SELECT 'transactions'      t, count(*) FROM transactions
-UNION ALL SELECT 'transaction_items', count(*) FROM transaction_items
-UNION ALL SELECT 'products',          count(*) FROM products
-UNION ALL SELECT 'stores',            count(*) FROM stores
-UNION ALL SELECT 'store_users',       count(*) FROM store_users
-UNION ALL SELECT 'cash_shifts',       count(*) FROM cash_shifts
-UNION ALL SELECT 'cash_adjustments',  count(*) FROM cash_adjustments
-UNION ALL SELECT 'cash_registers',    count(*) FROM cash_registers
-UNION ALL SELECT 'recipe_components', count(*) FROM recipe_components
-UNION ALL SELECT 'combo_components',  count(*) FROM combo_components
-UNION ALL SELECT 'product_categories',count(*) FROM product_categories
-UNION ALL SELECT 'product_favorites', count(*) FROM product_favorites
-UNION ALL SELECT 'register_requests', count(*) FROM register_requests
-UNION ALL SELECT 'kitchen_ticket_state', count(*) FROM kitchen_ticket_state
-UNION ALL SELECT 'admin_users',       count(*) FROM admin_users;
+```bash
+npm run verify:migration
 ```
 
-Then the things a data dump silently drops:
+`scripts/verify-migration.mjs` compares the two projects **over PostgREST**, so
+it needs only the two service-role keys, and it checks exactly what a dump drops
+quietly: row counts per table, the RPCs, the views, the `profit_percentage`
+trigger (by writing one throwaway product and deleting it), and the
+`activity_logs` partitions. It reads `.env.migration`, which is gitignored.
 
-- [ ] **Functions** — 42 of them. The ones the app breaks without:
-      `create_sale`, `decrement_stock`, `decrement_stock_batch`,
-      `get_cash_overview`, `get_shift_totals`, `get_unassigned_totals`,
-      `get_register_performance`, `get_transaction_analytics`,
-      `maintain_activity_log_partitions`.
-      ```sql
-      SELECT proname FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-      WHERE n.nspname = 'public' ORDER BY 1;
-      ```
-- [ ] **Views** — `store_transaction_health`, `transaction_retention_stats`.
-- [ ] **Triggers** — especially the `profit_percentage` trigger on `products`.
-      Insert a product with a cost and a price and check the column is computed.
-- [ ] **`activity_logs` partitions.** The table is range-partitioned by day.
-      Run `SELECT maintain_activity_log_partitions(3);` and confirm partitions
-      exist for today and tomorrow, or every activity insert fails.
-- [ ] **Sequences and identity columns** are at the right value.
-- [ ] **RLS** matches the OLD project's *actual* state, not the repo's. Compare:
-      ```sql
-      SELECT relname, relrowsecurity FROM pg_class
-      WHERE relnamespace = 'public'::regnamespace AND relkind = 'r' ORDER BY 1;
-      ```
+Verifying through PostgREST rather than psql is the point — it is the interface
+the app uses, so it proves the grants survived, which is the failure the two
+traps above produce.
+
+#### Result, 2026-09-01
+
+| Check | Outcome |
+|---|---|
+| Row counts, all 20 tables | **identical** — 7,491 products, 418 transactions, 766 line items, 6,267 activity logs |
+| Tables / policies / views / triggers | 24 / 29 / 2 / 6 — match |
+| Indexes / foreign keys | 105 / 52 — match |
+| `profit_percentage` trigger | fires; returns exactly 50.00 on the probe |
+| Six RPCs incl. `get_cash_overview`, `get_transaction_analytics` | all callable, all return data |
+| `activity_logs` partitions | present for today and tomorrow |
+| Grants for `anon` / `authenticated` / `service_role` | **identical to Seoul** |
+
+Two differences, both investigated and benign:
+
+- **`pg_trgm` is absent.** `pg_dump` excludes extension-owned functions, and the
+  extension was genuinely unused — no trigram index exists and nothing calls
+  `similarity()`. That accounts for all 31 functions the raw count was short.
+- **RLS is enabled on the four `activity_logs` partitions** where Seoul had it
+  off. Those are read and written only with the service-role key, which bypasses
+  RLS.
 
 ### Step 4 — Point the app at Ireland
 

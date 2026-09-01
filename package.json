@@ -29,7 +29,8 @@
     "harness:mutation": "node harness/mutation/run.mjs",
     "harness:bench": "node harness/bench/sale-latency.mjs",
     "harness:bench:till": "playwright test --config harness/bench/playwright.config.ts",
-    "verify:invariants": "node scripts/verify-invariants.mjs"
+    "verify:invariants": "node scripts/verify-invariants.mjs",
+    "verify:migration": "node scripts/verify-migration.mjs"
   },
   "dependencies": {
     "@ducanh2912/next-pwa": "^10.2.9",
