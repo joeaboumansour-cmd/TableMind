@@ -838,6 +838,7 @@ these three it is achievable only in a real shop, on one store, watched.
 | 2.4 index & query audit | NOT STARTED | | | | |
 | 2.2b finish the serial-GET conversion | DONE | e73d864 | 543ms each | **325 / 275ms** | `features` and `kitchen/tickets`. Found by measuring, not by the survey |
 | 2.6 cash overview RPC (migration 039) | DONE | 9d66ba4 | **849ms** | **291ms** | −66%. Fallback proven by pointing at a missing RPC |
+| 2.7 register-requests, 3 trips to 1 | DONE | | **817ms** | **274ms** | −66%. The write stopped being a prerequisite |
 | 2.5 edge runtime pass | NOT STARTED | | | | |
 | 3.1 data primitive | DONE | a36e978 | | | `src/lib/data/`. 27 harness tests. No screen migrated yet — that is 3.2 |
 | 3.0 parallelise the boot delta+count | DONE | | ~600ms serial | **~300ms parallel** | Brought forward from 0.3's finding |
@@ -1051,6 +1052,51 @@ be tracked down.
 **iOS is unblocked** (WebKit installed 2026-08-31), so invariant #24 is
 satisfied for the flows written so far. The row stays PARTIAL because flows
 5-8 — cash shift, inventory, CSV import, kitchen — are still to write.
+
+### 2.7 register-requests — the write stopped being a prerequisite (2026-09-01)
+
+§2.2 declined to convert this route, and **was right about the reason**: its GET
+ran `expireStale()` — a WRITE — before the read, and racing auth against a write
+means writing to a store before confirming the caller owns it. That trade is not
+worth any amount of latency, and it still isn't.
+
+What changed is the premise, not the risk tolerance. **Expiry is derivable**: a
+pending request is lapsed exactly when `expires_at` has passed. So the read
+applies it directly and returns the same rows write-then-read produced, the
+write is no longer a prerequisite for a correct answer, and with nothing written
+before the caller is known the established one-wave rule applies.
+
+`expireStale` is now bookkeeping for the other views and runs **after the
+response**, via `after()` from `next/server` — so it neither delays the answer
+nor gets dropped when the function returns. Fire-and-forget would have done the
+first and risked the second.
+
+| | Before | After |
+|---|---:|---:|
+| `GET /api/register-requests?status=pending` | **817 ms** | **274 ms** |
+
+#### Equivalence, demonstrated rather than argued
+
+One test, seeded against the real database — a live pending request, an
+**expired** pending request, and an already-decided one — asserting that
+`?status=pending` returns exactly the live one, `?status=all` returns all three,
+the `register_name` join survives, and the lapse is **persisted** to `expired`.
+
+**The same seven assertions pass on both builds.** Old code: 7/7 at 817 ms. New
+code: 7/7 at 274 ms. That is the equivalence proof and the latency measurement
+in one run, and the seeded rows are deleted afterwards either way.
+
+#### One thing deliberately not relied on
+
+`expires_at` is `NOT NULL` per migration 027 — but the db-migration skill's
+first rule is that the repo is not a reliable description of production, and the
+table was empty, so there was no data to confirm it against. The filter is
+therefore `expires_at.is.null,expires_at.gte.<now>`: the old write used
+`.lt("expires_at", now)`, which never matched a NULL, so such a row was never
+lapsed and still showed. A null-blind `.gte()` would have silently hidden it.
+
+**Verified:** 124/124 contract, 23/23 E2E desktop, typecheck clean, lint
+unchanged at 208, build green.
 
 ### 2.6 the cash page's three round trips become one — migration 039 (2026-09-01)
 
