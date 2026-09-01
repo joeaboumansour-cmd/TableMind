@@ -292,7 +292,25 @@ export default function POSPage() {
 
     const loadData = async () => {
       if (!user) {
-        setIsLoading(false);
+        // "No user YET" is not "nothing to load". AuthContext hydrates from
+        // localStorage in a mount effect, so `user` is null for the first
+        // render or two of every single launch — and clearing isLoading here
+        // declared the till ready before the catalogue had even been read.
+        //
+        // Two consequences, both measured 2026-09-01:
+        //
+        //  * The instant auth resolved, the render guard below let the till
+        //    render with an EMPTY catalogue. The quick grid was blank and a
+        //    scan missed the local barcode index, falling through to a server
+        //    lookup — or to "unknown barcode" with no internet.
+        //  * `perf.boot` fired at that same instant, so the plan's headline
+        //    boot metric was timing AUTH HYDRATION, not a usable till. Every
+        //    sample carried `products: 0` while IndexedDB held 2,492 of them.
+        //    Its own doc comment warns against exactly this.
+        //
+        // Only a RESOLVED absence of a user ends the load; the effect above
+        // sends that case to /login.
+        if (!authLoading) setIsLoading(false);
         return;
       }
 
@@ -419,7 +437,7 @@ export default function POSPage() {
     // inside this effect, so including it made the effect re-fire and run a
     // full loadData() (and therefore a full sync) twice on every mount.
     // The store id is read from `user.storeId` directly instead.
-  }, [router, setStoreId, user, authLogout, toast, toProducts]);
+  }, [router, setStoreId, user, authLoading, authLogout, toast, toProducts]);
 
   // ---- Build O(1) barcode index whenever products change ----
   /**

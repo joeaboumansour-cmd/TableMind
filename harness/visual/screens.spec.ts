@@ -85,7 +85,13 @@ test("checkout — settled, with a line in the cart", async ({ page }) => {
   await settle(page);
 
   const box = page.getByLabel("Scan a barcode or search products");
-  test.skip((await box.count()) === 0, "wedge-driven; the mobile till is camera-first");
+  // VISIBILITY, not presence. The three viewports here are one desktop user
+  // agent at three widths, so `isMobile()` reports desktop and the Pro till
+  // renders even at 375px — where the remembered 380px cart panel squeezes the
+  // scan input to ZERO WIDTH. Guarding on `count() === 0` therefore did not
+  // skip; it found the input, tried to click something invisible, and timed
+  // out after 90 seconds. An input with no width is the absence of the UI.
+  test.skip(!(await box.isVisible()), "wedge-driven; the mobile till is camera-first");
 
   await box.click();
   await box.pressSequentially("2000000000001", { delay: 8 });
@@ -116,7 +122,13 @@ test("pos with a cart line — settled", async ({ page }) => {
   await settle(page);
 
   const box = page.getByLabel("Scan a barcode or search products");
-  test.skip((await box.count()) === 0, "wedge-driven; the mobile till is camera-first");
+  // VISIBILITY, not presence. The three viewports here are one desktop user
+  // agent at three widths, so `isMobile()` reports desktop and the Pro till
+  // renders even at 375px — where the remembered 380px cart panel squeezes the
+  // scan input to ZERO WIDTH. Guarding on `count() === 0` therefore did not
+  // skip; it found the input, tried to click something invisible, and timed
+  // out after 90 seconds. An input with no width is the absence of the UI.
+  test.skip(!(await box.isVisible()), "wedge-driven; the mobile till is camera-first");
 
   await box.click();
   await box.pressSequentially("2000000000001", { delay: 8 });
@@ -143,7 +155,7 @@ test("modifier sheet — settled", async ({ page }) => {
   await settle(page);
 
   const box = page.getByLabel("Scan a barcode or search products");
-  test.skip((await box.count()) === 0, "the modifier sheet opens from the desktop Pro till");
+  test.skip(!(await box.isVisible()), "the modifier sheet opens from the desktop Pro till");
 
   // Warm the recipe cache, then reload so React holds it (see menu.spec.ts).
   await expect

@@ -4,105 +4,105 @@
       "route": "/",
       "chunks": 6,
       "raw": 511934,
-      "gz": 158760,
+      "gz": 158764,
       "missing": 0
     },
     {
       "route": "/admin",
-      "chunks": 23,
-      "raw": 1040949,
-      "gz": 318067,
+      "chunks": 22,
+      "raw": 1043083,
+      "gz": 317888,
       "missing": 0
     },
     {
       "route": "/admin/activity",
-      "chunks": 22,
-      "raw": 1038447,
-      "gz": 318197,
+      "chunks": 23,
+      "raw": 1040608,
+      "gz": 319461,
       "missing": 0
     },
     {
       "route": "/admin/login",
       "chunks": 21,
-      "raw": 964901,
-      "gz": 296021,
+      "raw": 967068,
+      "gz": 296825,
       "missing": 0
     },
     {
       "route": "/admin/transactions",
       "chunks": 20,
-      "raw": 966710,
-      "gz": 295822,
+      "raw": 968877,
+      "gz": 296626,
       "missing": 0
     },
     {
       "route": "/barcodegen",
       "chunks": 22,
-      "raw": 1086468,
-      "gz": 325011,
+      "raw": 1088635,
+      "gz": 325815,
       "missing": 0
     },
     {
       "route": "/checkout",
       "chunks": 30,
-      "raw": 1106770,
-      "gz": 344079,
+      "raw": 1109503,
+      "gz": 345327,
       "missing": 0
     },
     {
       "route": "/kitchen",
       "chunks": 28,
-      "raw": 1067445,
-      "gz": 330209,
+      "raw": 1063105,
+      "gz": 329433,
       "missing": 0
     },
     {
       "route": "/login",
       "chunks": 20,
-      "raw": 968596,
-      "gz": 296346,
+      "raw": 970763,
+      "gz": 297150,
       "missing": 0
     },
     {
       "route": "/pos",
-      "chunks": 29,
-      "raw": 1147799,
-      "gz": 352363,
+      "chunks": 30,
+      "raw": 1176256,
+      "gz": 361806,
       "missing": 0
     },
     {
       "route": "/pos/cash",
       "chunks": 29,
-      "raw": 1114744,
-      "gz": 342386,
+      "raw": 1110395,
+      "gz": 341666,
       "missing": 0
     },
     {
       "route": "/pos/products",
       "chunks": 31,
-      "raw": 1195600,
-      "gz": 365297,
+      "raw": 1197560,
+      "gz": 366248,
       "missing": 0
     },
     {
       "route": "/transactions",
       "chunks": 28,
-      "raw": 1093225,
-      "gz": 337490,
+      "raw": 1088885,
+      "gz": 336797,
       "missing": 0
     }
   ],
   "shared": {
     "chunks": 6,
     "raw": 511934,
-    "gz": 158760
+    "gz": 158764
   },
   "precache": {
     "entries": 119,
-    "raw": 3441149,
+    "raw": 3425462,
     "counted": 114
   },
-  "recordedAt": "2026-08-30",
+  "recordedAt": "2026-09-01",
   "units": "bytes",
   "note": "Budget baseline enforced by scripts/verify-budgets.mjs. Regenerate with `npm run build && npm run baseline:update`. NOTE: `npm run dev` overwrites .next, so always rebuild before recording."
 }

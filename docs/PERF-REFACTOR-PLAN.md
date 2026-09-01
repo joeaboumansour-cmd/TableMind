@@ -844,8 +844,10 @@ these three it is achievable only in a real shop, on one store, watched.
 | 3.4 migrate /transactions | DONE | deb9c71 | 2 fetches per mount | **1** | **Migration assessed and deliberately NOT done** — see the note. Fixed the real defect instead, which also fixed /kitchen |
 | 3.4b feature flags onto the data layer | DONE | bdcd675 | 3 flag fetches per walk | **1** | Found and fixed audit **P1-13** — the cash page bounced on a cold device |
 | 3.5 migrate /pos/cash + /kitchen | DONE | 51020da | 0 duplicates | **0** | **Measured: nothing left to remove.** Migration assessed and deliberately not done — see the note |
-| 4.1 memo boundaries | NOT STARTED | | | | |
-| 4.2 History virtualization | NOT STARTED | | | | |
+| 4.0 perf.boot was measuring the wrong moment | DONE | | "167ms" | **970ms honest** | The metric AND a real defect: the till rendered with an empty catalogue |
+| 4.2 virtualize the till grid | DONE | | 12,666 DOM nodes · 833ms blocking | **372 · 0ms** | boot 970→283ms, scan 37→27ms. Costs +9.4KB gz on /pos, recorded |
+| 4.1 memo boundaries | NOT STARTED | | | | Measured: not the bottleneck. Plain scan was already 37ms |
+| 4.3 History virtualization | NOT STARTED | | | | Page size is 50; `loadMore` appends. Lower value than the till grid was |
 | 4.3 component split | NOT STARTED | | | | |
 | 5.1 wait register | NOT STARTED | | | | Table lives in this file |
 | 5.2 optimistic + spinner rules | NOT STARTED | | | | |
@@ -1047,6 +1049,117 @@ be tracked down.
 **iOS is unblocked** (WebKit installed 2026-08-31), so invariant #24 is
 satisfied for the flows written so far. The row stays PARTIAL because flows
 5-8 — cash shift, inventory, CSV import, kitchen — are still to write.
+
+### Phase 4 — the till grid, and the metric that was lying (2026-09-01)
+
+Measured before touching anything, and the measurement redirected the work
+twice.
+
+#### First finding: `perf.boot` was timing the wrong moment
+
+The plan grades itself on `perf.boot`, and it reported **167 ms**. Every sample
+carried `products: 0` while IndexedDB held **2,492** — so the number was real
+but it was not measuring a usable till.
+
+`/pos`'s load effect began `if (!user) { setIsLoading(false); return; }`.
+AuthContext hydrates from localStorage in a mount effect, so `user` is null for
+the first render or two of **every launch**, and that line declared the load
+finished before the catalogue had been read. The instant auth resolved:
+
+- the render guard let the till paint with an **empty catalogue** — blank quick
+  grid, and a scan that missed the local barcode index and fell through to a
+  server lookup, or to "unknown barcode" with no internet;
+- `perf.boot` stamped that instant as "usable".
+
+Another absent answer read as an answer — the same shape as `evaluateReconcile`,
+P1-12 and P1-13. Fixed by only ending the load on a **resolved** absence of a
+user (`!authLoading`).
+
+**The honest number was 970 ms, not 167 ms.** Every field boot sample collected
+so far is optimistic by roughly 6×; the plan's Phase 9.2 comparison must use
+post-fix numbers on both sides.
+
+#### Second finding: the till rendered 2,488 tiles
+
+With boot honest, the cost was suddenly visible: **833 ms of main-thread
+blocking** across 6 long tasks, and `MenuBrowser`'s "All" tab handing
+`QuickGrid` every sellable product — **2,488 tiles, 12,666 DOM nodes** on first
+paint.
+
+The first paint is only half of it. `setProducts` fires again after **every
+background sync**, which runs every 30 seconds all day, so the till was
+reconciling thousands of tiles **while the cashier was scanning**.
+
+`QuickGrid` is virtualised now, same `@tanstack/react-virtual` the inventory
+list uses. Rows, not tiles: the CSS grid stays the layout, one virtual row per
+grid row, columns computed from the same three numbers `auto-fill` used.
+
+| | Before | After |
+|---|---:|---:|
+| DOM nodes on the till | 12,666 | **372** |
+| Grid tiles rendered | 2,488 | **27** |
+| Main-thread blocking during boot | 833 ms | **0 ms** |
+| Boot (honest metric, median) | 970 ms | **283 ms** |
+| **Scan → paint (median)** | 37 ms | **27 ms** |
+
+The scan number is the Tier-1 one: every scan got faster because the grid no
+longer reconciles thousands of tiles behind it.
+
+**It costs +9.4 KB gz on `/pos`** — `@tanstack/react-virtual` was only on the
+inventory route before. `verify:budgets` blocked the build until that was
+recorded deliberately, which is exactly its job; the baseline is updated and
+the trade is one round trip of payload against ~700 ms on every launch and a
+27% faster scan.
+
+#### 4.1 memo boundaries — measured, and not the bottleneck
+
+A plain-product scan was **37 ms** before any of this. The till's render layer
+was not what was slow; the DOM size was. Left NOT STARTED with the number
+recorded, rather than done for the sake of the row.
+
+#### The benches are permanent now
+
+`npm run harness:bench:till` — boot, scan, and weight (DOM nodes, grid tiles,
+blocking), per platform, read off the REAL `perf.*` instrumentation rather than
+re-instrumented, so the bench and the field data cannot disagree about what they
+are timing. That mattered immediately: it is how the `products: 0` above was
+caught. It carries one assertion — that the catalogue is in hand when boot is
+declared — because `products: 0` is not a slow number, it is a wrong one.
+
+#### What the visual baselines had frozen
+
+Five of the 24 snapshots were pinning **bugs**:
+
+- all three `cash` baselines were screenshots of the **POS till**, because
+  P1-13 redirected `/pos/cash` away on a fresh context;
+- `pos-with-cart` and `modifier-sheet` were captured with an **empty
+  catalogue** — "All 0", "No quick items yet", "No ingredients in inventory
+  yet" — the state the boot fix removed.
+
+Regenerated after inspecting each diff. The plan warns that a test pinning a
+spinner forbids the improvement; this is the same hazard one step further on —
+a *settled* state can be settled and wrong.
+
+> **And three were never really running.** The visual suite's three "viewports"
+> are one **desktop user agent** at three widths, so `isMobile()` reports
+> desktop and the Pro till renders even at 375 px — where the remembered 380 px
+> cart panel squeezes the scan input to **zero width**. The guard tested
+> `count() === 0`, which is presence, so it did not skip: it found the input,
+> tried to click something invisible, and timed out after 90 seconds. They guard
+> on **visibility** now and skip honestly. Confirmed pre-existing by rebuilding
+> without the virtualisation and re-probing: input width 0 either way.
+>
+> Worth knowing against invariant #24: `mobile-375` is not a phone, it is a
+> desktop browser made narrow. The E2E suite gets this right with real device
+> descriptors; the visual suite does not, and its "mobile" result should not be
+> read as an Android or iOS result.
+
+**Verified:** 23/23 E2E desktop, 15 passed / 30 skipped on android+ios with only
+the pre-existing iOS WebKit failure, 24 passed / 3 skipped visual and stable on
+re-run, 161/161 harness unit, typecheck clean, build green with all 8 SW checks.
+Lint moves to **208 (77 errors, 131 warnings)**: one new React Compiler notice
+that `useVirtualizer` returns functions it cannot memoize, which is the
+library's documented shape and is why the component is a leaf.
 
 ### 5.3 iOS launch screens — the blank white boot is gone (2026-09-01)
 
