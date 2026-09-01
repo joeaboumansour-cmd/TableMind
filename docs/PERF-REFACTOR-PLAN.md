@@ -1,10 +1,10 @@
 # Performance Refactor — Plan of Record
 
 **Status:** **SUBSTANTIALLY COMPLETE** as of 2026-09-01. Every step is resolved
-except four: **4.3** component split, **6.3** the three-week shelf-life drill
-(needs real devices over real time), **9.3** keep-or-delete the harness (an
-owner decision, deliberately not made here), and the third route budget in
-**7.1**, which is blocked behind 9.3. Several steps are recorded DONE as
+except three: **4.3** component split, **6.3** the three-week shelf-life drill
+(needs real devices over real time), and the third route budget in **7.1**,
+which 9.3 unblocked but which has nothing to catch yet. **9.3 is decided: the
+harness is KEPT** (Branch A, owner, 2026-09-01). Several steps are recorded DONE as
 *measured and declined* — the number is in the ledger note in each case.
 · **Agreed with owner:** 2026-08-30 · **Author:** Claude
 
@@ -875,7 +875,7 @@ these three it is achievable only in a real shop, on one store, watched.
 | 8.3 pagination gaps | DONE | 0e518f5 | truncated at 1,000 | **1,304 of 1,304** | `.limit()` above 1,000 is a LIE. Two live truncations fixed + a gate |
 | 9.1 promote permanent gates | DONE | 2569e42 | 2 gates | **3 gates, 7 checks** | `verify:invariants`. All 7 mutation-checked. Found 2 real violations |
 | 9.2 final numbers | DONE | b7330df | see the note | | Assembled from one build. Two things are honestly NOT comparable — said so |
-| 9.3 keep-or-delete decision | NOT STARTED | | | | Branch A expected; tag first either way |
+| 9.3 keep-or-delete decision | DONE | | | **KEEP (Branch A)** | Owner's decision 2026-09-01. Tagged `perf-refactor-complete`. CI wired, README checklist, CLAUDE.md §8 rewritten |
 | 9.4 update CLAUDE.md + audit | DONE | | | | Region, the 3 gates, migration 041, precache tiering. Audit: P2-7 half-closed, P0-9 opened |
 
 ### 2.4 finding — an unused-looking index is not an unused index
@@ -1021,6 +1021,61 @@ and 3 to 1.
 **Revisit after 9.3.** If the harness is kept, add it there. If not, the honest
 answer is that request count is not statically checkable, and the data layer is
 the enforcement.
+
+### 9.3 — KEEP, decided by the owner 2026-09-01
+
+Tagged **`perf-refactor-complete`** first, per the plan's rule that the decision
+commit is recoverable whichever branch is taken.
+
+**The evidence it was judged on:**
+
+| Criterion | Finding |
+|---|---|
+| Actual runtime | unit **175 tests, 1.6s wall**; contract ~2min; E2E ~1.8min |
+| Flake count across the whole refactor | **one**, a pre-existing race in `offline.spec.ts` (`setOffline(false)` before the 500 route), fixed the day it appeared |
+| Was adding a case ever a chore? | No — 3.1 added 27 cases for the data primitive without touching config |
+| Did it catch anything? | **Yes, repeatedly**: audit P1-11, P1-12, P1-13, the empty-catalogue till render, and 7/7 on `harness:mutation` |
+
+**Branch A work done:**
+
+- **`harness:visual` was already out of the default run** — `harness:all` is
+  guard + unit. Confirmed rather than changed.
+- **Nothing pruned.** The criterion was "flaked more than twice, or asserts
+  implementation detail rather than behaviour", and nothing met it. Pruning to
+  satisfy a checklist would have been theatre.
+- **CI wired** — `harness:unit` on every push, in `ci.yml`. It can be, because
+  it is pure logic: no DB, no network, no browser, **no secrets**.
+- **Nightly written but INERT** — `harness-nightly.yml` skips until the
+  repository secrets exist. Enabling it means putting a service-role key that
+  bypasses RLS into GitHub Actions and pointing a scheduled job at the
+  production project. That is a decision with a blast radius, not a default, so
+  the file explains the trade and waits.
+- **`harness/README.md`** gained the "adding a feature" checklist: which suite a
+  case belongs in, in descending order of value and ascending order of cost.
+- **`CLAUDE.md` §8 rewritten.** It said there was deliberately no test suite,
+  which Branch A makes false.
+
+### 7.1's third budget — unblocked, and deliberately not shipped today
+
+The API-depth budget was blocked behind 9.3 because a gate living in the harness
+is worthless if the harness is deleted. It is now kept, so the blocker is gone.
+
+It is still not written, for a better reason: **there is currently nothing for it
+to catch.** A scan of all 26 API routes found exactly one place with consecutive
+awaited database calls — `POST /api/activity`, where the second call is an
+insert *retried* after a missing-partition error, which is a strict dependency
+and correctly serial. A matching scan of every client file found **zero** with
+three or more consecutive awaited network calls.
+
+And writing it today would mean shipping a case I could not run: `.env.test`
+still points at the Seoul project, and the E2E suite needs a built server and a
+seeded tenant. The rule this phase just wrote into `harness/README.md` and
+`CLAUDE.md` is that a flaky or unverified case is worse than none.
+
+**So: add it in `harness/e2e/` when `.env.test` is on Ireland**, asserting a
+request-count ceiling per route. The numbers to assert are the post-refactor
+ones — `/pos` 3, `/pos/products` 3, feature flags 1 — not 0.4's originals, which
+3.2, 3.3 and 3.4b superseded.
 
 ### P-2 finding — RESOLVED (2026-08-30)
 

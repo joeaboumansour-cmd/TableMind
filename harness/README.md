@@ -46,7 +46,7 @@ closed: an unset URL is refused, not assumed harmless.
 ## Everyday use
 
 ```bash
-npm run harness:unit         # pure-logic suite -- 130 tests, <1s, no DB
+npm run harness:unit         # pure-logic suite -- 175 tests, ~1.6s, no DB
 npm run harness:unit:watch   # same, in watch mode
 npm run harness:guard        # what database am I pointed at?
 npm run harness:seed         # tear down + re-seed the fixture store
@@ -68,6 +68,60 @@ Everything else writes.
 Seeding is destructive **within the fixture store only** — it clears that
 store's rows and rebuilds them. It takes about a minute for the full 2,492
 products; pass `--count 40` for a fast run while iterating.
+
+---
+
+## Adding a feature — the checklist
+
+The harness was **kept** (Phase 9.3, Branch A, decided 2026-09-01). The rule
+that comes with keeping it: **a new feature ships with its case.** Not a case
+for everything it touches — one case for the thing that would be expensive to
+get wrong.
+
+Work down this list and stop at the first row that fits. The suites are in
+descending order of value and ascending order of cost, and that ordering is the
+whole point: a pure-logic test is free forever, a screenshot is a liability.
+
+| If the change is… | Put the case in | Cost |
+|---|---|---|
+| a **calculation or a decision** — money, rounding, a guard, a state machine, an eviction order, a retry rule | `harness/unit/` | free: no DB, no secrets, runs on every push |
+| a **route's response shape or status** | `harness/contract/` | needs a built server + seeded DB |
+| a **flow a cashier performs end to end** | `harness/e2e/` | needs a browser; nightly |
+| **how something looks** | `harness/visual/` | opt-in only — see below |
+
+### Rules that are not negotiable
+
+1. **Assert behaviour, not implementation.** A test that breaks when you rename
+   a private function is a tax; one that breaks when a total comes out wrong is
+   the point. This is the criterion Phase 9.3 used to decide what to prune.
+2. **Zero tolerance for flake.** A case that fails intermittently gets fixed or
+   deleted *the same day*. One flaky test teaches everyone to ignore red, and
+   then the net is decorative. Nothing flaked more than once across the whole
+   refactor; keep it that way.
+3. **Scope every statement to `HARNESS_STORE_ID`.** There is no RLS behind you.
+   See the top of this file.
+4. **Pure logic goes in a pure function first.** If a rule is worth testing and
+   you cannot reach it without a browser, the rule is in the wrong place — pull
+   it out the way `evaluateReconcile()` was pulled out of the sync engine.
+
+### What runs where
+
+- **Every push** (`.github/workflows/ci.yml`): typecheck, `harness:unit`, and
+  `npm run build` — which is itself three gates (`verify:sw`,
+  `verify:budgets`, `verify:invariants`). No secrets involved.
+- **Nightly and pre-release** (`.github/workflows/harness-nightly.yml`):
+  contract + E2E. **Currently inert** — it stays skipped until the repository
+  secrets exist, because enabling it means putting a service-role key into CI
+  and pointing a scheduled job at the production project. That header explains
+  the trade before you take it.
+- **By hand:** `harness:visual`, deliberately out of the default run. Screenshot
+  diffing is the part most likely to go red for reasons that are not a
+  regression. Run it around UI work, and never `--update-snapshots` without
+  looking at the diff — baselines have frozen real bugs in this repo before.
+
+> **`.env.test` still points at the SEOUL project.** The database moved to
+> Ireland on 2026-09-01 (`docs/REGION-MIGRATION.md`). Until it is updated, the
+> contract and E2E suites are testing the old project.
 
 ---
 

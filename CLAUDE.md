@@ -301,21 +301,56 @@ npm run lint         # eslint .
 
 If `tsc` reports errors inside `.next/types/**` referring to files that no longer exist, that's a stale build artifact after a route move — `rm -rf .next` and rebuild.
 
-### There is no automated test suite — this is deliberate
+### There IS a test harness now — `harness/`
 
-Vitest, Playwright, and both test directories were **removed on 2026-08-16 at the owner's direction**. Verification is done by a human QA team. **Do not add test files, test frameworks, or test scripts unless the owner asks for them.**
+**This section used to say the opposite.** Vitest and Playwright were removed on
+2026-08-16 at the owner's direction; a characterization harness was then built
+for the performance refactor and **kept** on 2026-09-01 (Phase 9.3, Branch A).
+The old suite is still at commit `744ad0d`; it is not what runs.
 
-What this means for you:
+It lives entirely under `harness/`, so it remains one `git rm -r` to remove.
+Read **`harness/README.md`** before adding to it — especially the checklist,
+which says where a new case belongs.
 
-- `npm run typecheck` and `npm run lint` are the only automated gates. Run them.
-- Nothing will catch a regression for you. On money, offline sync, and auth, that raises the bar on care — reason through the change and say explicitly what you verified and how, per §11.
-- Prefer small reversible changes over clever ones, and keep pure logic in pure functions (e.g. `evaluateReconcile` in `src/lib/products/refresh.ts`) so it can be reasoned about directly.
+| Suite | What it covers | Cost |
+|---|---|---|
+| `npm run harness:unit` | pure logic — money, cart lanes, the reconcile guard, eviction order, retry backoff. **175 tests, ~1.6s, no DB, no secrets** | runs on every push in CI |
+| `npm run harness:contract` | route response shape and status | needs a built server + seeded DB |
+| `npm run harness:e2e` | the golden cashier flows | needs a browser; nightly |
+| `npm run harness:visual` | screenshots, 3 platform profiles | **opt-in, by hand only** |
+| `npm run harness:mutation` | proves the net actually catches things — 7/7 | by hand |
 
-If the suite is ever wanted back, it is in git history at commit `744ad0d`:
+**The rule that comes with keeping it: a new feature ships with its case.** One
+case for the thing that would be expensive to get wrong, not a case for
+everything it touches. Assert behaviour, never implementation detail.
+
+> **Zero tolerance for flake.** A case that fails intermittently gets fixed or
+> deleted the same day. Nothing flaked more than once across the entire
+> refactor. One flaky test teaches everyone to ignore red, and a net nobody
+> trusts is worse than no net, because it costs time and buys nothing.
+
+**The harness points at the MAIN Supabase project**, confined to its own tenant
+by `HARNESS_STORE_ID`. There is no RLS behind it — that scoping is the only
+thing keeping it off real stores' data. `npm run harness:guard` asserts this and
+runs first. **`.env.test` still points at the pre-migration Seoul project** and
+needs updating to Ireland.
+
+**These four still gate every build, and are independent of the harness** — they
+survive it being deleted, which is why they exist:
 
 ```bash
-git checkout 744ad0d -- tests src/tests playwright.config.ts vitest.config.ts
+npm run typecheck         # must be clean before handing anything over
+npm run verify:sw         # the service-worker rules (4 checks)
+npm run verify:budgets    # no route's JS grew, precache did not grow
+npm run verify:invariants # the statically checkable §1 invariants (8 checks)
 ```
+
+`verify:sw`, `verify:budgets` and `verify:invariants` run automatically inside
+`npm run build`. **If one fails, do not ship** — `public/sw.js` is generated and
+gitignored, so nothing else catches it.
+
+Lint is **advisory**: it has ~76 pre-existing errors from the Next 16 upgrade
+and does not block. Do not add to them.
 
 ---
 

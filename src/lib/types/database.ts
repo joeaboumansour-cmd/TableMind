@@ -7,6 +7,12 @@
 //
 //   npx supabase gen types typescript --db-url "<conn>" > src/lib/types/database.ts
 //
+// > If `npm run verify:invariants` fails on invariant 14 (`restaurant_id`)
+// > after you regenerate, the DATABASE is what is stale, not this file. It
+// > means migration 041 has not been applied there — the dropped TableMind
+// > functions still exist and their `p_restaurant_id` arguments come through
+// > into the generated types. That is exactly how this was caught once.
+//
 // ## Why this file was regenerated (Phase 2.3)
 //
 // It used to be hand-maintained, and audit P2-7 recorded it as stale. It was
@@ -1705,54 +1711,6 @@ export type Database = {
       }
     }
     Functions: {
-      add_customer_allergy: {
-        Args: {
-          p_allergy_name: string
-          p_customer_id: string
-          p_notes?: string
-          p_severity?: string
-        }
-        Returns: Json
-      }
-      add_reservation_note: {
-        Args: {
-          p_created_by?: string
-          p_note_text: string
-          p_note_type?: string
-          p_reservation_id: string
-          p_restaurant_id: string
-        }
-        Returns: string
-      }
-      calculate_campaign_stats: {
-        Args: { p_campaign_id: string }
-        Returns: {
-          click_rate: number
-          clicked_count: number
-          delivered_count: number
-          open_rate: number
-          opened_count: number
-          sent_count: number
-          total_recipients: number
-        }[]
-      }
-      calculate_estimated_wait: {
-        Args: { p_party_size: number; p_restaurant_id: string }
-        Returns: number
-      }
-      calculate_revpash: {
-        Args: {
-          p_end_time?: string
-          p_seats: number
-          p_spend: number
-          p_start_time: string
-        }
-        Returns: number
-      }
-      can_access_restaurant: {
-        Args: { target_restaurant_id: string }
-        Returns: boolean
-      }
       cleanup_all_old_transactions: {
         Args: never
         Returns: {
@@ -1793,25 +1751,6 @@ export type Database = {
         Returns: number
       }
       create_sale: { Args: { p_sale: Json; p_store_id: string }; Returns: Json }
-      create_walk_in: {
-        Args: {
-          p_customer_name: string
-          p_customer_phone?: string
-          p_notes?: string
-          p_party_size?: number
-          p_restaurant_id: string
-          p_table_id?: string
-        }
-        Returns: string
-      }
-      debug_rls_headers: {
-        Args: never
-        Returns: {
-          headers_json: Json
-          raw_setting: string
-          restaurant_id: string
-        }[]
-      }
       decrement_stock: {
         Args: { p_store_id?: string; product_id: string; quantity: number }
         Returns: undefined
@@ -1834,108 +1773,7 @@ export type Database = {
           variant_name: string
         }[]
       }
-      get_available_tables: {
-        Args: {
-          p_end_time: string
-          p_party_size: number
-          p_restaurant_id: string
-          p_room_name?: string
-          p_start_time: string
-        }
-        Returns: {
-          max_capacity: number
-          min_capacity: number
-          room_name: string
-          shape: string
-          table_id: string
-          table_name: string
-        }[]
-      }
       get_cash_overview: { Args: { p_store_id: string }; Returns: Json }
-      get_comprehensive_analytics: {
-        Args: {
-          p_end_date: string
-          p_restaurant_id: string
-          p_start_date: string
-        }
-        Returns: Json
-      }
-      get_current_restaurant_id_from_headers: { Args: never; Returns: string }
-      get_current_revpash: {
-        Args: { p_restaurant_id: string }
-        Returns: {
-          current_spend: number
-          revpash: number
-          session_duration_minutes: number
-          status: string
-          table_id: string
-          table_name: string
-        }[]
-      }
-      get_customer_segmentation: {
-        Args: {
-          p_end_date: string
-          p_restaurant_id: string
-          p_start_date: string
-        }
-        Returns: Json
-      }
-      get_customers_by_allergy: {
-        Args: { p_allergy_name: string; p_restaurant_id: string }
-        Returns: {
-          allergy_severity: string
-          customer_id: string
-          customer_name: string
-          notes: string
-          phone: string
-        }[]
-      }
-      get_customers_for_segment: {
-        Args: {
-          p_custom_filters?: Json
-          p_restaurant_id: string
-          p_segment: string
-        }
-        Returns: {
-          customer_id: string
-          email: string
-          name: string
-        }[]
-      }
-      get_day_of_week_patterns: {
-        Args: {
-          p_end_date: string
-          p_restaurant_id: string
-          p_start_date: string
-        }
-        Returns: Json
-      }
-      get_dining_times_heatmap: {
-        Args: {
-          p_end_date: string
-          p_restaurant_id: string
-          p_start_date: string
-        }
-        Returns: Json
-      }
-      get_growth_rates: {
-        Args: {
-          p_current_end: string
-          p_current_start: string
-          p_previous_end: string
-          p_previous_start: string
-          p_restaurant_id: string
-        }
-        Returns: Json
-      }
-      get_lead_time_distribution: {
-        Args: {
-          p_end_date: string
-          p_restaurant_id: string
-          p_start_date: string
-        }
-        Returns: Json
-      }
       get_product_with_inheritance: {
         Args: { p_product_id: string }
         Returns: {
@@ -1994,16 +1832,6 @@ export type Database = {
           txn_count: number
         }[]
       }
-      get_reservation_with_notes: {
-        Args: { p_reservation_id: string }
-        Returns: Json
-      }
-      get_restaurant_id_from_jwt: { Args: never; Returns: string }
-      get_restaurant_id_from_request: { Args: never; Returns: string }
-      get_seasonal_trends: {
-        Args: { p_restaurant_id: string; p_year: number }
-        Returns: Json
-      }
       get_shift_totals: {
         Args: { p_shift_ids: string[]; p_store_id: string }
         Returns: {
@@ -2036,15 +1864,6 @@ export type Database = {
           username: string
         }[]
       }
-      get_table_popularity: {
-        Args: {
-          p_end_date: string
-          p_limit?: number
-          p_restaurant_id: string
-          p_start_date: string
-        }
-        Returns: Json
-      }
       get_transaction_analytics: {
         Args: { p_from?: string; p_store_id: string; p_tz?: string }
         Returns: Json
@@ -2067,43 +1886,8 @@ export type Database = {
           txn_count: number
         }[]
       }
-      get_waiter_table_status: {
-        Args: { p_restaurant_id: string }
-        Returns: {
-          current_customer_name: string
-          current_order_value: number
-          current_party_size: number
-          current_status: string
-          minutes_seated: number
-          minutes_until: number
-          reservation_id: string
-          room_name: string
-          section: string
-          table_capacity: number
-          table_id: string
-          table_name: string
-          upcoming_customer_name: string
-          upcoming_party_size: number
-          upcoming_reservation_id: string
-          upcoming_status: string
-          upcoming_time: string
-          urgency: string
-        }[]
-      }
-      get_year_over_year_comparison: {
-        Args: {
-          p_current_year: number
-          p_previous_year: number
-          p_restaurant_id: string
-        }
-        Returns: Json
-      }
       increment_product_stock: {
         Args: { p_delta: number; p_product_id: string; p_store_id: string }
-        Returns: undefined
-      }
-      initialize_table_status: {
-        Args: { p_restaurant_id: string }
         Returns: undefined
       }
       is_feature_enabled: {
@@ -2140,50 +1924,12 @@ export type Database = {
           partition_name: string
         }[]
       }
-      mark_no_shows: { Args: never; Returns: number }
-      recalculate_waitlist_positions: {
-        Args: { p_restaurant_id: string }
-        Returns: undefined
-      }
       scheduled_transaction_cleanup: {
         Args: never
         Returns: {
           deleted_count: number
           reason: string
           store_id: string
-        }[]
-      }
-      search_customers: {
-        Args: {
-          p_limit?: number
-          p_restaurant_id: string
-          p_search_term: string
-        }
-        Returns: {
-          email: string
-          id: string
-          name: string
-          phone: string
-          reliability_score: number
-          similarity: number
-          tags: string[]
-          total_visits: number
-        }[]
-      }
-      upsert_customer: {
-        Args: {
-          p_email?: string
-          p_name: string
-          p_notes?: string
-          p_phone?: string
-          p_restaurant_id: string
-          p_tags?: string[]
-        }
-        Returns: {
-          customer_id: string
-          is_new: boolean
-          name: string
-          phone: string
         }[]
       }
     }

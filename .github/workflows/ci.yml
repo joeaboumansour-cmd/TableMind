@@ -22,6 +22,20 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      # The fast half of the harness, wired in by Phase 9.3 Branch A (KEEP).
+      #
+      # This runs on EVERY push because it can: 175 tests in 1.6s wall, pure
+      # logic, no database, no network, no browser, and therefore NO SECRETS.
+      # That is not an accident — harness/vitest.config.mts pins the
+      # environment to `node` precisely so nothing in here can reach further.
+      #
+      # It is also the half that earns its keep: the money rules, the cart
+      # lanes, the reconcile guard, the eviction order and the retry backoff
+      # are all characterised here, and `npm run harness:mutation` has proven
+      # 7/7 that it catches a real change.
+      - name: Harness (unit)
+        run: npm run harness:unit
+
       # Lint is advisory for now. It had been silently broken since the Next 16
       # upgrade (`next lint` was removed), so it surfaced ~134 pre-existing
       # errors the first time it ran. Burn those down, then drop this line so
