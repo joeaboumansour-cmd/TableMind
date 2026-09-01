@@ -856,7 +856,7 @@ these three it is achievable only in a real shop, on one store, watched.
 | 5.2 optimistic + spinner rules | NOT STARTED | | | | |
 | 5.3 iOS launch screens | DONE | 51020da | blank white boot | **branded splash** | 15 devices, 0 bytes of precache. Brought forward — it was the biggest unclaimed win |
 | 5.4 view transitions + scroll restore | NOT STARTED | | | | |
-| 6.1 storage grant, per platform | DONE | | | | Durability state classified, shown to the shop, reported to the admin trail |
+| 6.1 storage grant, per platform | DONE | a6beefc | | | Durability state classified, shown to the shop, reported to the admin trail |
 | 6.2 quota & eviction order | DONE | 34422ca | | | Order is DATA and asserted, mutation-checked. Plus the cleared-catalogue fix |
 | 6.3 three-week shelf-life drill | NOT STARTED | | | | All three platforms |
 | 7.1 route budgets enforced | NOT STARTED | | | | |
