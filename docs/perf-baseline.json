@@ -3,103 +3,103 @@
     {
       "route": "/",
       "chunks": 6,
-      "raw": 511934,
-      "gz": 158764,
+      "raw": 511977,
+      "gz": 158791,
       "missing": 0
     },
     {
       "route": "/admin",
       "chunks": 22,
-      "raw": 1043083,
-      "gz": 317888,
+      "raw": 1042531,
+      "gz": 317884,
       "missing": 0
     },
     {
       "route": "/admin/activity",
       "chunks": 23,
-      "raw": 1040608,
-      "gz": 319461,
+      "raw": 1040056,
+      "gz": 319459,
       "missing": 0
     },
     {
       "route": "/admin/login",
       "chunks": 21,
-      "raw": 967068,
-      "gz": 296825,
+      "raw": 966516,
+      "gz": 296821,
       "missing": 0
     },
     {
       "route": "/admin/transactions",
       "chunks": 20,
-      "raw": 968877,
-      "gz": 296626,
+      "raw": 968325,
+      "gz": 296622,
       "missing": 0
     },
     {
       "route": "/barcodegen",
       "chunks": 22,
-      "raw": 1088635,
-      "gz": 325815,
+      "raw": 1088083,
+      "gz": 325811,
       "missing": 0
     },
     {
       "route": "/checkout",
       "chunks": 30,
-      "raw": 1109503,
-      "gz": 345327,
+      "raw": 1108962,
+      "gz": 345333,
       "missing": 0
     },
     {
       "route": "/kitchen",
       "chunks": 28,
-      "raw": 1063105,
-      "gz": 329433,
+      "raw": 1066941,
+      "gz": 331248,
       "missing": 0
     },
     {
       "route": "/login",
       "chunks": 20,
-      "raw": 970763,
-      "gz": 297150,
+      "raw": 970211,
+      "gz": 297146,
       "missing": 0
     },
     {
       "route": "/pos",
       "chunks": 30,
-      "raw": 1176256,
-      "gz": 361806,
+      "raw": 1181756,
+      "gz": 363950,
       "missing": 0
     },
     {
       "route": "/pos/cash",
       "chunks": 29,
-      "raw": 1110395,
-      "gz": 341666,
+      "raw": 1114235,
+      "gz": 343487,
       "missing": 0
     },
     {
       "route": "/pos/products",
       "chunks": 31,
-      "raw": 1197560,
-      "gz": 366248,
+      "raw": 1201396,
+      "gz": 368060,
       "missing": 0
     },
     {
       "route": "/transactions",
       "chunks": 28,
-      "raw": 1088885,
-      "gz": 336797,
+      "raw": 1092732,
+      "gz": 338624,
       "missing": 0
     }
   ],
   "shared": {
     "chunks": 6,
-    "raw": 511934,
-    "gz": 158764
+    "raw": 511977,
+    "gz": 158791
   },
   "precache": {
     "entries": 119,
-    "raw": 3425462,
+    "raw": 3086908,
     "counted": 114
   },
   "recordedAt": "2026-09-01",
