@@ -1114,16 +1114,49 @@ infrastructure rather than code:
    therefore crosses to Washington, which then talks to Supabase wherever it
    is, and back. Pinning `preferredRegion` to the Supabase region removes that
    leg outright.
-2. **The Supabase project itself appears to be far from Lebanon.** ~260 ms RTT
-   is not a European origin; Beirut→Frankfurt is nearer 60–70 ms. If the project
-   were in `eu-central-1`, *every* API call in the app would drop by roughly
-   200 ms — which is larger than the sum of every server-side saving in this
-   plan.
+2. **The Supabase project is in Seoul** (`ap-northeast-2`) — confirmed by the
+   owner. RTTs measured from Beirut against AWS regional endpoints, warm
+   connections: Paris 55 ms, Frankfurt 61 ms, **Ireland 67 ms**, N. Virginia
+   127 ms, **Seoul 246 ms**. Seoul at 246 ms matches the ~260 ms measured
+   against Supabase itself, which is what makes the model trustworthy rather
+   than a guess.
 
 Neither is a code change and neither is safe to do speculatively: moving a
 Supabase project's region migrates the whole database, and pinning a Vercel
-region to the wrong one makes things worse. Both are recorded here with the
-evidence so the decision can be made on numbers.
+region to the wrong one makes things worse.
+
+#### Decided (2026-09-01): move to Europe
+
+The owner has created a new Supabase project in **Ireland (`eu-west-1`)** and
+the runbook is **[`docs/REGION-MIGRATION.md`](REGION-MIGRATION.md)**.
+
+```
+today   shop (Beirut) --127ms--> Vercel iad1 --~180ms--> Supabase Seoul   ~307 ms
+after   shop (Beirut) --67ms---> Vercel dub1 ----~5ms--> Supabase Ireland  ~72 ms
+```
+
+**~235 ms off every API call** — larger than the sum of every server-side saving
+in this plan. Ireland vs Frankfurt is 6 ms, so colocating Vercel with the
+database (`dub1`) is worth more than the difference and the existing project
+stays.
+
+The runbook carries three traps worth naming here too:
+
+1. **Do not rebuild the schema by replaying migrations.** The repo does not
+   describe production — `001` gates every table on `auth.uid()`, which is
+   always NULL in an app that has never used Supabase Auth, so replaying it
+   would faithfully reproduce a schema that does not work. Dump and restore.
+2. **`NEXT_PUBLIC_SUPABASE_URL` is compiled into the client bundle** and
+   precached by the service worker — verified, the project ref is in a built
+   chunk. The server switches on redeploy; a till does not until its worker
+   updates. So the old project stays alive until the fleet rolls over, or a till
+   pushes sales to Ireland while pulling its catalogue from Seoul.
+3. **The Vercel region pin is the LAST step.** `dub1` while the database is
+   still in Seoul is 67 ms + ~250 ms — worse than today.
+
+What makes the window safe at all is that this is an offline-first POS: with the
+API unreachable, sales queue and sync afterwards. That is exactly what
+`offline_queue` is for.
 
 ### 4.3 History virtualization — measured, and declined with a threshold (2026-09-01)
 
