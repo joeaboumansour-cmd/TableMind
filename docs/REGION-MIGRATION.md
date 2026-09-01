@@ -244,6 +244,28 @@ Update `.env.test` too, or the harness will keep testing Seoul.
 
 ### Step 6 — Only now, pin Vercel to Ireland
 
+**`vercel.json` now exists and pins `dub1`.** It takes effect on the next deploy,
+so it is safe only once the environment variables point at Ireland. The one bad
+combination is `dub1` with the env still on Seoul — Dublin→Seoul is a worse hop
+than Washington→Seoul, so that is slower than doing nothing. Deploy the region
+pin *with* the env switch or *after* it, never before.
+
+Reverting is deleting the file and redeploying; nothing about the app's
+behaviour depends on it.
+
+Why Dublin and not Frankfurt, given Frankfurt is 6 ms closer to Beirut:
+colocation with the database is worth more than the 6 ms.
+
+| Choice | Shop→Vercel | Vercel→DB | Total |
+|---|---:|---:|---:|
+| **`dub1`** (same region as the DB) | 67 ms | ~5 ms | **~72 ms** |
+| `fra1` | 61 ms | ~25 ms | ~86 ms |
+
+`regions` governs **Node serverless functions only** — 25 of the 26 routes.
+Static assets keep being served from Vercel's global CDN, and a Hobby plan
+allows exactly one region (several need Pro).
+
+
 Create `vercel.json`:
 
 ```json
