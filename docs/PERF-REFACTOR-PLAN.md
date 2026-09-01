@@ -841,7 +841,7 @@ these three it is achievable only in a real shop, on one store, watched.
 | 3.0 parallelise the boot delta+count | DONE | | ~600ms serial | **~300ms parallel** | Brought forward from 0.3's finding |
 | 3.2 migrate /pos | DONE | 17edb7b | 6 menu requests per remount | **3** | Closes audit **P1-12** + a second gap it uncovered in the feature flags |
 | 3.3 migrate /pos/products | DONE | fb28138 | 9 menu requests per walk | **3** | Legacy loaders deleted. Also fixed a pre-existing race in the queued-sale test |
-| 3.4 migrate /transactions | DONE | | 2 fetches per mount | **1** | **Migration assessed and deliberately NOT done** — see the note. Fixed the real defect instead, which also fixed /kitchen |
+| 3.4 migrate /transactions | DONE | deb9c71 | 2 fetches per mount | **1** | **Migration assessed and deliberately NOT done** — see the note. Fixed the real defect instead, which also fixed /kitchen |
 | 3.5 migrate /pos/cash + /kitchen | NOT STARTED | | | | |
 | 4.1 memo boundaries | NOT STARTED | | | | |
 | 4.2 History virtualization | NOT STARTED | | | | |
