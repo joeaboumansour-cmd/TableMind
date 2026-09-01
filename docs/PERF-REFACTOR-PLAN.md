@@ -850,7 +850,7 @@ these three it is achievable only in a real shop, on one store, watched.
 | 4.0 perf.boot was measuring the wrong moment | DONE | e164eef | "167ms" | **970ms honest** | The metric AND a real defect: the till rendered with an empty catalogue |
 | 4.2 virtualize the till grid | DONE | e164eef | 12,666 DOM nodes · 833ms blocking | **372 · 0ms** | boot 970→283ms, scan 37→27ms. Costs +9.4KB gz on /pos, recorded |
 | 4.1 memo boundaries | NOT STARTED | | | | Measured: not the bottleneck. Plain scan was already 37ms |
-| 4.3 History virtualization | NOT STARTED | | | | Page size is 50; `loadMore` appends. Lower value than the till grid was |
+| 4.3 History virtualization | DONE | | 17 nodes/row | **declined** | Measured: 1,054 nodes at the default 50 rows. Tier 3. Threshold recorded |
 | 4.3 component split | NOT STARTED | | | | |
 | 5.1 wait register | DONE | 4e3c98e | | | Every wait enumerated and verified. Most were already resolved |
 | 5.2 optimistic + spinner rules | DONE | 4e3c98e | **954ms** | **87ms** | The till’s catalogue writes stopped awaiting the server |
@@ -1052,6 +1052,46 @@ be tracked down.
 **iOS is unblocked** (WebKit installed 2026-08-31), so invariant #24 is
 satisfied for the flows written so far. The row stays PARTIAL because flows
 5-8 — cash shift, inventory, CSV import, kitchen — are still to write.
+
+### 4.3 History virtualization — measured, and declined with a threshold (2026-09-01)
+
+The till's grid was worth virtualising because it rendered **2,488 tiles and
+12,666 DOM nodes** and re-rendered them after every 30-second sync while a
+cashier was scanning. The question for History is whether it is the same
+problem.
+
+Measured as a delta — the empty feed, then the same page with 40 sales dated
+today, seeded through the real API and deleted afterwards:
+
+| | Nodes |
+|---|---:|
+| Empty feed | 203 |
+| 40 rows | 884 |
+| **Per row** | **17.0** |
+| Projected: 50 rows *(the default page)* | **1,054** |
+| Projected: 500 rows *(nine "load more" presses)* | 8,716 |
+
+**Declined at the default.** 1,054 nodes is a twelfth of what the till was
+carrying, on a screen the plan tiers as *"Tier 3 — back office, nobody is
+waiting at a counter. Correct and comfortable. A two-second report is fine. **Do
+not gold-plate these.**"* Virtualising it would add machinery and a scroll
+container to a list that does not need one.
+
+**The threshold, so the next person does not have to re-derive it:** it becomes
+worth doing past roughly **300 rows**, which takes five deliberate "load more"
+presses. If History ever gains an infinite scroll, a default range wider than
+today, or a store that habitually pages back through a month, this moves from
+declined to warranted — and the cheaper half is available first: the row is an
+inline closure per item, so a memoised row with a stable `onSelect(id)` would
+cut the per-keystroke re-render cost without a virtualiser at all.
+
+> Recorded also because getting this number was harder than the answer deserved.
+> Three attempts went into driving the date-range dialog before the measurement
+> was restructured to avoid it entirely — seed sales dated *today*, measure
+> against the default filter, delete them. When a measurement fights the UI,
+> change the measurement.
+
+**Verified:** 17/17 fixture integrity after the 40 seeded sales were deleted.
 
 ### 8.2 / 8.3 — `.limit()` above 1,000 does not do what it looks like it does (2026-09-01)
 
