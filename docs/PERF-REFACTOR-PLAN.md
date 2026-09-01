@@ -839,7 +839,7 @@ these three it is achievable only in a real shop, on one store, watched.
 | 2.2b finish the serial-GET conversion | DONE | e73d864 | 543ms each | **325 / 275ms** | `features` and `kitchen/tickets`. Found by measuring, not by the survey |
 | 2.6 cash overview RPC (migration 039) | DONE | 9d66ba4 | **849ms** | **291ms** | −66%. Fallback proven by pointing at a missing RPC |
 | 2.7 register-requests, 3 trips to 1 | DONE | 4e7e184 | **817ms** | **274ms** | −66%. The write stopped being a prerequisite |
-| 2.5 edge runtime pass | DONE | | | **declined** | Measured: ~260ms of the ~280ms round trip is DISTANCE. Edge cannot touch it. See the note |
+| 2.5 edge runtime pass | DONE | a0d32e4 | | **declined** | Measured: ~260ms of the ~280ms round trip is DISTANCE. Edge cannot touch it. See the note |
 | 3.1 data primitive | DONE | a36e978 | | | `src/lib/data/`. 27 harness tests. No screen migrated yet — that is 3.2 |
 | 3.0 parallelise the boot delta+count | DONE | | ~600ms serial | **~300ms parallel** | Brought forward from 0.3's finding |
 | 3.2 migrate /pos | DONE | 17edb7b | 6 menu requests per remount | **3** | Closes audit **P1-12** + a second gap it uncovered in the feature flags |
