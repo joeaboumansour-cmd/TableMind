@@ -865,7 +865,7 @@ these three it is achievable only in a real shop, on one store, watched.
 | 8.1 PostgREST cap audit | DONE | 5300c53 | | | **No money figure is truncated.** One real gap found, on the public menu |
 | 8.2 IndexedDB read strategy | NOT STARTED | | | | |
 | 8.3 pagination gaps | NOT STARTED | | | | |
-| 9.1 promote permanent gates | NOT STARTED | | | | |
+| 9.1 promote permanent gates | DONE | | 2 gates | **3 gates, 7 checks** | `verify:invariants`. All 7 mutation-checked. Found 2 real violations |
 | 9.2 final numbers | NOT STARTED | | | | Per platform |
 | 9.3 keep-or-delete decision | NOT STARTED | | | | Branch A expected; tag first either way |
 | 9.4 update CLAUDE.md §8 + audit | NOT STARTED | | | | §8 becomes false if kept |
@@ -1052,6 +1052,70 @@ be tracked down.
 **iOS is unblocked** (WebKit installed 2026-08-31), so invariant #24 is
 satisfied for the flows written so far. The row stays PARTIAL because flows
 5-8 — cash shift, inventory, CSV import, kitchen — are still to write.
+
+### 9.1 the permanent gates — and two things they caught on the way in (2026-09-01)
+
+The plan's insurance policy, stated in §0: whatever happens to the harness —
+kept, pruned or deleted — what stands afterwards is a set of **permanent
+build-time gates**. `verify:sw` and `verify:budgets` were the first two.
+`verify:invariants` is the third, and unlike them it reads the SOURCE rather
+than the build output.
+
+Seven checks, each naming its §1 invariant and each saying **what breaks in a
+real shop** — because these fire on somebody else's afternoon, months from now,
+and a rule with no reason attached gets deleted rather than obeyed:
+
+| Invariant | The check | What it prevents |
+|---|---|---|
+| 14 | no `merchant_id` / `restaurant_id` in `src/` | a query scoped by a column that does not exist is not scoped at all |
+| 2 | `roundToNearest5k(` only in `format.ts` and `cartStore.ts` | per-line rounding compounds; no two tills agree |
+| 16 | `isSellable()` is `!== "ingredient"` | the strict form shows an EMPTY CATALOGUE on a pre-030 device |
+| 17 | no `modifiers … \|\| null` | `[]` vs `null` is what the kitchen board filters on |
+| 13 | `PWAUpdateListener` uses `hasAnyLaneItems` | an SW update reloading over a parked customer's basket |
+| 9 | the sync replay forwards `stock_decrements` | a queued menu sale depleting the menu item, not its ingredients |
+| — | nothing imports `@/components/BarcodeScanner` | ~420KB of ZXing in the POS bundle for the scan beep |
+
+**All seven mutation-checked, 7/7 caught.** Each violation was introduced,
+confirmed to fail the gate, and reverted. A gate that cannot fail is theatre.
+
+Comments are **stripped before matching**. This codebase documents its dead
+patterns constantly — *"NOT `=== 'sellable'`"*, *"the dead `x-restaurant-id`
+header"* — and a gate that could not tell a warning from a violation would
+punish exactly the comments that prevent the violation.
+
+#### Two real violations, found by writing the gate
+
+1. **`combineCurrencyTotals()` re-implemented `convertUsdToLl()`.** It read
+   `(ll || 0) + roundToNearest5k((usd || 0) * SELL_RATE)` — which is character
+   for character what the helper does. Identical arithmetic, one fewer
+   definition of the USD→LL conversion. §3 rule 1 says that conversion lives in
+   `format.ts` and nowhere else, and four disagreeing copies of it is audit
+   P1-6. The rate choice the long comment above it defends is unchanged: that
+   helper is the SELL_RATE one.
+2. **Four mock RESTAURANT tables with a `restaurant_id`**, plus a
+   `from("tables")` branch, in `src/lib/supabase/client.ts` — dead TableMind
+   scaffolding for a table that does not exist in this product, and nothing
+   ever called it. Deleted. Lint went **down** by an error as a result.
+
+#### Recorded rather than gated: raw rate arithmetic
+
+§3 rule 5 says *"Use the named helpers, not raw arithmetic — a raw
+`* SELL_RATE` bypasses the 5k rounding that `convertUsdToLl` exists to apply."*
+There are **13 raw `* SELL_RATE` / `* RETURN_RATE` sites outside `format.ts`**,
+on money display paths — the till, the products page, the public menu, checkout,
+the modifier sheet, the combo editor, cartStore.
+
+Most look like deliberate *unrounded* display conversions rather than payable
+amounts, which is a different thing from the rule's target. Deciding each needs
+a money audit and may move numbers a shop reads, so it is **not** gated here —
+a gate nobody can make pass is a gate somebody deletes. Recorded with its
+count so the audit has a starting point.
+
+**Verified:** the gate runs inside `npm run build` (and `build:legacy`), 7/7
+checks passing and 7/7 mutation-caught; 175/175 unit, 124/124 contract, 26/26
+E2E desktop, typecheck clean, build green. Lint **improves** to 207 problems
+(76 errors, 131 warnings) — one fewer error than main's long-standing 77, from
+the deleted mock client.
 
 ### 6.1 the durability state, made visible (2026-09-01)
 

@@ -1,13 +1,5 @@
 import { createBrowserClient } from "@supabase/ssr";
 
-// Mock data for demo mode
-const mockTables = [
-  { id: "1", name: "Table 1", capacity: 2, shape: "rect" as const, sort_order: 1, restaurant_id: "demo" },
-  { id: "2", name: "Table 2", capacity: 4, shape: "rect" as const, sort_order: 2, restaurant_id: "demo" },
-  { id: "3", name: "Table 3", capacity: 4, shape: "circle" as const, sort_order: 3, restaurant_id: "demo" },
-  { id: "4", name: "Table 4", capacity: 6, shape: "rect" as const, sort_order: 4, restaurant_id: "demo" },
-];
-
 // ---- Product reads ----
 //
 // These moved to @/lib/products/refresh, which is now the single home for
@@ -28,8 +20,11 @@ export {
 export type { RefreshResult } from "@/lib/products/refresh";
 
 /**
- * Create a Supabase client with restaurant_id header for RLS
- * This function ALWAYS creates a fresh client to ensure correct tenant isolation
+ * The browser Supabase client.
+ *
+ * Tenancy comes from the `x-auth-data` header the API routes read, never from
+ * this client's identity — see the note further down about the dead
+ * `x-restaurant-id` header this used to set on every request.
  */
 export function createClient() {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -54,40 +49,13 @@ export function createClient() {
         getUser: async () => ({ data: { user: null }, error: null }),
         onAuthStateChange: () => ({ data: { subscription: { unsubscribe: () => {} } } }),
       },
-      from: (table: string) => {
-        if (table === "tables") {
-          return {
-            select: () => ({
-              eq: () => ({
-                order: () => ({
-                  then: (cb: any) => Promise.resolve(cb({ data: mockTables, error: null })),
-                }),
-              }),
-            }),
-            insert: () => ({
-              select: () => ({
-                single: () => Promise.resolve({ 
-                  data: { id: String(Date.now()), name: "New Table", capacity: 2, shape: "rect", sort_order: 5, restaurant_id: "demo" }, 
-                  error: null 
-                }),
-              }),
-            }),
-            update: () => ({
-              eq: () => ({
-                select: () => ({
-                  single: () => Promise.resolve({ data: mockTables[0], error: null }),
-                }),
-              }),
-            }),
-            delete: () => ({
-              eq: () => Promise.resolve({ error: null }),
-            }),
-          };
-        }
-        return {
-          select: () => ({ eq: () => ({ order: () => Promise.resolve({ data: [], error: null }) }) }),
-        };
-      },
+      // No per-table branches. There used to be one for `tables` returning four
+      // mock RESTAURANT tables with a `restaurant_id` — dead TableMind
+      // scaffolding for a product this app is not, querying a table that does
+      // not exist here. Nothing ever called `from("tables")`.
+      from: () => ({
+        select: () => ({ eq: () => ({ order: () => Promise.resolve({ data: [], error: null }) }) }),
+      }),
     } as unknown as ReturnType<typeof createBrowserClient>;
   }
 
