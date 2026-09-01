@@ -837,6 +837,7 @@ these three it is achievable only in a real shop, on one store, watched.
 | 2.3 generated DB types | NOT STARTED | | | | |
 | 2.4 index & query audit | NOT STARTED | | | | |
 | 2.2b finish the serial-GET conversion | DONE | e73d864 | 543ms each | **325 / 275ms** | `features` and `kitchen/tickets`. Found by measuring, not by the survey |
+| 2.6 cash overview RPC (migration 039) | DONE | | **849ms** | **291ms** | −66%. Fallback proven by pointing at a missing RPC |
 | 2.5 edge runtime pass | NOT STARTED | | | | |
 | 3.1 data primitive | DONE | a36e978 | | | `src/lib/data/`. 27 harness tests. No screen migrated yet — that is 3.2 |
 | 3.0 parallelise the boot delta+count | DONE | | ~600ms serial | **~300ms parallel** | Brought forward from 0.3's finding |
@@ -1050,6 +1051,72 @@ be tracked down.
 **iOS is unblocked** (WebKit installed 2026-08-31), so invariant #24 is
 satisfied for the flows written so far. The row stays PARTIAL because flows
 5-8 — cash shift, inventory, CSV import, kitchen — are still to write.
+
+### 2.6 the cash page's three round trips become one — migration 039 (2026-09-01)
+
+The biggest single number left after 2.2b. `GET /api/cash-shifts` was **849 ms**
+against a ~300 ms floor, and it was not slow code: three waves that genuinely
+depend on each other — registers, then the shifts on them, then those shifts'
+totals. Latency paid three times over.
+
+`get_cash_overview(p_store_id)` does the whole traversal in Postgres and is
+started in **wave 1**, because it needs nothing from wave 1. The success path is
+one wave, total.
+
+| | Before | After |
+|---|---:|---:|
+| `GET /api/cash-shifts` median | **849 ms** | **291 ms** |
+
+`registers` still comes from wave 1's own query rather than from the RPC, so
+that list is byte-identical to what it has always been and the change is
+confined to the parts that were costing round trips.
+
+#### It fixes a latent bug on the way
+
+The old code fetched closed shifts with `.limit(registerIds.length * 3)` —
+a **fetch** bound, not a semantic one. If three-times-the-register-count of more
+recently closed shifts all belonged to *other* registers, a register's own last
+shift fell outside the window and its card showed no figures at all. Rare,
+silent, and only on stores with many registers. `DISTINCT ON (register_id)`
+ordered by "open first, then most recently closed" has no window to fall outside
+of.
+
+#### Verified, not assumed — three ways
+
+1. **The selection rule, against the real database.** A throwaway fixture of
+   three registers — one with an open shift *and* an older closed one, one with
+   three closed shifts, one with none — asserting that the open wins, the most
+   recently closed wins, and a register with no shifts contributes none. All
+   five checks pass; the fixture is deleted afterwards.
+2. **The response is unchanged.** Same keys, same values, and the `cash` visual
+   snapshot passes untouched — which is the strongest available check that the
+   page renders identically.
+3. **The FALLBACK, by breaking it on purpose.** The RPC name was temporarily
+   pointed at a function that does not exist, rebuilt, and measured: identical
+   JSON, **844 ms** (the original three-wave latency), and the warning logged on
+   every request. That is the compatibility hinge for any deployment without 039
+   applied — the same shape migration 037 has for `decrement_stock_batch` — and
+   it now has a demonstration rather than an assumption behind it.
+
+> **This one was applied to Supabase by the owner during the session**, which is
+> what made verification 1 and 2 possible at all. Everything else about the
+> route is written so that a database *without* it is a supported state, not a
+> broken one.
+
+#### What it deliberately does not do
+
+No money is converted in SQL. `usd_amount_paid` comes back as its own component
+exactly as `get_shift_totals` returns it, because the LL/USD rate has one
+definition in `src/lib/utils/format.ts` — duplicating it in SQL is how this
+codebase ended up with four disagreeing conversions (audit P1-6).
+`summariseShift()` still does the arithmetic.
+
+Employees, pending requests and unassigned totals are not folded in either: they
+do not depend on the registers, so they already run in parallel and cost
+nothing.
+
+**Verified:** 124/124 contract, 23/23 E2E desktop, 9/9 visual desktop, typecheck
+clean, lint unchanged at 208, build green.
 
 ### 8.1 PostgREST cap audit — the money paths are clean (2026-09-01)
 

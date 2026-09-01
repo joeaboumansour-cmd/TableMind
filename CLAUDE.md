@@ -299,7 +299,7 @@ git checkout 744ad0d -- tests src/tests playwright.config.ts vitest.config.ts
   a write on it**; it is a markup, not a 0-100 percentage, and it is routinely
   over 100 (up to 489% in one store) and sometimes negative. `discount_percentage`
   IS a real 0-100 percentage.
-- Migrations are append-only and manually numbered; the highest is **`037`**. **`008` is already duplicated** — check the highest number before adding (`ls supabase/migrations/ | tail -1`), and note that this line has been stale before.
+- Migrations are append-only and manually numbered; the highest is **`039`**. **`008` is already duplicated** — check the highest number before adding (`ls supabase/migrations/ | tail -1`), and note that this line has been stale before.
 - `.env.local` is correctly gitignored. Required vars are in `.env.example`.
 - Path alias: `@/*` → `./src/*`.
 - Careful: `src/lib/utils.ts` (file) and `src/lib/utils/` (directory) both exist. `@/lib/utils` resolves to the **file**; formatting helpers are at `@/lib/utils/format`.
