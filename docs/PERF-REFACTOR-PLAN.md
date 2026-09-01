@@ -836,7 +836,7 @@ these three it is achievable only in a real shop, on one store, watched.
 | 2.2 route kernel | DONE | | 576-594ms | **303-318ms** | Closed audit P0-2; 4 GETs converted to one wave |
 | 2.3 generated DB types | NOT STARTED | | | | |
 | 2.4 index & query audit | NOT STARTED | | | | |
-| 2.2b finish the serial-GET conversion | DONE | | 543ms each | **325 / 275ms** | `features` and `kitchen/tickets`. Found by measuring, not by the survey |
+| 2.2b finish the serial-GET conversion | DONE | e73d864 | 543ms each | **325 / 275ms** | `features` and `kitchen/tickets`. Found by measuring, not by the survey |
 | 2.5 edge runtime pass | NOT STARTED | | | | |
 | 3.1 data primitive | DONE | a36e978 | | | `src/lib/data/`. 27 harness tests. No screen migrated yet — that is 3.2 |
 | 3.0 parallelise the boot delta+count | DONE | | ~600ms serial | **~300ms parallel** | Brought forward from 0.3's finding |
@@ -860,7 +860,7 @@ these three it is achievable only in a real shop, on one store, watched.
 | 7.1 route budgets enforced | NOT STARTED | | | | |
 | 7.2 import audit /pos, /checkout | NOT STARTED | | | | Audited: Supabase 52.6KB gz + Dexie 30.2KB gz on every route. NOT the bottleneck — see the note |
 | 7.3 precache tiering | NOT STARTED | | | | |
-| 8.1 PostgREST cap audit | DONE | | | | **No money figure is truncated.** One real gap found, on the public menu |
+| 8.1 PostgREST cap audit | DONE | 5300c53 | | | **No money figure is truncated.** One real gap found, on the public menu |
 | 8.2 IndexedDB read strategy | NOT STARTED | | | | |
 | 8.3 pagination gaps | NOT STARTED | | | | |
 | 9.1 promote permanent gates | NOT STARTED | | | | |
