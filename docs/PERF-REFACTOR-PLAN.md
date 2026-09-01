@@ -852,8 +852,8 @@ these three it is achievable only in a real shop, on one store, watched.
 | 4.1 memo boundaries | NOT STARTED | | | | Measured: not the bottleneck. Plain scan was already 37ms |
 | 4.3 History virtualization | NOT STARTED | | | | Page size is 50; `loadMore` appends. Lower value than the till grid was |
 | 4.3 component split | NOT STARTED | | | | |
-| 5.1 wait register | DONE | | | | Every wait enumerated and verified. Most were already resolved |
-| 5.2 optimistic + spinner rules | DONE | | **954ms** | **87ms** | The till’s catalogue writes stopped awaiting the server |
+| 5.1 wait register | DONE | 4e3c98e | | | Every wait enumerated and verified. Most were already resolved |
+| 5.2 optimistic + spinner rules | DONE | 4e3c98e | **954ms** | **87ms** | The till’s catalogue writes stopped awaiting the server |
 | 5.3 iOS launch screens | DONE | 51020da | blank white boot | **branded splash** | 15 devices, 0 bytes of precache. Brought forward — it was the biggest unclaimed win |
 | 5.4 view transitions + scroll restore | NOT STARTED | | | | |
 | 6.1 storage grant, per platform | DONE | a6beefc | | | Durability state classified, shown to the shop, reported to the admin trail |
