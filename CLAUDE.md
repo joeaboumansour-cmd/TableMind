@@ -115,7 +115,11 @@ The app must keep selling with no internet. This shapes almost every design deci
 >
 > **`next/dynamic` does NOT keep a library out of the precache.** It keeps it
 > out of the initial *bundle*; the precache manifest is built from the whole
-> build output, so a shop still downloads it on every deploy. Two libraries are
+> build output, so a shop downloads it on **install** whether or not the code is
+> ever reached, and holds it on a device whose storage also holds queued sales.
+> (It is not re-downloaded on every deploy — each entry's `revision` IS its
+> content hash, so Workbox refetches only chunks that actually changed.) Two
+> libraries are
 > excluded by name (`/pdf-export/`, `/charts/`), and each needs BOTH halves — a
 > `splitChunks` group in `nextConfig.webpack` giving it a stable name, and the
 > matching entry here — because webpack names chunks by content hash. **ZXing

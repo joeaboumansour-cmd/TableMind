@@ -930,8 +930,17 @@ re-pull the whole catalogue after every import. Worth confirming before Phase 7.
 
 `next/dynamic` keeps a library out of the initial **bundle**. It does nothing
 about the **precache manifest**, which is built from the whole build output — so
-a shop still downloads it on every deploy, just at a different moment. The PDF
+a shop downloads it at **install** whether or not the code is ever reached, and
+then holds it on a device whose storage also holds queued sales. The PDF
 exporter was fixed for this once already; two more were still there.
+
+> **Correction (same day).** An earlier draft of this note, and the commit
+> message for `d9e2092`, said "on every deploy". That is wrong: each precache
+> entry's `revision` **is** the chunk's content hash, so Workbox refetches only
+> chunks whose content changed. The 2.94 MB is the FIRST-INSTALL cost. The
+> exclusion is still correct — install bytes on a phone on mobile data, and
+> device storage shared with the offline sale queue, are both real — but the
+> per-deploy framing overstated it.
 
 Measured on a real build: **119 entries, 3.27 MB uncompressed**, 2.91 MB of it
 JavaScript across 97 chunks. The two largest were both dynamic imports:
