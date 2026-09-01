@@ -852,8 +852,8 @@ these three it is achievable only in a real shop, on one store, watched.
 | 4.1 memo boundaries | NOT STARTED | | | | Measured: not the bottleneck. Plain scan was already 37ms |
 | 4.3 History virtualization | NOT STARTED | | | | Page size is 50; `loadMore` appends. Lower value than the till grid was |
 | 4.3 component split | NOT STARTED | | | | |
-| 5.1 wait register | NOT STARTED | | | | Table lives in this file |
-| 5.2 optimistic + spinner rules | NOT STARTED | | | | |
+| 5.1 wait register | DONE | | | | Every wait enumerated and verified. Most were already resolved |
+| 5.2 optimistic + spinner rules | DONE | | **954ms** | **87ms** | The till’s catalogue writes stopped awaiting the server |
 | 5.3 iOS launch screens | DONE | 51020da | blank white boot | **branded splash** | 15 devices, 0 bytes of precache. Brought forward — it was the biggest unclaimed win |
 | 5.4 view transitions + scroll restore | NOT STARTED | | | | |
 | 6.1 storage grant, per platform | DONE | a6beefc | | | Durability state classified, shown to the shop, reported to the admin trail |
@@ -1052,6 +1052,69 @@ be tracked down.
 **iOS is unblocked** (WebKit installed 2026-08-31), so invariant #24 is
 satisfied for the flows written so far. The row stays PARTIAL because flows
 5-8 — cash shift, inventory, CSV import, kitchen — are still to write.
+
+### 5.1 / 5.2 the wait register — and the one that was still real (2026-09-01)
+
+#### The register, verified rather than assumed
+
+Every point the app can show a wait, checked against the code and the clock as
+it stands today. Most of the plan's candidate rows had already been closed by
+earlier phases, which is the useful result: **the register is short now.**
+
+| Moment | Status | Evidence |
+|---|---|---|
+| Boot → usable till | **resolved** | 129 ms desktop and android, 0 long tasks (9.2) |
+| Route change | **resolved** | 21 ms across all four shell routes (9.2) |
+| Scan → line in cart | **resolved** | 29 ms median (9.2) |
+| Sale complete → receipt | **already done** | `saleCompletion.ts` paints the QR and pushes with no await |
+| Open checkout | **not a wait** | no loading gate at all — the keypad renders from the cart, which is in localStorage |
+| Open History → profit | **already streams** | the card paints; profit shows `—` in a reserved slot until it lands, so there is no reflow |
+| Open Cash | **resolved** | snapshot first, and the route itself went 849 → 291 ms (2.6) |
+| **Save a product** | **WAS REAL — fixed below** | 954 ms → 87 ms |
+
+#### The one that was still real
+
+`createProduct()` awaited the server push before returning, and all three of the
+till's catalogue writes awaited *it*:
+
+- naming an unknown barcode at the till,
+- promoting a one-off line into the catalogue,
+- **retyping a cart line's price** (`repriceProduct` → `updateProduct`).
+
+So a cashier who named an item stood there for a full round trip before the line
+reached the cart — **with the customer holding it.** The local IndexedDB write,
+which is what makes the product durable and sellable, had already completed
+milliseconds earlier.
+
+| | Before | After |
+|---|---:|---:|
+| Press Save → line in the cart | **954 ms** | **87 ms** |
+
+Controlled comparison, six captures each, same machine, old code rebuilt minutes
+apart. This is Phase 5 rule 1 and rule 2 on a Tier-1 path, and it is the same
+move `saleCompletion.ts` already made for the sale itself.
+
+#### Keeping the one failure that still matters
+
+`pushOrQueue` can fail BOTH ways — push refused and queue write refused — and
+that is the one case where the product exists on this device and nowhere else,
+with nothing to retry it. Awaiting used to surface that; not awaiting must not
+lose it.
+
+So `ProductWriteResult.syncedNow: boolean` became **`pushed: Promise<boolean>`**:
+resolves true/false for sent-vs-queued, and **rejects** for neither. Every call
+site attaches a `.catch()` that names the product on screen. Everything milder
+than that — queued while offline, retried later — is already carried by the sync
+indicator and needs no toast of its own.
+
+The success toast is worded from `connectivity.isOnline` rather than from the
+push, which has not settled yet. It is the same fact a cashier can act on, and
+it is what decides the branch in practice.
+
+**Verified:** 26/26 E2E desktop, 175/175 unit, 124/124 contract, 17/17 fixture
+integrity (the six products each bench run created were deleted — twelve in
+total, confirmed zero remaining), typecheck clean, lint unchanged at 207, build
+green with all three gates.
 
 ### 9.2 final numbers (2026-09-01)
 

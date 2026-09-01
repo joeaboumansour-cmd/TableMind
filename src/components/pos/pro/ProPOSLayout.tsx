@@ -26,6 +26,7 @@ import { ScanLine, ScanBarcode, Loader2, X, AlertTriangle } from "lucide-react";
 import { useCartStore } from "@/lib/stores/cartStore";
 import { useAuth } from "@/lib/auth/AuthContext";
 import { useFeatureFlags } from "@/hooks/useFeatureFlags";
+import { connectivity } from "@/lib/connectivity";
 import { useToastManager } from "@/hooks/useToastManager";
 import { useReloadGuard } from "@/lib/pwa/useReloadGuard";
 import { syncEngine } from "@/lib/sync/engine";
@@ -249,6 +250,24 @@ export default function ProPOSLayout({
     };
   }, []);
 
+  /**
+   * The one failure a non-awaited catalogue push must still reach the cashier.
+   *
+   * `pushed` rejects only when the write could neither be sent NOR queued — so
+   * the product exists on this device and nowhere else, and nothing will retry
+   * it. That is not something to leave in the console. Everything else (queued
+   * offline, retried later) is already carried by the sync indicator.
+   */
+  const reportPushFailure = useCallback(
+    (name: string) => (error: unknown) => {
+      console.error("[POS] Catalogue write could neither be pushed nor queued:", error);
+      toast.error(
+        `${name} is saved on this device only — it could not be sent to the server.`
+      );
+    },
+    [toast]
+  );
+
   const retryFailedWrites = useCallback(async () => {
     const { retryFailedProductWrites } = await import("@/lib/db/localDB");
     const n = await retryFailedProductWrites();
@@ -380,21 +399,30 @@ export default function ProPOSLayout({
 
       setIsWriting(true);
       try {
-        const { product, syncedNow } = await createProduct({
+        // NOT awaiting the server. `createProduct` returns once the product is
+        // durable in IndexedDB and sellable; the push happens behind. This used
+        // to cost a full round trip between the cashier naming the item and the
+        // line reaching the cart, with the customer holding it.
+        const { product, pushed } = await createProduct({
           store_id: storeId,
           name: input.name,
           barcode,
           selling_price: input.unitPriceLl,
           currency: "LL",
         });
+        pushed.catch(reportPushFailure(input.name));
+
         const mapped = cachedToProduct(product);
         onProductUpserted(mapped);
         // Added as a REAL product line, not a one-off: the sale is then
         // attributed to the product for reporting, and a second scan of the
         // same item increments the line instead of creating another.
         onProductAdd(mapped);
+        // Worded from connectivity rather than from the push, which has not
+        // settled yet. It is the same fact a cashier can act on, and it is what
+        // decides the branch in practice.
         toast.success(
-          syncedNow
+          connectivity.isOnline
             ? `Saved ${input.name} to inventory`
             : `Saved ${input.name} — will sync when back online`,
           { key: "cart-add" }
@@ -416,6 +444,7 @@ export default function ProPOSLayout({
       storeId,
       onProductUpserted,
       onProductAdd,
+      reportPushFailure,
       toast,
     ]
   );
@@ -446,21 +475,22 @@ export default function ProPOSLayout({
       try {
         if (isOneOffLine(item)) {
           // A line with no catalogue row behind it: "Inventory" means create.
-          const { product, syncedNow } = await createProduct({
+          const { product, pushed } = await createProduct({
             store_id: storeId,
             name: patch.name,
             barcode: item.barcode,
             selling_price: patch.catalogPrice,
             currency: patch.catalogCurrency,
           });
+          pushed.catch(reportPushFailure(patch.name));
           onProductUpserted(cachedToProduct(product));
           toast.success(
-            syncedNow
+            connectivity.isOnline
               ? `Added ${patch.name} to inventory`
               : `Saved ${patch.name} — will sync when back online`
           );
         } else {
-          const { product, syncedNow, preview } = await repriceProduct({
+          const { product, pushed, preview } = await repriceProduct({
             productId: item.product_id,
             storeId,
             name: patch.name,
@@ -470,9 +500,10 @@ export default function ProPOSLayout({
           // Fold the new figures back into the page's catalogue state, so the
           // search list and the quick grid show the price that was just set
           // rather than the one it replaced.
+          pushed.catch(reportPushFailure(patch.name));
           onProductUpserted(cachedToProduct(product));
           toast.success(
-            syncedNow
+            connectivity.isOnline
               ? `Inventory updated to ${
                   preview.currency === "USD"
                     ? formatUSD(preview.sellingPrice)
@@ -495,7 +526,7 @@ export default function ProPOSLayout({
         setIsWriting(false);
       }
     },
-    [updateLine, canEditInventory, storeId, onProductUpserted, toast]
+    [updateLine, canEditInventory, storeId, onProductUpserted, reportPushFailure, toast]
   );
 
   // ---- Lanes ----
