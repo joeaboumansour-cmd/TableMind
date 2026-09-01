@@ -77,6 +77,28 @@ const CHECKS = [
     ].join("\n    "),
   },
   {
+    name: "the credential reads are NetworkOnly",
+    test: (sw) =>
+      /NetworkOnly/.test(sw) && /store_users\|admin_users/.test(sw) && /supabase/.test(sw),
+    why: [
+      "Login is hand-rolled: the browser SELECTs the store row and compares the",
+      "password itself, so the response to /rest/v1/stores?select=* CONTAINS",
+      "password_hash — and password_hash is not a hash, it is the password.",
+      "",
+      "Without the NetworkOnly rule in next.config.ts, the default cross-origin",
+      "handler writes that response into Cache Storage, ON DISK, where it",
+      "survives logout (nothing in this codebase calls caches.delete() except",
+      "purgeCredentialCache), survives a browser restart, and is readable by",
+      "any script on the origin. Found live on 2026-09-01 with two entries",
+      "holding a store owner's plaintext password: on a shared till, signing",
+      "out did not sign you out of anything that mattered.",
+      "",
+      "This does NOT provide offline login and removing it does not restore",
+      "one. Offline login is loginOffline() -> validateCachedCredentials() over",
+      "localStorage, which never touches the network.",
+    ].join("\n    "),
+  },
+  {
     name: "HTML navigations are cached (default `pages` runtime rule)",
     test: (sw) => /cacheName:\s*"pages"/.test(sw),
     why: [

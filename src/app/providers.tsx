@@ -1,16 +1,28 @@
 "use client";
 
+import { useEffect } from "react";
 import { ThemeProvider } from "next-themes";
 import { Toaster } from "sonner";
 import { AuthProvider } from "@/lib/auth/AuthContext";
 import ViewportHeightSync from "@/components/ViewportHeightSync";
 import ActivityTracker from "@/components/ActivityTracker";
+import { purgeCredentialCache } from "@/lib/pwa/purgeCredentialCache";
 
 // NOTE: TanStack Query was previously mounted here but never used — there were
 // zero useQuery/useMutation calls in the app. It was removed in the Aug 2026
 // cleanup. Data fetching is done with plain fetch in useEffect; if you
 // reintroduce a query library, re-add the provider here.
 export function Providers({ children }: { children: React.ReactNode }) {
+  // Delete credential responses the service worker cached before the
+  // NetworkOnly rule in next.config.ts existed. Every device in the field has
+  // them, and they survive logout because nothing here has ever called
+  // caches.delete(). Runs above AuthProvider so it happens whether or not
+  // anyone is signed in, and is deliberately not awaited — cache housekeeping
+  // must never sit between a cashier and a working till.
+  useEffect(() => {
+    void purgeCredentialCache();
+  }, []);
+
   return (
     <AuthProvider>
       <ThemeProvider

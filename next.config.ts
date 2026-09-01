@@ -114,6 +114,40 @@ const withPWA = withPWAInit({
         handler: "NetworkOnly" as const,
         method: "GET",
       },
+      // CRITICAL: never cache the credential reads.
+      //
+      // Login is hand-rolled: the browser SELECTs the row and compares the
+      // password itself (AuthContext.login). So the response body to
+      // `/rest/v1/stores?select=*&username=eq.X` CONTAINS `password_hash`, and
+      // `password_hash` is not a hash — it is the password.
+      //
+      // Without this rule the default `cross-origin` runtime handler stores
+      // that response in Cache Storage, ON DISK, where:
+      //
+      //   * it survives logout — `clearUserFromStorage()` clears localStorage
+      //     and NOTHING in this codebase has ever called `caches.delete()`;
+      //   * it survives a browser restart;
+      //   * any script on the origin, or anyone holding the till, can read it.
+      //
+      // Found on the live deployment 2026-09-01: two entries for `stores`,
+      // both carrying the store owner's plaintext password. On a shared till
+      // that means signing out does not sign you out of anything that matters.
+      //
+      // NetworkOnly, not NetworkFirst: a stale cached credential is never
+      // preferable to a failed request. **This does not affect offline login.**
+      // That path is `loginOffline()` -> `validateCachedCredentials()` in
+      // src/lib/auth/offlineAuth.ts, which reads localStorage and never touches
+      // the network — and which deliberately survives logout so a cashier who
+      // signs off during an outage can get back in.
+      //
+      // Scoped to the two credential-bearing tables. `products` and everything
+      // else keeps its cross-origin caching.
+      {
+        urlPattern: ({ url }: { url: URL }) =>
+          /(^|\.)supabase\.co$/.test(url.hostname) &&
+          /^\/rest\/v1\/(stores|store_users|admin_users)\b/.test(url.pathname),
+        handler: "NetworkOnly" as const,
+      },
       // CRITICAL: the app shell must survive an outage of ANY length.
       //
       // HTML is deliberately not precached (see above), so a runtime cache is

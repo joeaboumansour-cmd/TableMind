@@ -113,6 +113,15 @@ The app must keep selling with no internet. This shapes almost every design deci
 
 > **Critical:** `/api/health` has a `NetworkOnly` rule in `next.config.ts`. If the service worker is ever allowed to cache it, the app serves a cached `200` forever, believes it is permanently online, never shows offline banners, and never triggers sync. Do not touch that rule.
 >
+> **The credential reads are `NetworkOnly`, and must stay that way.** Login
+> compares the password in the browser, so the response to
+> `/rest/v1/stores?select=*` carries `password_hash` — which is the password.
+> The default `cross-origin` handler was caching that to disk, where it survived
+> logout, because nothing ever called `caches.delete()`. Audit P0-10.
+> `src/lib/pwa/purgeCredentialCache.ts` cleans devices that already have it.
+> **Unrelated to offline login**, which reads localStorage via
+> `validateCachedCredentials()` and is deliberately kept across logout.
+>
 > **`next/dynamic` does NOT keep a library out of the precache.** It keeps it
 > out of the initial *bundle*; the precache manifest is built from the whole
 > build output, so a shop downloads it on **install** whether or not the code is

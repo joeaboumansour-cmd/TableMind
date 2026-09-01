@@ -4,6 +4,7 @@ import React, { createContext, useContext, useState, useEffect, useCallback, use
 import { createClient } from "@/lib/supabase/client";
 import { StoreUser, canAccess, getFullPermissions, parsePermissions, SectionKey, UserPermissions } from "./permissions";
 import { cacheCredentials, clearCachedCredentials, validateCachedCredentials } from "./offlineAuth";
+import { purgeCredentialCache } from "@/lib/pwa/purgeCredentialCache";
 import { logActivity, invalidateActivityIdentity, flushActivity } from "@/lib/activity/logger";
 import { connectivity } from "@/lib/connectivity";
 import { clearResourceCache } from "@/lib/data/resource";
@@ -397,6 +398,17 @@ export function AuthProvider({ children }: AuthProviderProps) {
     setUser(null);
     clearUserFromStorage();
     invalidateActivityIdentity();
+
+    // Signing out must also drop any credential response the service worker
+    // cached, or "log out" on a shared till leaves the owner's password
+    // readable on disk to whoever sits down next. Not awaited: logout is a
+    // button press and must not wait on cache housekeeping. The launch-time
+    // purge in providers.tsx covers a device that never signs out.
+    //
+    // This does NOT touch goldensquirrel_offline_credentials_v2 — see
+    // clearCachedCredentials() in offlineAuth.ts, which is deliberately not
+    // called here so a cashier signing off during an outage can sign back in.
+    void purgeCredentialCache();
   }, [user]);
 
   /**
