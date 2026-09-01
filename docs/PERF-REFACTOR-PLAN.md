@@ -856,7 +856,7 @@ these three it is achievable only in a real shop, on one store, watched.
 | 5.2 optimistic + spinner rules | NOT STARTED | | | | |
 | 5.3 iOS launch screens | DONE | 51020da | blank white boot | **branded splash** | 15 devices, 0 bytes of precache. Brought forward — it was the biggest unclaimed win |
 | 5.4 view transitions + scroll restore | NOT STARTED | | | | |
-| 6.1 storage grant, per platform | NOT STARTED | | | | Install = durability on iOS. Grant is asked for; the visible durability state is still to build |
+| 6.1 storage grant, per platform | DONE | | | | Durability state classified, shown to the shop, reported to the admin trail |
 | 6.2 quota & eviction order | DONE | 34422ca | | | Order is DATA and asserted, mutation-checked. Plus the cleared-catalogue fix |
 | 6.3 three-week shelf-life drill | NOT STARTED | | | | All three platforms |
 | 7.1 route budgets enforced | NOT STARTED | | | | |
@@ -1052,6 +1052,82 @@ be tracked down.
 **iOS is unblocked** (WebKit installed 2026-08-31), so invariant #24 is
 satisfied for the flows written so far. The row stays PARTIAL because flows
 5-8 — cash shift, inventory, CSV import, kitchen — are still to write.
+
+### 6.1 the durability state, made visible (2026-09-01)
+
+The exit criterion is precise: **"the 'at risk' state is impossible to be in
+without the shop being told."** That has two halves — deciding it and showing
+it — and only the first can be asserted, so it is the first that got a pure
+function.
+
+#### Deciding: `classifyDurability()`
+
+Whether queued sales survive is not a property of this app's code. It is a
+property of the browser the till happens to be in. `src/lib/pwa/durability.ts`
+turns the facts into one of five levels, worst first:
+
+| Level | When | Urgent |
+|---|---|---|
+| `full` | Nearly out of quota — the NEXT sale may fail to save | yes |
+| `at_risk` | Sales are queued AND the browser may delete them | yes |
+| `unprotected` | Evictable, but nothing queued yet | no |
+| `protected` | Grant given | no |
+| `unknown` | No Storage API — we cannot ask | no |
+
+`full` outranks `at_risk` deliberately: it fails the next sale whether or not
+the grant was given, which is a certainty rather than a risk.
+
+`unknown` is the rule this codebase keeps relearning, appearing for the fifth
+time: **do not tell a shop its sales are safe, and do not tell them they are
+not, when the browser cannot say.** 9 unit tests, including that a
+dead-lettered sale — a *server* refusal, already listed on the transactions
+page — must not turn a healthy device into a warning.
+
+#### Showing: an alarm, not a notice
+
+The existing surface was a toast: once per device, dismissible, and fired on
+"this app is not installed" — which is true for weeks before it matters, and
+therefore trains people to ignore it.
+
+`DurabilityBanner` shows for one condition: **money is on this device and the
+browser is allowed to delete it.** It has no dismiss control, because there is
+nothing to dismiss while cash is at risk — it disappears when the sales sync or
+the grant arrives, and re-checks on every reconnect for exactly that reason.
+The not-installed toast stays as it was. **One is advice and one is an alarm,
+and mixing them is how an alarm stops working.**
+
+It is mounted in the **`(shell)` layout, not `AppShell`** — so it is on every
+screen a cashier is on between sales and on none during payment. `/checkout`
+shares the same shell and passes no banner: a row appearing mid-payment both
+distracts and takes height from the keypad on a 1366×768 till.
+
+#### Showing it to the admin console
+
+The admin console cannot see any of this — it is per-browser state on a device
+it has never met. So the device reports itself, through the trail that already
+exists: a new `sync.durability` action carrying level, grant, quota ratio,
+queued and dead-lettered counts. No new admin page; `/admin/activity` already
+filters by category.
+
+Logged **only when the answer changes**, keyed on `level:queuedSales`. The till
+re-checks every minute all day, and logging that would be thousands of identical
+rows against a 3-day retention window shared with the events somebody reads.
+
+#### A harness limit worth knowing
+
+**Playwright's WebKit build has no `navigator.storage` at all** — verified, not
+assumed. So the app correctly reports `unknown` and shows nothing, and the alarm
+test skips there by testing for the capability rather than naming a platform.
+
+> This is a HARNESS limitation, not a statement about iOS. Real Safari
+> implements `storage.persist()`, and on iOS the install *is* the durability
+> mechanism. Verifying the grant on a real device belongs with 6.3's drill —
+> which is now the only part of Phase 6 still open.
+
+**Verified:** 26/26 E2E desktop, the alarm passing on desktop AND android and
+skipping honestly on ios, 9/9 visual desktop (the banner is correctly absent
+under normal conditions), 175/175 harness unit (nine new), typecheck clean, lint
+unchanged at 208, build green. The banner was also rendered and looked at.
 
 ### 6.2 eviction discipline, and an empty catalogue that lied (2026-09-01)
 

@@ -29,7 +29,21 @@ import BottomTabBar from "@/components/BottomTabBar";
 import DesktopNav from "@/components/nav/DesktopNav";
 import { useVisibleTabs } from "@/components/nav/tabs";
 
-export default function AppShell({ children }: { children: React.ReactNode }) {
+export default function AppShell({
+  children,
+  banner,
+}: {
+  children: React.ReactNode;
+  /**
+   * A flex-shrink-0 row above the screen, for something the shop must not miss.
+   *
+   * A SLOT rather than a component rendered here, because /checkout shares this
+   * shell and must not get one: a row appearing mid-payment both distracts the
+   * cashier and takes height from the keypad on a 1366x768 till. The (shell)
+   * group passes one; /checkout does not.
+   */
+  banner?: React.ReactNode;
+}) {
   // Resolved ONCE here and handed to both bars. Two components each calling
   // useFeatureFlags() would answer the same question on different ticks, which
   // is the race described above.
@@ -42,6 +56,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     // until that first measurement lands.
     <div className="flex h-app flex-col overflow-hidden">
       <DesktopNav tabs={tabs} />
+      {banner}
       <div className="min-h-0 flex-1 overflow-hidden">{children}</div>
       <BottomTabBar tabs={tabs} />
     </div>

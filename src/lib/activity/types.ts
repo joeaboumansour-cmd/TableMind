@@ -124,6 +124,11 @@ export const ACTIVITY_ACTIONS = [
   "sync.write_dropped",
   "sync.retry_requested",
   "sync.dismissed",
+  // Whether this DEVICE is a safe place to keep money — the browser's storage
+  // grant, how full it is, and how many completed sales are sitting on it.
+  // Emitted from the till because the admin console cannot see any of it: it is
+  // per-browser state, and the activity trail is how a device reports itself.
+  "sync.durability",
 
   // --- Connectivity
   "connectivity.offline",
