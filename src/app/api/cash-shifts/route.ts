@@ -62,6 +62,18 @@ interface ShiftTotalsRow {
   txn_count: number;
 }
 
+/**
+ * What `get_cash_overview` (migration 039) returns.
+ *
+ * Deliberately the SAME shapes the three-wave path builds by hand, so the two
+ * code paths cannot serve subtly different JSON to the same screen.
+ */
+interface CashOverview {
+  shifts: ShiftRow[];
+  totals: Record<string, ShiftTotalsRow>;
+  adjustments: Record<string, AdjustmentRow[]>;
+}
+
 // ── GET /api/cash-shifts ────────────────────────────────────────────────────
 // Every active register with its current shift, that shift's sales totals and
 // adjustments, the pending approval counts, the assignable employees, and the
@@ -110,7 +122,7 @@ export async function GET(request: Request) {
     // Nothing is returned until the caller is confirmed below; this only
     // overlaps the latency. All of these are already scoped to storeId, so a
     // failed auth discards them without ever having read another tenant.
-    const [caller, registersRes, employeesRes, pendingRes, unassignedRes] = await Promise.all([
+    const [caller, registersRes, employeesRes, pendingRes, unassignedRes, overviewRes] = await Promise.all([
       resolveCaller(supabase, storeId, userId),
       supabase
         .from("cash_registers")
@@ -136,6 +148,17 @@ export async function GET(request: Request) {
         p_store_id: storeId,
         p_from: startOfToday.toISOString(),
       }),
+      // The whole register → shift → totals traversal, done in Postgres.
+      //
+      // Waves 2 and 3 below exist only because each needed the ids the previous
+      // one produced, so this endpoint paid full network latency THREE times —
+      // 849 ms measured, against a ~300 ms one-round-trip floor. Postgres
+      // already has all three in one place (migration 039).
+      //
+      // Started HERE, in wave 1, because it needs nothing from it: it takes the
+      // store id and does its own traversal. So the success path is one wave,
+      // total.
+      supabase.rpc("get_cash_overview", { p_store_id: storeId }),
     ]);
 
     if (!caller) {
@@ -193,6 +216,35 @@ export async function GET(request: Request) {
     }
 
     const registerIds = registerList.map((r) => r.id);
+
+    // ── The fast path: migration 039 answered, and waves 2 and 3 are skipped ──
+    //
+    // `registers` still comes from wave 1's own query rather than from the RPC,
+    // so that list is byte-identical to what it has always been and the change
+    // is confined to the parts that were costing round trips.
+    const overview = overviewRes.error ? null : (overviewRes.data as CashOverview | null);
+    if (overviewRes.error) {
+      // NOT fatal, and deliberately loud. A database without 039 applied is the
+      // expected state until somebody runs it — the same compatibility hinge
+      // migration 037 has for `decrement_stock_batch`. The drawer figures below
+      // are the ones that were always there.
+      console.warn(
+        "[Cash] get_cash_overview unavailable, falling back to the three-wave path:",
+        overviewRes.error.message
+      );
+    }
+
+    if (overview) {
+      return NextResponse.json({
+        registers: registersRes.data || [],
+        employees: employeesRes.data || [],
+        shifts: overview.shifts || [],
+        totals: overview.totals || {},
+        adjustments: overview.adjustments || {},
+        pendingByRegister,
+        unassigned,
+      });
+    }
 
     // ── Wave 2 ───────────────────────────────────────────────────────────────
     // Needs the register ids. The current shift per register: every open one,

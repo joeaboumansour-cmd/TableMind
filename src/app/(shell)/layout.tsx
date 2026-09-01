@@ -15,11 +15,19 @@
 // =============================================
 
 import AppShell from "@/components/AppShell";
+import DurabilityBanner from "@/components/pos/DurabilityBanner";
 
 export default function ShellLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  return <AppShell>{children}</AppShell>;
+  // The durability alarm lives HERE rather than in AppShell, so it is on every
+  // screen a cashier is on between sales — the till, inventory, cash, history —
+  // and on none during payment. /checkout renders the same AppShell without it.
+  //
+  // It renders nothing at all unless money is actually at risk on this device;
+  // see DurabilityBanner for why that condition is narrower than "the app is
+  // not installed".
+  return <AppShell banner={<DurabilityBanner />}>{children}</AppShell>;
 }

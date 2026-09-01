@@ -16,6 +16,7 @@ import { NextResponse } from "next/server";
 import { createServiceRoleClient } from "@/lib/supabase/server";
 import { readAuthHeader, resolveCaller, canAccessSection } from "@/lib/auth/apiCaller";
 import { bad, callerAndRead } from "@/lib/auth/apiRoute";
+import { fetchAllPages, POSTGREST_MAX_ROWS } from "@/lib/supabase/paginate";
 import {
   MAX_COMBO_ITEMS,
   validateComboComponent,
@@ -41,28 +42,61 @@ async function requireCaller(request: Request, write: boolean) {
 }
 
 // ── GET ────────────────────────────────────────────────────────────────────
-// Explicit cap: PostgREST silently truncates an unbounded select at 1000, and
-// a truncated combo would sell a meal missing half its contents.
+//
+// PAGED, not `.limit()`. This was `.limit(COMBO_CAP)` at 2000, and Supabase
+// caps PostgREST at 1000 rows whatever you ask for — so the read truncated at
+// 1000 and `rows.length >= COMBO_CAP` could never be true. A truncated combo
+// sells a meal missing half its contents, flagged as complete. See
+// lib/supabase/paginate.ts.
 const COMBO_CAP = 2000;
 
 export async function GET(request: Request) {
-  const resolved = await callerAndRead(request, (supabase, storeId) =>
+  // `.order("id")` is the tiebreaker sort_order cannot provide — without it,
+  // equal rows can shift between pages and be skipped or duplicated.
+  const readPage = (
+    supabase: Awaited<ReturnType<typeof createServiceRoleClient>>,
+    storeId: string,
+    from: number,
+    to: number
+  ) =>
     supabase
       .from("combo_components")
       .select(SELECT_COLS)
       .eq("store_id", storeId)
       .order("sort_order", { ascending: true })
-      .limit(COMBO_CAP)
+      .order("id", { ascending: true })
+      .range(from, to);
+
+  const resolved = await callerAndRead(request, (supabase, storeId) =>
+    readPage(supabase, storeId, 0, POSTGREST_MAX_ROWS - 1)
   );
   if ("error" in resolved) return resolved.error;
-  const { data, error } = resolved.result;
 
-  if (error) {
-    console.error("[Combos] List failed:", error.message);
+  const { storeId, supabase } = resolved;
+  const first = resolved.result;
+
+  if (first.error) {
+    console.error("[Combos] List failed:", first.error.message);
     return bad("Could not load combos", 500);
   }
 
-  const rows = (data || []) as ComboComponent[];
+  let rows = (first.data || []) as ComboComponent[];
+  let truncated = false;
+
+  if (rows.length >= POSTGREST_MAX_ROWS) {
+    const rest = await fetchAllPages<ComboComponent>(
+      (from, to) => readPage(supabase, storeId, from, to),
+      COMBO_CAP - POSTGREST_MAX_ROWS,
+      // Start AFTER the page callerAndRead already read, or it is returned twice.
+      POSTGREST_MAX_ROWS
+    );
+    if (rest.error) {
+      console.error("[Combos] List failed on a later page:", rest.error);
+      return bad("Could not load combos", 500);
+    }
+    rows = rows.concat(rest.rows);
+    truncated = rest.truncated;
+  }
   const combos: ComboMap = {};
   for (const row of rows) {
     (combos[row.combo_product_id] ||= []).push({
@@ -71,7 +105,7 @@ export async function GET(request: Request) {
     });
   }
 
-  return NextResponse.json({ combos, truncated: rows.length >= COMBO_CAP });
+  return NextResponse.json({ combos, truncated });
 }
 
 // ── PUT ────────────────────────────────────────────────────────────────────

@@ -1,22 +1,39 @@
+// =============================================
+// Export audit logging. (audit P0-2)
+//
+// Lower impact than its siblings — this records that an export happened, it
+// does not return the catalogue — but it was the same class of bug: no
+// authentication, service-role key, and `storeId` taken from the body, so
+// anyone could write audit rows into any store's export history.
+//
+// Tenancy now comes from the resolved caller and the body's value is ignored.
+// =============================================
+
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { createServiceRoleClient } from '@/lib/supabase/server';
+import { readAuthHeader, resolveCaller } from '@/lib/auth/apiCaller';
 
 export async function POST(request: NextRequest) {
   try {
     const { 
-      storeId,
+      storeId: _ignoredBodyStoreId,
       totalRows,
       fileName,
       fileSize 
     } = await request.json();
+    void _ignoredBodyStoreId;
 
-    // Validate inputs
-    if (!storeId) {
-      return NextResponse.json(
-        { error: 'Store ID is required' },
-        { status: 400 }
-      );
+    const callerClient = await createServiceRoleClient();
+    const { storeId: callerStoreId, userId } = readAuthHeader(request);
+    if (!callerStoreId) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
+    const caller = await resolveCaller(callerClient, callerStoreId, userId);
+    if (!caller) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+    const storeId = callerStoreId;
 
     // Initialize Supabase client with service role key
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;

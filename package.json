@@ -4,14 +4,33 @@
   "private": true,
   "scripts": {
     "dev": "next dev -H 0.0.0.0 --webpack",
-    "build": "next build --webpack && npm run verify:sw",
+    "build": "next build --webpack && npm run verify:sw && npm run verify:budgets && npm run verify:invariants",
     "verify:sw": "node scripts/verify-sw.mjs",
     "analyze": "cross-env ANALYZE=true next build --webpack",
     "start": "next start",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
-    "build:legacy": "cross-env NEXT_PUBLIC_BUILD_VARIANT=legacy BROWSERSLIST=\"chrome 109, edge 109\" next build --webpack && npm run verify:sw && npm run verify:legacy-css",
-    "verify:legacy-css": "node scripts/verify-legacy-css.mjs"
+    "build:legacy": "cross-env NEXT_PUBLIC_BUILD_VARIANT=legacy BROWSERSLIST=\"chrome 109, edge 109\" next build --webpack && npm run verify:sw && npm run verify:budgets && npm run verify:invariants && npm run verify:legacy-css",
+    "verify:legacy-css": "node scripts/verify-legacy-css.mjs",
+    "baseline": "node scripts/measure-baseline.mjs",
+    "harness:guard": "node harness/guard/assert-not-production.mjs",
+    "verify:budgets": "node scripts/verify-budgets.mjs",
+    "baseline:update": "node scripts/measure-baseline.mjs --update",
+    "harness:seed": "node harness/fixtures/seed.mjs",
+    "harness:seed:down": "node harness/fixtures/seed.mjs --down",
+    "harness:verify": "node harness/fixtures/verify.mjs",
+    "harness:unit": "vitest run --config harness/vitest.config.mts",
+    "harness:unit:watch": "vitest --config harness/vitest.config.mts",
+    "harness:all": "npm run harness:guard && npm run harness:unit",
+    "harness:contract": "vitest run --config harness/contract/vitest.config.mts",
+    "harness:e2e": "playwright test --config harness/e2e/playwright.config.ts",
+    "harness:visual": "playwright test --config harness/visual/playwright.config.ts",
+    "harness:visual:update": "playwright test --config harness/visual/playwright.config.ts --update-snapshots",
+    "harness:mutation": "node harness/mutation/run.mjs",
+    "harness:bench": "node harness/bench/sale-latency.mjs",
+    "harness:bench:till": "playwright test --config harness/bench/playwright.config.ts",
+    "verify:invariants": "node scripts/verify-invariants.mjs",
+    "verify:migration": "node scripts/verify-migration.mjs"
   },
   "dependencies": {
     "@ducanh2912/next-pwa": "^10.2.9",
@@ -45,6 +64,7 @@
   },
   "devDependencies": {
     "@next/bundle-analyzer": "^16.3.1",
+    "@playwright/test": "^1.62.1",
     "@tailwindcss/postcss": "^4",
     "@types/bcryptjs": "^2.4.6",
     "@types/node": "^20",
@@ -58,6 +78,7 @@
     "postcss": "^8.5.6",
     "shadcn": "3.8.4",
     "tailwindcss": "^4.1.18",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vitest": "^4.1.11"
   }
 }

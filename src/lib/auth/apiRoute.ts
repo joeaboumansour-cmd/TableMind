@@ -25,7 +25,7 @@ type ResolvedCaller = NonNullable<Awaited<ReturnType<typeof resolveCaller>>>;
 
 export type CallerAndRead<T> =
   | { error: NextResponse }
-  | { caller: ResolvedCaller; storeId: string; result: T };
+  | { caller: ResolvedCaller; storeId: string; result: T; supabase: ServiceClient };
 
 /**
  * Resolve the caller and run a store-scoped read CONCURRENTLY.
@@ -66,5 +66,9 @@ export async function callerAndRead<T>(
   ]);
 
   if (!caller) return { error: bad("Unauthorized", 401) };
-  return { caller, storeId, result };
+  // `supabase` is returned so a route that needs FURTHER pages can keep reading
+  // without building a second client — and, more to the point, so those pages
+  // happen AFTER the caller is confirmed rather than racing auth the way the
+  // first one deliberately does.
+  return { caller, storeId, result, supabase };
 }

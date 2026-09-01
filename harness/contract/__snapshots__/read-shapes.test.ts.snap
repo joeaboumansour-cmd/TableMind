@@ -1,0 +1,377 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`analytics aggregates in Postgres > GET /api/transactions/analytics returns coherent totals 1`] = `
+{
+  "dayOfWeekSales": [
+    {
+      "day": "string",
+      "revenue": "number",
+      "transactions": "number",
+    },
+    "...",
+  ],
+  "hourlySales": [
+    {
+      "hour": "number",
+      "revenue": "number",
+      "transactions": "number",
+    },
+    "...",
+  ],
+  "summary": {
+    "averageTransactionValue": "number",
+    "profitMargin": "number",
+    "totalItemsSold": "number",
+    "totalProfit": "number",
+    "totalRevenue": "number",
+    "totalTransactions": "number",
+  },
+  "topProductsByQuantity": [
+    {
+      "product_name": "string",
+      "totalQuantity": "number",
+      "totalRevenue": "number",
+    },
+    "...",
+  ],
+  "topProductsByRevenue": [
+    {
+      "product_name": "string",
+      "totalQuantity": "number",
+      "totalRevenue": "number",
+    },
+    "...",
+  ],
+}
+`;
+
+exports[`read route shapes > GET /api/cash-registers 1`] = `
+{
+  "path": "/api/cash-registers",
+  "shape": {
+    "registers": [
+      {
+        "created_at": "string",
+        "created_by": "null",
+        "created_by_name": "string",
+        "id": "string",
+        "is_active": "boolean",
+        "name": "string",
+        "sort_order": "number",
+        "store_id": "string",
+      },
+      "...",
+    ],
+  },
+  "status": 200,
+}
+`;
+
+exports[`read route shapes > GET /api/cash-registers/analytics 1`] = `
+{
+  "path": "/api/cash-registers/analytics",
+  "shape": {
+    "busiestRegisterId": "string",
+    "from": "string",
+    "registers": [
+      {
+        "activeDays": "number",
+        "averageBasket": "number",
+        "cumulativeVariance": "null",
+        "hoursOpen": "number",
+        "largestSale": "number",
+        "name": "string",
+        "peakHour": "null",
+        "peakHourTransactions": "number",
+        "registerId": "string",
+        "revenue": "number",
+        "revenuePerHour": "null",
+        "salesPerHour": "null",
+        "shareOfRevenue": "number",
+        "shiftsClosed": "number",
+        "transactionCount": "number",
+      },
+      "...",
+    ],
+    "storeRevenue": "number",
+    "storeTransactionCount": "number",
+    "to": "string",
+  },
+  "status": 200,
+}
+`;
+
+exports[`read route shapes > GET /api/cash-shifts 1`] = `
+{
+  "path": "/api/cash-shifts",
+  "shape": {
+    "adjustments": {},
+    "employees": [
+      {
+        "display_name": "string",
+        "id": "string",
+        "permissions": {
+          "cash_register": "boolean",
+          "inventory": "boolean",
+          "kitchen": "boolean",
+          "pos": "boolean",
+          "receipts": "boolean",
+          "transactions": "boolean",
+        },
+        "username": "string",
+      },
+      "...",
+    ],
+    "pendingByRegister": {},
+    "registers": [
+      {
+        "created_at": "string",
+        "created_by": "null",
+        "created_by_name": "string",
+        "id": "string",
+        "is_active": "boolean",
+        "name": "string",
+        "sort_order": "number",
+        "store_id": "string",
+      },
+      "...",
+    ],
+    "shifts": [
+      {
+        "assigned_to_owner": "boolean",
+        "assigned_user_id": "null",
+        "assigned_user_name": "null",
+        "business_date": "string",
+        "closed_at": "null",
+        "closed_by": "null",
+        "closed_by_name": "null",
+        "closing_ll": "null",
+        "closing_usd": "null",
+        "created_at": "string",
+        "id": "string",
+        "label": "null",
+        "notes": "null",
+        "opened_at": "string",
+        "opened_by": "string",
+        "opened_by_name": "string",
+        "opening_ll": "number",
+        "opening_usd": "number",
+        "register_id": "string",
+        "status": "string",
+        "store_id": "string",
+        "verified": "boolean",
+      },
+      "...",
+    ],
+    "totals": {},
+    "unassigned": {
+      "count": "number",
+      "total": "number",
+    },
+  },
+  "status": 200,
+}
+`;
+
+exports[`read route shapes > GET /api/categories 1`] = `
+{
+  "path": "/api/categories",
+  "shape": {
+    "categories": [
+      {
+        "color": "null",
+        "id": "string",
+        "name": "string",
+        "sort_order": "number",
+      },
+      "...",
+    ],
+  },
+  "status": 200,
+}
+`;
+
+exports[`read route shapes > GET /api/combos 1`] = `
+{
+  "path": "/api/combos",
+  "shape": {
+    "combos": {
+      "f0000001-0000-4000-8000-0000000009bc": [
+        {
+          "combo_product_id": "string",
+          "id": "string",
+          "item_product_id": "string",
+          "quantity": "number",
+          "sort_order": "number",
+        },
+        "...",
+      ],
+    },
+    "truncated": "boolean",
+  },
+  "status": 200,
+}
+`;
+
+exports[`read route shapes > GET /api/kitchen/tickets 1`] = `
+{
+  "path": "/api/kitchen/tickets",
+  "shape": {
+    "server_time": "string",
+    "tickets": [
+      "<empty>",
+    ],
+  },
+  "status": 200,
+}
+`;
+
+exports[`read route shapes > GET /api/menu-link 1`] = `
+{
+  "path": "/api/menu-link",
+  "shape": {
+    "published": "boolean",
+    "token": "null",
+  },
+  "status": 200,
+}
+`;
+
+exports[`read route shapes > GET /api/my-shift 1`] = `
+{
+  "path": "/api/my-shift",
+  "shape": {
+    "register": "null",
+    "shift": "null",
+  },
+  "status": 200,
+}
+`;
+
+exports[`read route shapes > GET /api/recipes 1`] = `
+{
+  "path": "/api/recipes",
+  "shape": {
+    "recipes": {
+      "f0000001-0000-4000-8000-0000000009bb": [
+        {
+          "id": "string",
+          "ingredient_product_id": "string",
+          "is_default": "boolean",
+          "is_removable": "boolean",
+          "max_quantity": "number",
+          "menu_product_id": "string",
+          "price_delta_ll": "number",
+          "quantity": "number",
+          "sort_order": "number",
+        },
+        "...",
+      ],
+    },
+    "truncated": "boolean",
+  },
+  "status": 200,
+}
+`;
+
+exports[`read route shapes > GET /api/register-requests 1`] = `
+{
+  "path": "/api/register-requests",
+  "shape": {
+    "requests": [
+      "<empty>",
+    ],
+  },
+  "status": 200,
+}
+`;
+
+exports[`read route shapes > GET /api/transactions 1`] = `
+{
+  "path": "/api/transactions",
+  "shape": {
+    "hasMore": "boolean",
+    "nextCursor": "string",
+    "transactions": [
+      {
+        "amount_paid": "number",
+        "change_given": "number",
+        "created_at": "string",
+        "id": "string",
+        "receipt_token": "null",
+        "subtotal": "number",
+        "total_amount": "number",
+        "transaction_items": [
+          {
+            "combo_children": "null",
+            "currency": "string",
+            "id": "string",
+            "modifiers": "null",
+            "note": "null",
+            "product_id": "string",
+            "product_name": "string",
+            "quantity": "number",
+            "total_price": "number",
+            "unit_price": "number",
+          },
+          "...",
+        ],
+        "transaction_number": "string",
+        "user_id": "string",
+        "user_name": "string",
+      },
+      "...",
+    ],
+  },
+  "status": 200,
+}
+`;
+
+exports[`read route shapes > GET /api/transactions/analytics 1`] = `
+{
+  "path": "/api/transactions/analytics",
+  "shape": {
+    "dayOfWeekSales": [
+      {
+        "day": "string",
+        "revenue": "number",
+        "transactions": "number",
+      },
+      "...",
+    ],
+    "hourlySales": [
+      {
+        "hour": "number",
+        "revenue": "number",
+        "transactions": "number",
+      },
+      "...",
+    ],
+    "summary": {
+      "averageTransactionValue": "number",
+      "profitMargin": "number",
+      "totalItemsSold": "number",
+      "totalProfit": "number",
+      "totalRevenue": "number",
+      "totalTransactions": "number",
+    },
+    "topProductsByQuantity": [
+      {
+        "product_name": "string",
+        "totalQuantity": "number",
+        "totalRevenue": "number",
+      },
+      "...",
+    ],
+    "topProductsByRevenue": [
+      {
+        "product_name": "string",
+        "totalQuantity": "number",
+        "totalRevenue": "number",
+      },
+      "...",
+    ],
+  },
+  "status": 200,
+}
+`;

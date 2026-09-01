@@ -23,6 +23,7 @@ import { NextResponse } from "next/server";
 import { createServiceRoleClient } from "@/lib/supabase/server";
 import { readAuthHeader, resolveCaller, canAccessSection } from "@/lib/auth/apiCaller";
 import { bad, callerAndRead } from "@/lib/auth/apiRoute";
+import { fetchAllPages, POSTGREST_MAX_ROWS } from "@/lib/supabase/paginate";
 import {
   MAX_COMPONENTS_PER_RECIPE,
   validateComponent,
@@ -53,28 +54,65 @@ async function requireCaller(request: Request, write: boolean) {
 // The whole store's recipes at once. A snack shop with 80 menu items x 8
 // components is ~640 rows — one request the till caches, rather than a lookup
 // every time somebody taps a tile.
-// Explicit limit: PostgREST silently caps an unbounded select at 1000, and a
-// truncated recipe would quietly under-deduct stock rather than error.
+//
+// PAGED, not `.limit()`. This read was `.limit(RECIPE_CAP)` with RECIPE_CAP at
+// 5000 — and Supabase caps PostgREST at 1000 rows regardless, so the read was
+// silently truncated at 1000 AND `rows.length >= RECIPE_CAP` could never be
+// true. A store past 1000 components served a short recipe set flagged as
+// complete, and the till under-deducted stock on whatever fell off the end:
+// exactly what the flag was written to prevent. See lib/supabase/paginate.ts.
 const RECIPE_CAP = 5000;
 
 export async function GET(request: Request) {
-  const resolved = await callerAndRead(request, (supabase, storeId) =>
+  // `.order("id")` is a TIEBREAKER, not decoration: sort_order is not unique,
+  // and rows that compare equal can move between page requests and be skipped
+  // or duplicated across a boundary.
+  const readPage = (
+    supabase: Awaited<ReturnType<typeof createServiceRoleClient>>,
+    storeId: string,
+    from: number,
+    to: number
+  ) =>
     supabase
       .from("recipe_components")
       .select(SELECT_COLS)
       .eq("store_id", storeId)
       .order("sort_order", { ascending: true })
-      .limit(RECIPE_CAP)
+      .order("id", { ascending: true })
+      .range(from, to);
+
+  const resolved = await callerAndRead(request, (supabase, storeId) =>
+    readPage(supabase, storeId, 0, POSTGREST_MAX_ROWS - 1)
   );
   if ("error" in resolved) return resolved.error;
-  const { data, error } = resolved.result;
 
-  if (error) {
-    console.error("[Recipes] List failed:", error.message);
+  const { storeId, supabase } = resolved;
+  const first = resolved.result;
+
+  if (first.error) {
+    console.error("[Recipes] List failed:", first.error.message);
     return bad("Could not load recipes", 500);
   }
 
-  const rows = (data || []) as RecipeComponent[];
+  let rows = (first.data || []) as RecipeComponent[];
+  let truncated = false;
+
+  // Only if the first page came back full is there more to fetch. Those pages
+  // run AFTER the caller is confirmed, which is strictly safer than the first.
+  if (rows.length >= POSTGREST_MAX_ROWS) {
+    const rest = await fetchAllPages<RecipeComponent>(
+      (from, to) => readPage(supabase, storeId, from, to),
+      RECIPE_CAP - POSTGREST_MAX_ROWS,
+      // Start AFTER the page callerAndRead already read, or it is returned twice.
+      POSTGREST_MAX_ROWS
+    );
+    if (rest.error) {
+      console.error("[Recipes] List failed on a later page:", rest.error);
+      return bad("Could not load recipes", 500);
+    }
+    rows = rows.concat(rest.rows);
+    truncated = rest.truncated;
+  }
   const recipes: RecipeMap = {};
   for (const row of rows) {
     (recipes[row.menu_product_id] ||= []).push({
@@ -89,8 +127,8 @@ export async function GET(request: Request) {
   return NextResponse.json({
     recipes,
     // Tells the client its copy may be short rather than letting it believe a
-    // truncated recipe is the whole thing.
-    truncated: rows.length >= RECIPE_CAP,
+    // truncated recipe is the whole thing. This can now actually be true.
+    truncated,
   });
 }
 

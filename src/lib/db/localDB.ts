@@ -342,48 +342,75 @@ function isQuotaError(e: unknown): boolean {
 }
 
 /**
- * Free space by dropping data we can rebuild from the server.
+ * The eviction order, as DATA so it can be asserted rather than read.
  *
- * Order matters, and products_cache is deliberately NOT in it. It would free
- * the most, but it is also the only thing letting the till sell while offline
- * — dropping it to save one row would take the whole shop down instead of one
- * write. transactions_cache is a pure read convenience, and queued favourite
- * toggles are cosmetic; both are safe to lose and both refill on reconnect.
+ * Order matters and so does absence. Phase 6.2 asks for this to be formalised
+ * and for "queued sales are never shed" to be *asserted* — a comment saying so
+ * is exactly what a future edit does not have to read.
  *
- * offline_queue is never touched. That is the data this exists to protect.
+ * `products_cache` is deliberately NOT here, and the plan's own suggested order
+ * ("activity buffer → transaction history cache → product cache") is declined
+ * on purpose: it would free the most, but it is also the only thing letting the
+ * till sell while offline. Dropping it to save one row would take the whole
+ * shop down instead of one write. Recorded rather than silently diverged from.
  */
+export const EVICTION_ORDER = [
+  {
+    table: "activity_buffer",
+    // Ahead of everything. A diagnostic convenience must never be the reason a
+    // completed sale cannot be written to disk.
+    why: "buffered activity events",
+  },
+  {
+    table: "transactions_cache",
+    why: "the read-only history cache",
+  },
+  {
+    table: "pending_writes",
+    // Cosmetic ONLY. A queued price change or cash movement is not expendable.
+    onlyTypes: ["favorite_add", "favorite_remove"] as const,
+    why: "queued favourite toggles",
+  },
+] as const;
+
+/**
+ * Tables this must never touch, whatever the pressure.
+ *
+ * `offline_queue` holds completed sales whose money is already in the drawer —
+ * it is the data the whole eviction path exists to protect. `products_cache` is
+ * the till's ability to sell offline at all. There is no disk-space emergency
+ * that is improved by losing either.
+ */
+export const NEVER_EVICTED = ["offline_queue", "products_cache"] as const;
+
 async function freeExpendableSpace(): Promise<void> {
-  // Activity events go first, ahead of everything. They are a diagnostic
-  // convenience; a log buffer must never be the reason a completed sale cannot
-  // be written to disk.
-  try {
-    const dropped = await db.activity_buffer.count();
-    if (dropped > 0) {
-      await db.activity_buffer.clear();
-      console.warn(`[LocalDB] Storage pressure — dropped ${dropped} buffered activity events`);
-    }
-  } catch (e) {
-    console.warn("[LocalDB] Could not clear activity_buffer:", e);
-  }
+  for (const step of EVICTION_ORDER) {
+    try {
+      if ("onlyTypes" in step) {
+        const keys = await db.pending_writes
+          .where("type")
+          .anyOf(step.onlyTypes as unknown as string[])
+          .primaryKeys();
+        if (keys.length > 0) {
+          await db.pending_writes.bulkDelete(keys);
+          console.warn(
+            `[LocalDB] Storage pressure — dropped ${keys.length} ${step.why}`
+          );
+        }
+        continue;
+      }
 
-  try {
-    await db.transactions_cache.clear();
-    console.warn("[LocalDB] Storage pressure — dropped transactions_cache to make room");
-  } catch (e) {
-    console.warn("[LocalDB] Could not clear transactions_cache:", e);
-  }
-
-  try {
-    const cosmetic = await db.pending_writes
-      .where("type")
-      .anyOf("favorite_add", "favorite_remove")
-      .primaryKeys();
-    if (cosmetic.length > 0) {
-      await db.pending_writes.bulkDelete(cosmetic);
-      console.warn(`[LocalDB] Storage pressure — dropped ${cosmetic.length} queued favourite writes`);
+      const table = db.table(step.table);
+      const count = await table.count();
+      if (count > 0) {
+        await table.clear();
+        console.warn(`[LocalDB] Storage pressure — dropped ${count} rows of ${step.why}`);
+      }
+    } catch (e) {
+      // One step failing must not stop the others: the next one down may still
+      // free enough for the write that triggered this.
+      console.warn(`[LocalDB] Could not clear ${step.table}:`, e);
     }
-  } catch (e) {
-    console.warn("[LocalDB] Could not clear cosmetic pending writes:", e);
   }
 }
 

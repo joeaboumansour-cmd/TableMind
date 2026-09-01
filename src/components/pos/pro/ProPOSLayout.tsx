@@ -26,6 +26,7 @@ import { ScanLine, ScanBarcode, Loader2, X, AlertTriangle } from "lucide-react";
 import { useCartStore } from "@/lib/stores/cartStore";
 import { useAuth } from "@/lib/auth/AuthContext";
 import { useFeatureFlags } from "@/hooks/useFeatureFlags";
+import { connectivity } from "@/lib/connectivity";
 import { useToastManager } from "@/hooks/useToastManager";
 import { useReloadGuard } from "@/lib/pwa/useReloadGuard";
 import { syncEngine } from "@/lib/sync/engine";
@@ -37,6 +38,7 @@ import { createProduct, repriceProduct } from "@/lib/products/write";
 import { isOneOffLine } from "@/lib/pos/lineItems";
 import { lineKey } from "@/lib/pos/lineKey";
 import { logActivity } from "@/lib/activity/logger";
+import { perfNow, logPerfScan } from "@/lib/activity/perf";
 import type { Product } from "@/lib/types/product";
 import type { CartItem } from "@/lib/types/cart";
 
@@ -69,6 +71,25 @@ interface ProPOSLayoutProps {
   recipes: RecipeMap;
   /** Every combo in the store. Empty for a store that has none. */
   combos: ComboMap;
+  /**
+   * Does this device KNOW what is on the menu — audit P1-12.
+   *
+   * `recipes` and `combos` being empty is ambiguous on their own: it is either
+   * a retail store, or a device that has never been told. Only the second
+   * warrants holding a scan, so the page resolves the ambiguity and passes the
+   * answer down.
+   */
+  menuDataReady: boolean;
+  /** Wait — briefly, and capped — for the menu data. See `lib/pos/menuData`. */
+  awaitMenuData: () => Promise<{ recipes: RecipeMap; combos: ComboMap }>;
+  /**
+   * Does this device know what the shop sells?
+   *
+   * False means the catalogue has never reached this device — a new till, or
+   * one whose storage was cleared — NOT that the shop sells nothing. The
+   * unknown-barcode prompt below reads very differently in the two cases.
+   */
+  catalogueKnown: boolean;
   /** Ingredient names for the modifier sheet, by product id. */
   ingredientNames: Map<string, string>;
   /** Every ingredient in inventory — anything can be added to anything. */
@@ -92,6 +113,9 @@ export default function ProPOSLayout({
   categories,
   recipes,
   combos,
+  menuDataReady,
+  awaitMenuData,
+  catalogueKnown,
   ingredientNames,
   ingredients,
   ingredientPrices,
@@ -174,6 +198,8 @@ export default function ProPOSLayout({
     ingredientPrices,
     enabled: isEnabled("menu_items"),
     onPlainAdd: onProductAdd,
+    menuDataReady,
+    awaitMenuData,
   });
 
   const canEditInventory = isEnabled("inventory") && canAccess("inventory");
@@ -223,6 +249,24 @@ export default function ProPOSLayout({
       unsubscribe();
     };
   }, []);
+
+  /**
+   * The one failure a non-awaited catalogue push must still reach the cashier.
+   *
+   * `pushed` rejects only when the write could neither be sent NOR queued — so
+   * the product exists on this device and nowhere else, and nothing will retry
+   * it. That is not something to leave in the console. Everything else (queued
+   * offline, retried later) is already carried by the sync indicator.
+   */
+  const reportPushFailure = useCallback(
+    (name: string) => (error: unknown) => {
+      console.error("[POS] Catalogue write could neither be pushed nor queued:", error);
+      toast.error(
+        `${name} is saved on this device only — it could not be sent to the server.`
+      );
+    },
+    [toast]
+  );
 
   const retryFailedWrites = useCallback(async () => {
     const { retryFailedProductWrites } = await import("@/lib/db/localDB");
@@ -282,6 +326,9 @@ export default function ProPOSLayout({
 
   const handleBarcode = useCallback(
     async (barcode: string) => {
+      // Clock starts the moment the code arrives from the wedge/camera and
+      // stops at the paint of whatever the cashier sees next.
+      const scanStartedAt = perfNow();
       setIsResolving(true);
       try {
         const product = await resolveBarcode(barcode);
@@ -297,7 +344,15 @@ export default function ProPOSLayout({
           // leave the sale with modifiers=NULL so it is not a kitchen ticket.
           // Falls straight through to a plain add when there is no recipe, so
           // a retail wedge scanner is unaffected.
-          handleTileAdd(product);
+          //
+          // AWAITED, so the "resolving" state stays up for the P1-12 hold on a
+          // device that does not know the menu yet — otherwise the spinner
+          // would clear while the scan was still, correctly, waiting. It is
+          // already settled on every warm till, so this costs a microtask.
+          await handleTileAdd(product);
+          // `hit` distinguishes this from the miss path below, which ends at a
+          // prompt rather than a cart line and is a different measurement.
+          logPerfScan(scanStartedAt, { outcome: "hit" });
           return;
         }
         // The customer is standing there holding it, so a miss is a prompt,
@@ -310,6 +365,7 @@ export default function ProPOSLayout({
           details: { can_edit_inventory: canEditInventory },
         });
         setUnknownBarcode(barcode);
+        logPerfScan(scanStartedAt, { outcome: "miss" });
       } finally {
         setIsResolving(false);
       }
@@ -343,21 +399,30 @@ export default function ProPOSLayout({
 
       setIsWriting(true);
       try {
-        const { product, syncedNow } = await createProduct({
+        // NOT awaiting the server. `createProduct` returns once the product is
+        // durable in IndexedDB and sellable; the push happens behind. This used
+        // to cost a full round trip between the cashier naming the item and the
+        // line reaching the cart, with the customer holding it.
+        const { product, pushed } = await createProduct({
           store_id: storeId,
           name: input.name,
           barcode,
           selling_price: input.unitPriceLl,
           currency: "LL",
         });
+        pushed.catch(reportPushFailure(input.name));
+
         const mapped = cachedToProduct(product);
         onProductUpserted(mapped);
         // Added as a REAL product line, not a one-off: the sale is then
         // attributed to the product for reporting, and a second scan of the
         // same item increments the line instead of creating another.
         onProductAdd(mapped);
+        // Worded from connectivity rather than from the push, which has not
+        // settled yet. It is the same fact a cashier can act on, and it is what
+        // decides the branch in practice.
         toast.success(
-          syncedNow
+          connectivity.isOnline
             ? `Saved ${input.name} to inventory`
             : `Saved ${input.name} — will sync when back online`,
           { key: "cart-add" }
@@ -379,6 +444,7 @@ export default function ProPOSLayout({
       storeId,
       onProductUpserted,
       onProductAdd,
+      reportPushFailure,
       toast,
     ]
   );
@@ -409,21 +475,22 @@ export default function ProPOSLayout({
       try {
         if (isOneOffLine(item)) {
           // A line with no catalogue row behind it: "Inventory" means create.
-          const { product, syncedNow } = await createProduct({
+          const { product, pushed } = await createProduct({
             store_id: storeId,
             name: patch.name,
             barcode: item.barcode,
             selling_price: patch.catalogPrice,
             currency: patch.catalogCurrency,
           });
+          pushed.catch(reportPushFailure(patch.name));
           onProductUpserted(cachedToProduct(product));
           toast.success(
-            syncedNow
+            connectivity.isOnline
               ? `Added ${patch.name} to inventory`
               : `Saved ${patch.name} — will sync when back online`
           );
         } else {
-          const { product, syncedNow, preview } = await repriceProduct({
+          const { product, pushed, preview } = await repriceProduct({
             productId: item.product_id,
             storeId,
             name: patch.name,
@@ -433,9 +500,10 @@ export default function ProPOSLayout({
           // Fold the new figures back into the page's catalogue state, so the
           // search list and the quick grid show the price that was just set
           // rather than the one it replaced.
+          pushed.catch(reportPushFailure(patch.name));
           onProductUpserted(cachedToProduct(product));
           toast.success(
-            syncedNow
+            connectivity.isOnline
               ? `Inventory updated to ${
                   preview.currency === "USD"
                     ? formatUSD(preview.sellingPrice)
@@ -458,7 +526,7 @@ export default function ProPOSLayout({
         setIsWriting(false);
       }
     },
-    [updateLine, canEditInventory, storeId, onProductUpserted, toast]
+    [updateLine, canEditInventory, storeId, onProductUpserted, reportPushFailure, toast]
   );
 
   // ---- Lanes ----
@@ -633,7 +701,37 @@ export default function ProPOSLayout({
             )}
 
             {unknownBarcode &&
-              (canEditInventory ? (
+              (!catalogueKnown ? (
+                /* The catalogue has never reached this device, so "not in the
+                   catalogue" is not something we know — it is something we have
+                   not been told. Offering the create-a-product fields here is
+                   how a till ends up with a duplicate of something the shop
+                   already sells, priced by guess, on a device that is about to
+                   download the real one.
+
+                   An absent answer is not a negative answer — the same rule as
+                   evaluateReconcile(), P1-12 and P1-13. */
+                <div className="mt-2 flex items-center gap-3 rounded-2xl border border-amber-500/30 bg-amber-500/10 p-3">
+                  <ScanBarcode className="h-4 w-4 flex-none text-primary" aria-hidden />
+                  <p className="min-w-0 flex-1 text-xs text-muted-foreground">
+                    <span className="font-bold text-foreground tnum">{unknownBarcode}</span>{" "}
+                    could not be checked — this device has not downloaded the
+                    product list yet. Connect to the internet and try again
+                    before adding it as a new product.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setUnknownBarcode(null);
+                      searchInputRef.current?.focus();
+                    }}
+                    aria-label="Dismiss"
+                    className="tap flex h-8 w-8 flex-none items-center justify-center rounded-lg text-muted-foreground hover:text-foreground"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+              ) : canEditInventory ? (
                 <UnknownBarcodePrompt
                   // Remounts on a new code, which is what clears the half-typed
                   // name and price from the previous one.

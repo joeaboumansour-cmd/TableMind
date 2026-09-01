@@ -21,6 +21,9 @@ export const ACTIVITY_CATEGORIES = [
   "ui",
   "sync",
   "connectivity",
+  // Timing measurements from real devices on real connections. The one
+  // measurement that survives the perf refactor's harness being deleted.
+  "perf",
   "error",
 ] as const;
 
@@ -121,10 +124,33 @@ export const ACTIVITY_ACTIONS = [
   "sync.write_dropped",
   "sync.retry_requested",
   "sync.dismissed",
+  // Whether this DEVICE is a safe place to keep money — the browser's storage
+  // grant, how full it is, and how many completed sales are sitting on it.
+  // Emitted from the till because the admin console cannot see any of it: it is
+  // per-browser state, and the activity trail is how a device reports itself.
+  "sync.durability",
 
   // --- Connectivity
   "connectivity.offline",
   "connectivity.online",
+
+  // --- Performance (field measurement)
+  //
+  // Step 0.2 of docs/PERF-REFACTOR-PLAN.md. These ride the activity pipeline
+  // rather than a new one because it already has everything field measurement
+  // needs: a closed vocabulary, an offline buffer that survives an outage, an
+  // admin console, and a per-store kill switch.
+  //
+  // Every one carries platform and display-mode, because the same number means
+  // very different things on a cold iOS WebView and a warm desktop Chrome —
+  // and because install state is what determines storage durability on iOS.
+  //
+  // All four are emitted AFTER the thing they measure has painted, so the
+  // measurement can never be part of what it measures.
+  "perf.boot",
+  "perf.scan",
+  "perf.sale",
+  "perf.route",
 
   // --- Errors
   "error.uncaught",

@@ -24,6 +24,7 @@
 import { NextResponse } from "next/server";
 import { createServiceRoleClient } from "@/lib/supabase/server";
 import { isValidMenuToken } from "@/lib/menu/types";
+import { fetchAllPages } from "@/lib/supabase/paginate";
 import type {
   PublicMenu,
   PublicMenuItem,
@@ -39,7 +40,31 @@ import { compareCategories } from "@/lib/categories/types";
 import { SELL_RATE } from "@/lib/utils/format";
 
 /** PostgREST caps an unbounded select at 1000; state the limit rather than discover it. */
+/**
+ * Most products a public menu will show.
+ *
+ * 1000 is not an arbitrary round number: it is exactly **PostgREST's own
+ * implicit cap**, so this limit is the cap made explicit rather than a policy
+ * on top of it. Raising it without adding pagination would change nothing —
+ * the extra rows would be dropped by PostgREST instead of by us, which is the
+ * silent version of the same truncation.
+ */
 const MAX_ITEMS = 1000;
+
+/**
+ * Most recipe components to read for the menu's "comes with" lines.
+ *
+ * This query was UNBOUNDED, so a store with many recipes exceeded PostgREST's
+ * 1000-row cap and had the tail dropped — some sandwiches quietly losing their
+ * ingredient list, with nothing saying so (audit 8.1).
+ *
+ * 8.1 bounded it with `.limit(2000)`, which did NOT fix it: Supabase caps at
+ * 1000 whatever you ask for, so the read still truncated at 1000 and the
+ * `>= MAX_COMPONENTS` warning could never fire. It is PAGED now. Same mistake
+ * `/api/recipes` and `/api/combos` had, made once more while fixing it — which
+ * is why `verify:invariants` now refuses any `.limit()` above 1000.
+ */
+const MAX_COMPONENTS = 2000;
 
 function notFound() {
   // 404 for "no such token", "menu not published" and "malformed token"
@@ -106,16 +131,39 @@ export async function GET(
 
   // Recipes, so the menu can say what a sandwich comes with. Only for the
   // products actually on this menu.
-  const recipeRows = productIds.length
-    ? (
-        await supabase
-          .from("recipe_components")
-          .select("menu_product_id, ingredient_product_id, is_default, price_delta_ll, sort_order")
-          .eq("store_id", storeId)
-          .in("menu_product_id", productIds)
-          .order("sort_order", { ascending: true })
-      ).data || []
-    : [];
+  const paged = productIds.length
+    ? await fetchAllPages<{
+        menu_product_id: string;
+        ingredient_product_id: string;
+        is_default: boolean;
+        price_delta_ll: number;
+        sort_order: number;
+      }>(
+        (from, to) =>
+          supabase
+            .from("recipe_components")
+            .select("menu_product_id, ingredient_product_id, is_default, price_delta_ll, sort_order")
+            .eq("store_id", storeId)
+            .in("menu_product_id", productIds)
+            .order("sort_order", { ascending: true })
+            // The tiebreaker pagination needs; sort_order is not unique.
+            .order("id", { ascending: true })
+            .range(from, to),
+        MAX_COMPONENTS
+      )
+    : { rows: [], truncated: false, error: null };
+
+  const recipeRows = paged.rows;
+
+  // Say so rather than serving a quietly incomplete menu. Nothing here is worth
+  // failing the request over — a menu missing some "comes with" lines is still
+  // a usable menu — but it must not be invisible.
+  if (paged.truncated) {
+    console.error(
+      `[Menu] recipe_components hit MAX_COMPONENTS (${MAX_COMPONENTS}) for store ${storeId}; ` +
+        "some items will be missing their ingredient lines."
+    );
+  }
 
   // Ingredient NAMES only — never their stock or cost.
   const ingredientIds = Array.from(

@@ -15,6 +15,7 @@ import { createServiceRoleClient } from "@/lib/supabase/server";
 import { NextResponse } from "next/server";
 import { errorMessage } from "@/lib/errors";
 import { readAuthHeader, resolveCaller, canManageRegister } from "@/lib/auth/apiCaller";
+import { callerAndRead } from "@/lib/auth/apiRoute";
 
 const MAX_NAME_LENGTH = 40;
 /** A store with more drawers than this has almost certainly hit a bug or a script. */
@@ -31,21 +32,22 @@ function cleanName(raw: unknown): string | null {
 // Every active register for the store, ordered for display.
 export async function GET(request: Request) {
   try {
-    const supabase = await createServiceRoleClient();
-    const { storeId, userId } = readAuthHeader(request);
+    // Auth runs ALONGSIDE the read, not before it. The read is scoped to the
+    // `store_id` the caller is CLAIMING, so a failed auth discards a read of
+    // their own store and nothing is returned before the caller is confirmed —
+    // the pattern GET /api/cash-shifts already uses.
+    const outcome = await callerAndRead(request, (client, storeId) =>
+      client
+        .from("cash_registers")
+        .select("*")
+        .eq("store_id", storeId)
+        .eq("is_active", true)
+        .order("sort_order", { ascending: true })
+        .order("created_at", { ascending: true })
+    );
 
-    const caller = await resolveCaller(supabase, storeId, userId);
-    if (!caller) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-
-    const { data, error } = await supabase
-      .from("cash_registers")
-      .select("*")
-      .eq("store_id", storeId)
-      .eq("is_active", true)
-      .order("sort_order", { ascending: true })
-      .order("created_at", { ascending: true });
+    if ("error" in outcome) return outcome.error;
+    const { data, error } = outcome.result;
 
     if (error) {
       console.error("Cash registers GET error:", error.message);

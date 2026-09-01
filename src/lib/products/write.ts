@@ -50,8 +50,21 @@ export interface ProductWriteInput {
 
 export interface ProductWriteResult {
   product: CachedProduct;
-  /** False when the write is sitting in `pending_writes` awaiting sync. */
-  syncedNow: boolean;
+  /**
+   * The server push, NOT awaited by the write itself.
+   *
+   * Resolves `true` when the write reached the server and `false` when it was
+   * queued instead. **Rejects** when it could neither be pushed nor queued —
+   * the one case where the product exists on this device and nowhere else,
+   * which a caller must surface rather than swallow.
+   *
+   * It is a promise rather than a boolean because the product is durable and
+   * sellable before this settles. A cashier who has just named an item with a
+   * customer in front of them should not wait a network round trip to see it
+   * reach the cart; the same reasoning as `saleCompletion.ts`, which paints the
+   * receipt and pushes behind it.
+   */
+  pushed: Promise<boolean>;
 }
 
 function toCachedProduct(id: string, input: ProductWriteInput): CachedProduct {
@@ -125,27 +138,36 @@ export async function createProduct(
 ): Promise<ProductWriteResult> {
   const product = toCachedProduct(crypto.randomUUID(), input);
 
+  // Durable FIRST, and awaited. Past this line the product is in the local
+  // catalogue and sellable, with or without a network.
   const { upsertSingleProduct } = await import("@/lib/db/localDB");
   await upsertSingleProduct(product);
 
-  const syncedNow = await pushOrQueue(product, "create");
-
-  // syncedNow is the interesting half: it separates a catalogue change the
-  // server already has from one that is still sitting in pending_writes.
-  logActivity("catalog.product_create", {
-    target: product.name,
-    details: {
-      product_id: product.id,
-      barcode: product.barcode,
-      selling_price: product.selling_price,
-      cost_price: product.cost_price,
-      currency: product.currency,
-      stock_quantity: product.stock_quantity,
-      synced_now: syncedNow,
-    },
+  // The push is NOT awaited. It was, and it cost the cashier a full round trip
+  // between naming an unknown barcode and seeing the line reach the cart —
+  // with the customer holding the item. Nothing about the product depends on
+  // it: the id is generated here, so the server call is an idempotent upsert
+  // that can happen whenever it happens.
+  const pushed = pushOrQueue(product, "create").then((syncedNow) => {
+    // Logged from inside, because `synced_now` is the interesting half — it
+    // separates a catalogue change the server already has from one still
+    // sitting in pending_writes — and it is not known until this settles.
+    logActivity("catalog.product_create", {
+      target: product.name,
+      details: {
+        product_id: product.id,
+        barcode: product.barcode,
+        selling_price: product.selling_price,
+        cost_price: product.cost_price,
+        currency: product.currency,
+        stock_quantity: product.stock_quantity,
+        synced_now: syncedNow,
+      },
+    });
+    return syncedNow;
   });
 
-  return { product, syncedNow };
+  return { product, pushed };
 }
 
 /**
@@ -159,25 +181,29 @@ export async function updateProduct(
 ): Promise<ProductWriteResult> {
   const product = toCachedProduct(id, input);
 
+  // Durable first, push behind — the same reasoning as createProduct. This one
+  // backs the cart line's price editor, so the wait it used to impose landed
+  // between a cashier retyping a price and the cart showing it.
   const { upsertSingleProduct } = await import("@/lib/db/localDB");
   await upsertSingleProduct(product);
 
-  const syncedNow = await pushOrQueue(product, "update");
-
-  logActivity("catalog.product_update", {
-    target: product.name,
-    details: {
-      product_id: product.id,
-      barcode: product.barcode,
-      selling_price: product.selling_price,
-      cost_price: product.cost_price,
-      currency: product.currency,
-      stock_quantity: product.stock_quantity,
-      synced_now: syncedNow,
-    },
+  const pushed = pushOrQueue(product, "update").then((syncedNow) => {
+    logActivity("catalog.product_update", {
+      target: product.name,
+      details: {
+        product_id: product.id,
+        barcode: product.barcode,
+        selling_price: product.selling_price,
+        cost_price: product.cost_price,
+        currency: product.currency,
+        stock_quantity: product.stock_quantity,
+        synced_now: syncedNow,
+      },
+    });
+    return syncedNow;
   });
 
-  return { product, syncedNow };
+  return { product, pushed };
 }
 
 /**
@@ -327,18 +353,23 @@ export async function repriceProduct(opts: {
   // Emitted in addition to the catalog.product_update above, because a reprice
   // is the thing an owner actually asks about: this row carries the old price
   // next to the new one.
-  logActivity("catalog.product_reprice", {
-    target: result.product.name,
-    details: {
-      product_id: opts.productId,
-      currency,
-      price_from: existing.selling_price,
-      price_to: opts.sellingPrice,
-      from_currency: existing.currency,
-      profit_percentage: preview.profitPercentage,
-      synced_now: result.syncedNow,
-    },
+  // Logged when the push settles, not before: `synced_now` is not knowable
+  // until then, and the reprice itself is already durable locally.
+  const pushed = result.pushed.then((syncedNow) => {
+    logActivity("catalog.product_reprice", {
+      target: result.product.name,
+      details: {
+        product_id: opts.productId,
+        currency,
+        price_from: existing.selling_price,
+        price_to: opts.sellingPrice,
+        from_currency: existing.currency,
+        profit_percentage: preview.profitPercentage,
+        synced_now: syncedNow,
+      },
+    });
+    return syncedNow;
   });
 
-  return { ...result, preview };
+  return { ...result, pushed, preview };
 }

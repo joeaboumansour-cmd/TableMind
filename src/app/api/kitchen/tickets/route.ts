@@ -27,6 +27,7 @@
 import { NextResponse } from "next/server";
 import { createServiceRoleClient } from "@/lib/supabase/server";
 import { readAuthHeader, resolveCaller, canAccessSection } from "@/lib/auth/apiCaller";
+import { callerAndRead } from "@/lib/auth/apiRoute";
 import type { CartLineModifier } from "@/lib/types/cart";
 import { describeModifiers } from "@/lib/pos/modifierSummary";
 import {
@@ -106,28 +107,42 @@ function firstState(value: TxnRow["kitchen_ticket_state"]) {
 }
 
 // ── GET ────────────────────────────────────────────────────────────────────
+//
+// ONE WAVE, not two. This resolved the caller and THEN read, so the board paid
+// full network latency twice on every poll — and it polls, all service long,
+// on a screen a cook is standing in front of.
+//
+// Safe for the reason CLAUDE.md gives for the routes already doing it: the read
+// is scoped to the `store_id` the caller is CLAIMING in their own header, so a
+// failed auth discards a read of their own store and nothing is returned before
+// the caller is confirmed. The `kitchen` section check still gates the
+// RESPONSE, so a cashier without it gets 403 and never sees a ticket.
 export async function GET(request: Request) {
-  const resolved = await requireKitchenCaller(request);
-  if ("error" in resolved) return resolved.error;
-  const { supabase, storeId } = resolved;
-
   const since = new Date(Date.now() - WINDOW_MS).toISOString();
 
-  const { data, error } = await supabase
-    .from("transactions")
-    .select(
-      `
+  const resolved = await callerAndRead(request, (supabase, storeId) =>
+    supabase
+      .from("transactions")
+      .select(
+        `
       id,
       transaction_number,
       created_at,
       transaction_items ( id, product_name, quantity, modifiers, note, combo_children ),
       kitchen_ticket_state ( status, claimed_by, started_at, ready_at )
     `
-    )
-    .eq("store_id", storeId)
-    .gte("created_at", since)
-    .order("created_at", { ascending: false })
-    .limit(MAX_ROWS);
+      )
+      .eq("store_id", storeId)
+      .gte("created_at", since)
+      .order("created_at", { ascending: false })
+      .limit(MAX_ROWS)
+  );
+  if ("error" in resolved) return resolved.error;
+
+  const { caller, result } = resolved;
+  if (!canAccessSection(caller, "kitchen")) return bad("Forbidden", 403);
+
+  const { data, error } = result;
 
   if (error) {
     console.error("[Kitchen] List failed:", error.message);

@@ -12,6 +12,7 @@ const withAnalyzer = withBundleAnalyzer({
 
 const withPWA = withPWAInit({
   dest: "public",
+
   disable: process.env.NODE_ENV === "development",
   cacheOnFrontEndNav: true,
   aggressiveFrontEndNavCaching: true,
@@ -56,8 +57,22 @@ const withPWA = withPWAInit({
   // screenshots (~265KB combined) are only ever read by the OS install
   // dialog, which fetches them from the network — precaching them just
   // makes every install download a quarter-megabyte it will never use.
-  // The leading "!" entries are exclusion globs (next-pwa convention).
-  publicExcludes: ["!noprecache/**/*", "!screenshots/**/*"],
+  //
+  // `splash` is the same argument, harder: the iOS launch screens are 864 KB
+  // across 15 device resolutions, of which any one device uses exactly ONE,
+  // and iOS displays the startup image BEFORE the web app runs — so the
+  // service worker is not alive to serve it and has no say in the matter.
+  // See scripts/generate-splash.mjs.
+  //
+  // NOTE this is `publicExcludes`, NOT `workboxOptions.exclude` below. That
+  // one filters WEBPACK assets, which is why `pdf-export` belongs there, and
+  // it never sees files copied out of public/. Putting `/splash/` there
+  // instead silently did nothing; `verify:budgets` caught it, reporting the
+  // precache 864 KB heavier, which is exactly what that gate is for.
+  //
+  // The leading "!" entries are exclusion globs (next-pwa convention), and
+  // supplying this REPLACES next-pwa's default — `!noprecache/**/*` must stay.
+  publicExcludes: ["!noprecache/**/*", "!screenshots/**/*", "!splash/**/*"],
   workboxOptions: {
     // CRITICAL: supplying `exclude` REPLACES next-pwa's defaults, exactly like
     // runtimeCaching above. The first three entries ARE those defaults and
@@ -80,11 +95,13 @@ const withPWA = withPWAInit({
     // actually presses Download. The chunk is named by the splitChunks group
     // in `nextConfig.webpack` below, because content-hashed chunk names cannot
     // be matched by a stable pattern.
+
     exclude: [
       /\/_next\/static\/.*(?<!\.p)\.woff2/,
       /\.map$/,
       /^manifest.*\.js$/,
       /pdf-export/,
+      /charts/,
     ],
     runtimeCaching: [
       // CRITICAL: Exclude /api/health from the service worker 'apis' cache.
@@ -185,6 +202,35 @@ const nextConfig: NextConfig = {
         chunks: "async",
         // Above Next's own `lib`/`commons` groups, which would otherwise claim
         // these first and give them a hashed name again.
+        priority: 50,
+        reuseExistingChunk: true,
+        enforce: true,
+      };
+      // Same treatment for the charting stack, for the same reason and with one
+      // extra one.
+      //
+      // recharts + victory-vendor + d3 is 345 KB precached, and EVERY screen
+      // that renders a chart gets its data from the network: the cash page's
+      // register performance comes from `get_register_performance`, and the
+      // analytics panel from /api/transactions/analytics. So offline there is
+      // nothing to plot, and precaching the plotting library buys a shop
+      // exactly nothing — it just costs 345 KB on every device on every deploy.
+      // Runtime caching picks it up on first use, which is necessarily online.
+      //
+      // This is NOT the same call as ZXing (560 KB, also precached, also behind
+      // next/dynamic). Mobile is camera-first and scanning offline is core, so
+      // that one stays precached deliberately.
+      //
+      // The package list is exactly what recharts 3 pulls in — nothing in src/
+      // imports redux, immer, d3-*, victory-vendor, es-toolkit or
+      // decimal.js-light directly. `clsx` and `use-sync-external-store` are
+      // recharts dependencies too and are deliberately NOT here: they are
+      // shared with the app. `chunks: "async"` is the backstop either way —
+      // it can only collect dynamically imported code.
+      groups.charts = {
+        test: /[\\/]node_modules[\\/](recharts|victory-vendor|d3-[a-z-]+|decimal\.js-light|@reduxjs[\\/]toolkit|react-redux|reselect|immer|es-toolkit)[\\/]/,
+        name: "charts",
+        chunks: "async",
         priority: 50,
         reuseExistingChunk: true,
         enforce: true,

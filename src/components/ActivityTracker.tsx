@@ -10,6 +10,7 @@ import {
   invalidateActivityIdentity,
 } from "@/lib/activity/logger";
 import { startDomTracking, stopDomTracking } from "@/lib/activity/domTracker";
+import { logPerfRouteArrival } from "@/lib/activity/perf";
 
 /** How often the kill switch is re-read, so an admin toggle takes effect without a reload. */
 const FLAG_POLL_MS = 60_000;
@@ -91,6 +92,10 @@ export default function ActivityTracker() {
     lastPath.current = pathname;
     if (isAdminRoute) return;
     logActivity("nav.route", { target: pathname, details: { from } });
+    // Timing rides alongside the trail event rather than replacing it: nav.route
+    // is the audit record of where someone went, perf.route is how long it took.
+    // The clock stops at the new route's paint, inside logPerfRouteArrival.
+    logPerfRouteArrival(pathname, from ?? undefined);
   }, [pathname, isAdminRoute]);
 
   return null;

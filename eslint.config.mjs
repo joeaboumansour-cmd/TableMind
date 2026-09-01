@@ -21,6 +21,16 @@ const eslintConfig = defineConfig([
       "@typescript-eslint/no-require-imports": "off",
     },
   },
+  // Playwright's fixture API hands each fixture a callback named `use`, which
+  // the react-hooks rule mistakes for a React hook called outside a component.
+  // It is not one — there is no React in the E2E harness at all. Scoped to the
+  // one directory rather than disabled globally.
+  {
+    files: ["harness/e2e/**/*.ts"],
+    rules: {
+      "react-hooks/rules-of-hooks": "off",
+    },
+  },
 ]);
 
 export default eslintConfig;

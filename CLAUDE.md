@@ -41,7 +41,38 @@ A **mobile-first, offline-first retail Point of Sale PWA** for shops in **Lebano
 | PWA | `@ducanh2912/next-pwa` | **Not** Serwist, despite Serwist being in `package.json` |
 | Toasts | `sonner` | |
 | Charts | `recharts` | |
-| Deploy | Vercel | |
+| Deploy | Vercel, functions pinned to **`dub1`** (Dublin) | `vercel.json`. See below |
+| Database region | **Supabase `eu-west-1` (Ireland)** | Moved from Seoul 2026-09-01 |
+
+### Where this runs, and why it matters more than any code in here
+
+Supabase is in **Ireland (`eu-west-1`)** and Vercel's Node functions are pinned
+to **`dub1`** (Dublin, the same AWS region). Both moved on **2026-09-01**, from
+Supabase Seoul and Vercel's default `iad1` (Washington).
+
+The shops are in **Lebanon.** That single fact used to dominate everything:
+measured from Beirut on a warm connection, a round trip to Seoul was **285 ms of
+which 19 ms was the database doing work.** The rest was distance.
+
+| | Before | After |
+|---|---:|---:|
+| One row by primary key | 285 ms | **81 ms** |
+| 50 products | 274 ms | **83 ms** |
+| `get_cash_overview` | 260 ms | **85 ms** |
+
+**Three things follow, and each has already been a trap:**
+
+1. **Do not pin Vercel to a region without checking where the database is.**
+   `dub1` against a database in Seoul is *slower* than Washington against Seoul.
+   The region pin is always the last step.
+2. **`/api/health` is Edge and is unaffected by `vercel.json`** — Edge runs at
+   every PoP. It must stay Edge (see §4).
+3. **`NEXT_PUBLIC_SUPABASE_URL` is compiled into the client bundle**, so a
+   Supabase move needs a *rebuild*, not just an environment change, and every
+   till keeps using the old project until its service worker updates.
+
+The runbook, including the two `pg_restore` traps that silently strip the grants
+PostgREST needs, is `docs/REGION-MIGRATION.md`.
 
 ---
 
@@ -81,6 +112,20 @@ The app must keep selling with no internet. This shapes almost every design deci
 > **`/api/health` runs on the Edge runtime, and must stay there.** It is the most-called endpoint in the product — every tab, every 15s, all day, in every shop — and as a Node function it was the app's RTT floor at ~200ms plus a cold start. Anything imported into that file that needs Node (a Supabase client, the service-role key, `cookies()`) silently drops it back to Node and makes the heartbeat slow again.
 
 > **Critical:** `/api/health` has a `NetworkOnly` rule in `next.config.ts`. If the service worker is ever allowed to cache it, the app serves a cached `200` forever, believes it is permanently online, never shows offline banners, and never triggers sync. Do not touch that rule.
+>
+> **`next/dynamic` does NOT keep a library out of the precache.** It keeps it
+> out of the initial *bundle*; the precache manifest is built from the whole
+> build output, so a shop downloads it on **install** whether or not the code is
+> ever reached, and holds it on a device whose storage also holds queued sales.
+> (It is not re-downloaded on every deploy — each entry's `revision` IS its
+> content hash, so Workbox refetches only chunks that actually changed.) Two
+> libraries are
+> excluded by name (`/pdf-export/`, `/charts/`), and each needs BOTH halves — a
+> `splitChunks` group in `nextConfig.webpack` giving it a stable name, and the
+> matching entry here — because webpack names chunks by content hash. **ZXing
+> (560 KB) is deliberately still precached:** mobile is camera-first and
+> scanning offline is core, whereas every chart screen fetches its data from the
+> network and cannot render offline anyway.
 >
 > **`workboxOptions.exclude` has the same footgun as `runtimeCaching`.** Supplying it REPLACES next-pwa's three defaults (`.woff2` that is not preloaded, `.map`, `manifest-*.js`), so the array in `next.config.ts` re-lists all three before adding its own `/pdf-export/` entry. Drop them and every install re-acquires megabytes of source maps. `scripts/verify-sw.mjs` asserts both halves.
 >
@@ -242,8 +287,11 @@ Adding a flag: add to `FEATURES`, add to the `general` preset in `FEATURE_PRESET
 
 ```bash
 npm run dev          # localhost:3000, bound to 0.0.0.0 for phone testing on LAN
-npm run build        # production build + service-worker verification
+npm run build        # production build + THREE verification gates (below)
 npm run verify:sw    # assert the generated public/sw.js has the required rules
+npm run verify:budgets    # no route's JS and no precache total grew
+npm run verify:invariants # the statically checkable §1 invariants
+npm run baseline:update   # re-record docs/perf-baseline.json ON PURPOSE
 npm run analyze      # production build with the bundle treemap (ANALYZE=true)
 npm run typecheck    # tsc --noEmit
 npm run lint         # eslint .
@@ -253,21 +301,56 @@ npm run lint         # eslint .
 
 If `tsc` reports errors inside `.next/types/**` referring to files that no longer exist, that's a stale build artifact after a route move — `rm -rf .next` and rebuild.
 
-### There is no automated test suite — this is deliberate
+### There IS a test harness now — `harness/`
 
-Vitest, Playwright, and both test directories were **removed on 2026-08-16 at the owner's direction**. Verification is done by a human QA team. **Do not add test files, test frameworks, or test scripts unless the owner asks for them.**
+**This section used to say the opposite.** Vitest and Playwright were removed on
+2026-08-16 at the owner's direction; a characterization harness was then built
+for the performance refactor and **kept** on 2026-09-01 (Phase 9.3, Branch A).
+The old suite is still at commit `744ad0d`; it is not what runs.
 
-What this means for you:
+It lives entirely under `harness/`, so it remains one `git rm -r` to remove.
+Read **`harness/README.md`** before adding to it — especially the checklist,
+which says where a new case belongs.
 
-- `npm run typecheck` and `npm run lint` are the only automated gates. Run them.
-- Nothing will catch a regression for you. On money, offline sync, and auth, that raises the bar on care — reason through the change and say explicitly what you verified and how, per §11.
-- Prefer small reversible changes over clever ones, and keep pure logic in pure functions (e.g. `evaluateReconcile` in `src/lib/products/refresh.ts`) so it can be reasoned about directly.
+| Suite | What it covers | Cost |
+|---|---|---|
+| `npm run harness:unit` | pure logic — money, cart lanes, the reconcile guard, eviction order, retry backoff. **175 tests, ~1.6s, no DB, no secrets** | runs on every push in CI |
+| `npm run harness:contract` | route response shape and status | needs a built server + seeded DB |
+| `npm run harness:e2e` | the golden cashier flows | needs a browser; nightly |
+| `npm run harness:visual` | screenshots, 3 platform profiles | **opt-in, by hand only** |
+| `npm run harness:mutation` | proves the net actually catches things — 7/7 | by hand |
 
-If the suite is ever wanted back, it is in git history at commit `744ad0d`:
+**The rule that comes with keeping it: a new feature ships with its case.** One
+case for the thing that would be expensive to get wrong, not a case for
+everything it touches. Assert behaviour, never implementation detail.
+
+> **Zero tolerance for flake.** A case that fails intermittently gets fixed or
+> deleted the same day. Nothing flaked more than once across the entire
+> refactor. One flaky test teaches everyone to ignore red, and a net nobody
+> trusts is worse than no net, because it costs time and buys nothing.
+
+**The harness points at the MAIN Supabase project**, confined to its own tenant
+by `HARNESS_STORE_ID`. There is no RLS behind it — that scoping is the only
+thing keeping it off real stores' data. `npm run harness:guard` asserts this and
+runs first. **`.env.test` still points at the pre-migration Seoul project** and
+needs updating to Ireland.
+
+**These four still gate every build, and are independent of the harness** — they
+survive it being deleted, which is why they exist:
 
 ```bash
-git checkout 744ad0d -- tests src/tests playwright.config.ts vitest.config.ts
+npm run typecheck         # must be clean before handing anything over
+npm run verify:sw         # the service-worker rules (4 checks)
+npm run verify:budgets    # no route's JS grew, precache did not grow
+npm run verify:invariants # the statically checkable §1 invariants (8 checks)
 ```
+
+`verify:sw`, `verify:budgets` and `verify:invariants` run automatically inside
+`npm run build`. **If one fails, do not ship** — `public/sw.js` is generated and
+gitignored, so nothing else catches it.
+
+Lint is **advisory**: it has ~76 pre-existing errors from the Next 16 upgrade
+and does not block. Do not add to them.
 
 ---
 
@@ -299,7 +382,7 @@ git checkout 744ad0d -- tests src/tests playwright.config.ts vitest.config.ts
   a write on it**; it is a markup, not a 0-100 percentage, and it is routinely
   over 100 (up to 489% in one store) and sometimes negative. `discount_percentage`
   IS a real 0-100 percentage.
-- Migrations are append-only and manually numbered; the highest is **`037`**. **`008` is already duplicated** — check the highest number before adding (`ls supabase/migrations/ | tail -1`), and note that this line has been stale before.
+- Migrations are append-only and manually numbered; the highest is **`041`**. **`008` is already duplicated** — check the highest number before adding (`ls supabase/migrations/ | tail -1`), and note that this line has been stale before.
 - `.env.local` is correctly gitignored. Required vars are in `.env.example`.
 - Path alias: `@/*` → `./src/*`.
 - Careful: `src/lib/utils.ts` (file) and `src/lib/utils/` (directory) both exist. `@/lib/utils` resolves to the **file**; formatting helpers are at `@/lib/utils/format`.
@@ -313,6 +396,7 @@ git checkout 744ad0d -- tests src/tests playwright.config.ts vitest.config.ts
 | **`CLAUDE.md`** (this file) | ✅ Authoritative | |
 | `docs/AUDIT-2026-08.md` | ✅ Current | The live bug/debt backlog |
 | `docs/PERF-REFACTOR-PLAN.md` | ✅ Authoritative for the refactor | Plan of record for the performance refactor. **If it is in progress, read it before touching `src/`** — it carries the invariant list and the step ledger. |
+| `docs/REGION-MIGRATION.md` | ✅ Current | The Seoul→Ireland runbook, with what actually broke |
 | `docs/CSV_IMPORT_EXPORT_GUIDE.md` | ✅ Accurate | Matches the code |
 | `README.md` | ✅ Accurate | Setup only |
 | `ARCHITECTURE.md` | ✅ Rewritten Aug 2026 | Was wrong before; now matches reality |

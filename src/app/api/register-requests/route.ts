@@ -14,9 +14,10 @@
 // =============================================
 
 import { createServiceRoleClient } from "@/lib/supabase/server";
-import { NextResponse } from "next/server";
+import { NextResponse, after } from "next/server";
 import { errorMessage } from "@/lib/errors";
 import { readAuthHeader, resolveCaller, canManageRegister } from "@/lib/auth/apiCaller";
+import { callerAndRead } from "@/lib/auth/apiRoute";
 
 const REQUEST_KINDS = [
   "refund_sold_item",
@@ -30,11 +31,16 @@ const REQUEST_KINDS = [
 const REQUEST_TTL_MINUTES = 15;
 
 /**
- * Lapse anything past its expiry before reading.
+ * Persist the lapse of anything past its expiry.
  *
  * Done on read rather than by a scheduled job: the only thing that cares is the
  * poll that is running right now, and a stale row is harmless until someone
  * looks at it.
+ *
+ * It no longer runs BEFORE the read — see the GET below. Expiry is derivable
+ * from `expires_at`, so the read applies it directly and this write is
+ * bookkeeping for the other views rather than a prerequisite for a correct
+ * answer.
  */
 async function expireStale(
   supabase: Awaited<ReturnType<typeof createServiceRoleClient>>,
@@ -52,29 +58,61 @@ async function expireStale(
 // ── GET /api/register-requests?status=pending ───────────────────────────────
 export async function GET(request: Request) {
   try {
-    const supabase = await createServiceRoleClient();
-    const { storeId, userId } = readAuthHeader(request);
-
-    const caller = await resolveCaller(supabase, storeId, userId);
-    if (!caller) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-
     const url = new URL(request.url);
     const status = url.searchParams.get("status") || "pending";
+    const now = new Date().toISOString();
 
-    if (status === "pending") await expireStale(supabase, storeId);
+    // THREE serial round trips became ONE — 838 ms measured, against a ~300 ms
+    // floor, on a panel that polls.
+    //
+    // §2.2 declined to convert this route, and was right about the reason: its
+    // GET ran `expireStale()`, a WRITE, before the read, and racing auth
+    // against a write means writing to a store before confirming the caller
+    // owns it. That trade is not worth any amount of latency.
+    //
+    // What changed is that the write stopped being a prerequisite. Expiry is
+    // DERIVABLE — a pending request is lapsed exactly when `expires_at` has
+    // passed — so the read applies it directly and returns the same rows the
+    // write-then-read produced. `expireStale` is now bookkeeping for the other
+    // views, and runs AFTER the response via `after()`, so it neither delays
+    // the answer nor gets dropped when the function returns.
+    //
+    // The read is scoped to the `store_id` the caller is CLAIMING, so a failed
+    // auth discards a read of their own store — the established rule, now
+    // applicable because nothing is written before the caller is known.
+    const resolved = await callerAndRead(request, (supabase, storeId) => {
+      let query = supabase
+        .from("register_requests")
+        .select("*, cash_registers(name)")
+        .eq("store_id", storeId)
+        .order("created_at", { ascending: false })
+        .limit(50);
 
-    let query = supabase
-      .from("register_requests")
-      .select("*, cash_registers(name)")
-      .eq("store_id", storeId)
-      .order("created_at", { ascending: false })
-      .limit(50);
+      if (status !== "all") query = query.eq("status", status);
 
-    if (status !== "all") query = query.eq("status", status);
+      // `expires_at` is NOT NULL per migration 027, but the repo is not a
+      // reliable description of production, so a null is treated the way the
+      // old write treated it: `.lt("expires_at", now)` never matched a null, so
+      // such a row was never lapsed and still showed. This keeps that.
+      if (status === "pending") {
+        query = query.or(`expires_at.is.null,expires_at.gte.${now}`);
+      }
 
-    const { data, error } = await query;
+      return query;
+    });
+    if ("error" in resolved) return resolved.error;
+
+    const { storeId, result } = resolved;
+    const { data, error } = result;
+
+    // Persist the lapse only once the caller is confirmed, and only after the
+    // response — never before the read that no longer depends on it.
+    if (status === "pending") {
+      after(async () => {
+        const supabase = await createServiceRoleClient();
+        await expireStale(supabase, storeId);
+      });
+    }
 
     if (error) {
       console.error("Register requests GET error:", error.message);

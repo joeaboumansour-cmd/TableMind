@@ -137,11 +137,16 @@ function KitchenBoard() {
     document.addEventListener("visibilitychange", onVisibility);
 
     // The listener is handed a "online" | "offline" status, not a boolean.
+    //
+    // `replay: false` — this reloads the board on a TRANSITION back to online.
+    // The default replays the current status immediately, which `start()` above
+    // has already covered with its own `load()`, so every mount fetched the
+    // tickets twice. `setIsOnline` below still seeds the indicator.
     const unsubscribe = connectivity.subscribe((status) => {
       const online = status === "online";
       setIsOnline(online);
       if (online) void load();
-    });
+    }, { replay: false });
     setIsOnline(connectivity.isOnline);
 
     return () => {

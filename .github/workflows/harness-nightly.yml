@@ -1,0 +1,118 @@
+# =============================================
+# The slow half of the harness — contract + E2E
+#
+# Phase 9.3 Branch A asks for "the full run nightly and pre-release". This is
+# that job, and it is DELIBERATELY INERT until someone opts in.
+#
+# ## Why it is not simply on
+#
+# The unit suite in ci.yml needs no secrets, so it runs on every push. These
+# two do. They drive a real signed-in session against a real Postgres, which
+# means:
+#
+#   * a **service-role key** has to live in GitHub Actions secrets, and this
+#     app's service-role key bypasses RLS entirely (audit P0-3/P0-5);
+#   * the harness points at the **main Supabase project**, not a separate one
+#     — see P-1 in docs/PERF-REFACTOR-PLAN.md. It is confined to its own tenant
+#     by `HARNESS_STORE_ID` and by harness/ scoping every statement, and that
+#     scoping is the ONLY thing confining it. There is no RLS behind it.
+#
+# So enabling this puts a key that can read and write every store's data into
+# a CI system, and points a nightly job at production. That is a real decision
+# with a real blast radius, not a default. It is written out here so that
+# taking it is one deliberate step rather than an afternoon of yak-shaving.
+#
+# ## To enable
+#
+# Add these five repository secrets (Settings -> Secrets -> Actions). Use the
+# IRELAND project's values — the Seoul project is the pre-2026-09-01 one:
+#
+#   HARNESS_SUPABASE_URL          https://<ref>.supabase.co
+#   HARNESS_SUPABASE_ANON_KEY     the value the app ships (see CLAUDE.md)
+#   HARNESS_SERVICE_ROLE_KEY      the service_role key
+#   HARNESS_STORE_ID              the confined tenant's uuid
+#   HARNESS_ADMIN_JWT_SECRET      any 32+ char string; only signs test sessions
+#
+# The job stays skipped until HARNESS_SERVICE_ROLE_KEY is non-empty, so adding
+# this file changes nothing on its own.
+#
+# ## What is deliberately NOT here
+#
+# `harness:visual` — Branch A moves it out of the default run. Screenshot
+# diffing across three platform profiles is the part most likely to go red for
+# reasons that are not a regression (font rendering, a runner's GPU), and one
+# flaky job teaches everyone to ignore red. Run it by hand around UI work:
+#
+#     npm run harness:visual
+#     npm run harness:visual:update   # only after LOOKING at the diff
+# =============================================
+
+name: Harness (nightly)
+
+on:
+  schedule:
+    # 02:00 UTC — after the Lebanese shops have closed, so a seeded write
+    # cannot collide with a real cashier.
+    - cron: "0 2 * * *"
+  workflow_dispatch: # pre-release runs
+
+jobs:
+  full:
+    runs-on: ubuntu-latest
+    # Inert until the secret exists. Adding this file does nothing by itself.
+    if: ${{ secrets.HARNESS_SERVICE_ROLE_KEY != '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Write .env.test
+        run: |
+          {
+            echo "NEXT_PUBLIC_SUPABASE_URL=${{ secrets.HARNESS_SUPABASE_URL }}"
+            echo "NEXT_PUBLIC_SUPABASE_ANON_KEY=${{ secrets.HARNESS_SUPABASE_ANON_KEY }}"
+            echo "SUPABASE_SERVICE_ROLE_KEY=${{ secrets.HARNESS_SERVICE_ROLE_KEY }}"
+            echo "ADMIN_JWT_SECRET=${{ secrets.HARNESS_ADMIN_JWT_SECRET }}"
+            echo "HARNESS_ALLOW_PRODUCTION_HOST=yes"
+            echo "HARNESS_STORE_ID=${{ secrets.HARNESS_STORE_ID }}"
+          } > .env.test
+
+      # The guard is first and is not optional. It is what asserts the run is
+      # confined to the harness tenant before anything writes.
+      - name: Guard
+        run: npm run harness:guard
+
+      - name: Seed
+        run: npm run harness:seed
+
+      - name: Verify fixtures
+        run: npm run harness:verify
+
+      - name: Contract suite
+        run: npm run harness:contract
+
+      - name: E2E golden flows
+        run: npm run harness:e2e
+
+      # Runs even if a suite failed, so a red night does not leave fixture rows
+      # behind for the next one to trip over.
+      - name: Tear down fixtures
+        if: always()
+        run: npm run harness:seed:down
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7

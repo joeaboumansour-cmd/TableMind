@@ -9,7 +9,7 @@
 // lives here and both call it.
 // =============================================
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useCartStore } from "@/lib/stores/cartStore";
 import { lineKey } from "@/lib/pos/lineKey";
 import { playSuccessSound } from "@/lib/feedback";
@@ -46,6 +46,23 @@ interface UseMenuSheetOptions {
   enabled: boolean;
   /** Falls back to this when the tapped product has no recipe. */
   onPlainAdd: (product: Product) => void;
+  /**
+   * Does this device KNOW what is on the menu — audit P1-12.
+   *
+   * False means the recipes and combos have never reached this device, not
+   * that there are none. In that window a menu item is indistinguishable from
+   * a bottle of water, so deciding now would silently sell it as a plain line.
+   *
+   * Defaults to TRUE, which is exactly today's behaviour, so a caller that has
+   * not been migrated to the data layer yet is unaffected.
+   */
+  menuDataReady?: boolean;
+  /**
+   * Wait — briefly, and with a cap — for the menu data to arrive. Required for
+   * `menuDataReady: false` to mean anything; without it the decision is made
+   * immediately, as before.
+   */
+  awaitMenuData?: () => Promise<{ recipes: RecipeMap; combos: ComboMap }>;
 }
 
 export interface MenuSheetSubject {
@@ -62,6 +79,8 @@ export function useMenuSheet({
   ingredientPrices,
   enabled,
   onPlainAdd,
+  menuDataReady = true,
+  awaitMenuData,
 }: UseMenuSheetOptions) {
   const [configuring, setConfiguring] = useState<MenuSheetSubject | null>(null);
 
@@ -71,17 +90,20 @@ export function useMenuSheet({
   const updateItemModifiers = useCartStore((s) => s.updateItemModifiers);
 
   /**
-   * A tile was tapped. An item with a recipe opens the sheet; anything else
-   * goes straight into the cart, exactly as it did before menus existed.
+   * The decision itself, against a GIVEN menu.
+   *
+   * Takes `recipes` and `combos` as arguments rather than closing over them,
+   * because the P1-12 path below decides after an await and the values it must
+   * use are the ones that just arrived, not the ones the closure captured.
    */
-  const handleTileAdd = useCallback(
-    (product: Product) => {
+  const decide = useCallback(
+    (product: Product, menuRecipes: RecipeMap, menuCombos: ComboMap) => {
       // A COMBO is rung up as the meal as advertised: one line, one price, no
       // sheet. It is not "configured" on the way in — a cashier who needs
       // "no pickles" edits the line afterwards, exactly as on a standalone
       // sandwich. Checked FIRST, because a combo could also happen to have a
       // recipe of its own and the meal must win.
-      if (enabled && isCombo(combos, product.id)) {
+      if (enabled && isCombo(menuCombos, product.id)) {
         // productNames covers the WHOLE catalogue. `products` is sellable-only,
         // so using it here named every ingredient "Item".
         const nameOf = (id: string) =>
@@ -89,8 +111,8 @@ export function useMenuSheet({
         const priceOf = (id: string) => ingredientPrices.get(id) ?? 0;
         const { children, modifiers } = resolveCombo(
           product.id,
-          combos,
-          recipes,
+          menuCombos,
+          menuRecipes,
           nameOf,
           priceOf
         );
@@ -99,7 +121,7 @@ export function useMenuSheet({
         return;
       }
 
-      const components = recipes[product.id];
+      const components = menuRecipes[product.id];
       // Only a product WITH a recipe opens the sheet on the way in. Anything
       // else goes straight to the cart, so selling a bottle of water stays one
       // tap — it can still be customised afterwards from the cart row.
@@ -109,7 +131,53 @@ export function useMenuSheet({
       }
       onPlainAdd(product);
     },
-    [recipes, combos, products, productNames, ingredientPrices, enabled, onPlainAdd, addComboItem]
+    [products, productNames, ingredientPrices, enabled, onPlainAdd, addComboItem]
+  );
+
+  /**
+   * The latest `decide`.
+   *
+   * The held path below resumes on a LATER render than the one it started on —
+   * that is what holding means — and by then everything `decide` closes over
+   * may have changed. `enabled` is the one that bites: on a first-ever launch
+   * the hold is waiting precisely for `menu_items` to resolve from false to
+   * true, so calling the captured `decide` would use the very value the wait
+   * existed to replace, and sell the sandwich plain anyway.
+   */
+  const decideRef = useRef(decide);
+  // In an effect, not during render: writing a ref while rendering is the thing
+  // the React lint rule forbids, and the held path always resumes after a
+  // commit, so an effect is early enough by construction.
+  useEffect(() => {
+    decideRef.current = decide;
+  }, [decide]);
+
+  /**
+   * A tile was tapped, or a barcode was scanned. An item with a recipe opens
+   * the sheet; anything else goes straight into the cart, exactly as it did
+   * before menus existed.
+   *
+   * Returns a promise so the caller can keep its "resolving" affordance up for
+   * the P1-12 hold — the desktop scan path awaits it. On the ordinary path it
+   * is already settled, and nothing about a warm till changes.
+   */
+  const handleTileAdd = useCallback(
+    async (product: Product): Promise<void> => {
+      // The common case, and every case on a store without menus: we know what
+      // the menu is, so decide now with no await at all.
+      if (menuDataReady || !awaitMenuData) {
+        decide(product, recipes, combos);
+        return;
+      }
+
+      // Audit P1-12: this device has never been told what is on the menu, so
+      // "no recipe" is an absence, not an answer. Hold the product for a beat
+      // and decide against whatever arrives — including nothing, which is the
+      // old behaviour reached deliberately rather than by mistake.
+      const settled = await awaitMenuData();
+      decideRef.current(product, settled.recipes, settled.combos);
+    },
+    [decide, recipes, combos, menuDataReady, awaitMenuData]
   );
 
   /**

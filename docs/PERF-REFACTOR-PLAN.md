@@ -1,6 +1,12 @@
 # Performance Refactor — Plan of Record
 
-**Status:** AGREED, NOT STARTED · **Agreed with owner:** 2026-08-30 · **Author:** Claude
+**Status:** **SUBSTANTIALLY COMPLETE** as of 2026-09-01. Every step is resolved
+except three: **4.3** component split, **6.3** the three-week shelf-life drill
+(needs real devices over real time), and the third route budget in **7.1**,
+which 9.3 unblocked but which has nothing to catch yet. **9.3 is decided: the
+harness is KEPT** (Branch A, owner, 2026-09-01). Several steps are recorded DONE as
+*measured and declined* — the number is in the ledger note in each case.
+· **Agreed with owner:** 2026-08-30 · **Author:** Claude
 
 **Settled and not to be re-litigated by a future session:** the harness may be
 kept if maintainable (§0) · desktop, iOS and Android are all first-class (§1
@@ -819,49 +825,2643 @@ these three it is achievable only in a real shop, on one store, watched.
 
 | Step | Status | Commit | Before | After | Notes |
 |---|---|---|---|---|---|
-| P-1 staging environment (branch + origin + DB) | NOT STARTED | | | | **Blocks everything** |
-| P-2 confirm 025 + 037 applied | NOT STARTED | | | | 025 is urgent — see §2 |
-| 0.1 harness env switch + prod-URL guard | NOT STARTED | | | | Hard `exit(1)`, not a comment |
-| 0.2 field measurement events | NOT STARTED | | | | |
-| 0.3 local trace baselines | NOT STARTED | | | | |
-| 0.4 budget gates | NOT STARTED | | | | Permanent |
-| 1.1 fixtures & seeding | NOT STARTED | | | | |
-| 1.2 pure-logic characterization | NOT STARTED | | | | |
-| 1.3 API contract snapshots | NOT STARTED | | | | |
-| 1.4 E2E golden flows | NOT STARTED | | | | |
-| 1.5 visual snapshots | NOT STARTED | | | | |
-| 1.6 offline/sync scenarios | NOT STARTED | | | | |
-| 1.7 mutation check of the net | NOT STARTED | | | | Prove it catches |
-| 2.1 atomic sale RPC | NOT STARTED | | | | |
-| 2.2 route kernel | NOT STARTED | | | | |
-| 2.3 generated DB types | NOT STARTED | | | | |
-| 2.4 index & query audit | NOT STARTED | | | | |
-| 2.5 edge runtime pass | NOT STARTED | | | | |
-| 3.1 data primitive | NOT STARTED | | | | |
-| 3.2 migrate /pos | NOT STARTED | | | | |
-| 3.3 migrate /pos/products | NOT STARTED | | | | |
-| 3.4 migrate /transactions | NOT STARTED | | | | |
-| 3.5 migrate /pos/cash + /kitchen | NOT STARTED | | | | |
-| 4.1 memo boundaries | NOT STARTED | | | | |
-| 4.2 History virtualization | NOT STARTED | | | | |
+| P-1 staging environment (branch + origin + DB) | DONE | | | | Branch + confined tenant on the main project. **Not a separate origin** — see caveat below |
+| P-2 confirm 025 + 037 applied | DONE | | | | **Both applied.** Do NOT run 025 — see note below |
+| 0.1 harness env switch + prod-URL guard | DONE | e8b8792 | | | Guard + `.env.test` + harness tenant. 6 guard cases verified |
+| 0.2 field measurement events | DONE | | | | 4 events live through real ingest. Client emitters wired, not yet observed firing — see note |
+| 0.3 local trace baselines | DONE | | see below | | Bundles + request structure + real API latency. CPU/network throttling unavailable — see caveats |
+| 0.4 budget gates | DONE | | | | `verify:budgets` in `npm run build`. Permanent — survives Phase 9. API-depth budget deferred to Phase 1 |
+| 1.1 fixtures & seeding | DONE | | | | 2,492 products / 300 txns. Determinism + tenant isolation both proven |
+| 1.2 pure-logic characterization | DONE | | | | 130 tests, 8 files, <1s. Vitest 4.1.11 under `harness/` |
+| 1.3 API contract snapshots | DONE | | | | 108 tests, ~92s. **Found audit P1-11** |
+| 1.4 E2E golden flows | DONE | | | | All 8 flows. E2E 20 desktop / 1.8min; contract 119 / 131s |
+| 1.5 visual snapshots | DONE | | | | 24 baselines, 3 viewports. Opt-in `harness:visual`, stable on re-run |
+| 1.6 offline/sync scenarios | DONE | | | | 6 scenarios incl. the wifi-with-no-upstream hang case |
+| 1.7 mutation check of the net | DONE | | | | **7/7 caught.** `npm run harness:mutation` |
+| 2.1 atomic sale RPC | DONE | | **1226ms** median | **307ms** median | **-75%.** Closes audit P1-4 and P1-11 |
+| 2.2 route kernel | DONE | | 576-594ms | **303-318ms** | Closed audit P0-2; 4 GETs converted to one wave |
+| 2.3 generated DB types | DONE | | 16 tables, hand-written | **21 tables, generated** | Found audit **P0-9** — 13 anon-callable SECURITY DEFINER functions from the dead product. Migration 041 written, not applied |
+| 2.4 index & query audit | DONE | | 2 duplicate indexes | **1 dropped, 2 FKs covered** | Migration 040. Driven by production `idx_scan`, never reset. **Two of my own recommendations were wrong until measured** — see the note |
+| R.1 Supabase Seoul -> Ireland | DONE | 63ef865 | **285ms** | **81ms** | −70% on every call. Measured from Beirut, warm connection. `docs/REGION-MIGRATION.md` |
+| R.2 Vercel pinned to dub1 | DONE | bda0640 | iad1 | **dub1** | Colocated with the DB. Takes effect on the next production deploy |
+| 2.2b finish the serial-GET conversion | DONE | e73d864 | 543ms each | **325 / 275ms** | `features` and `kitchen/tickets`. Found by measuring, not by the survey |
+| 2.6 cash overview RPC (migration 039) | DONE | 9d66ba4 | **849ms** | **291ms** | −66%. Fallback proven by pointing at a missing RPC |
+| 2.7 register-requests, 3 trips to 1 | DONE | 4e7e184 | **817ms** | **274ms** | −66%. The write stopped being a prerequisite |
+| 2.5 edge runtime pass | DONE | a0d32e4 | | **declined** | Measured: ~260ms of the ~280ms round trip is DISTANCE. Edge cannot touch it. See the note |
+| 3.1 data primitive | DONE | a36e978 | | | `src/lib/data/`. 27 harness tests. No screen migrated yet — that is 3.2 |
+| 3.0 parallelise the boot delta+count | DONE | | ~600ms serial | **~300ms parallel** | Brought forward from 0.3's finding |
+| 3.2 migrate /pos | DONE | 17edb7b | 6 menu requests per remount | **3** | Closes audit **P1-12** + a second gap it uncovered in the feature flags |
+| 3.3 migrate /pos/products | DONE | fb28138 | 9 menu requests per walk | **3** | Legacy loaders deleted. Also fixed a pre-existing race in the queued-sale test |
+| 3.4 migrate /transactions | DONE | deb9c71 | 2 fetches per mount | **1** | **Migration assessed and deliberately NOT done** — see the note. Fixed the real defect instead, which also fixed /kitchen |
+| 3.4b feature flags onto the data layer | DONE | bdcd675 | 3 flag fetches per walk | **1** | Found and fixed audit **P1-13** — the cash page bounced on a cold device |
+| 3.5 migrate /pos/cash + /kitchen | DONE | 51020da | 0 duplicates | **0** | **Measured: nothing left to remove.** Migration assessed and deliberately not done — see the note |
+| 4.0 perf.boot was measuring the wrong moment | DONE | e164eef | "167ms" | **970ms honest** | The metric AND a real defect: the till rendered with an empty catalogue |
+| 4.2 virtualize the till grid | DONE | e164eef | 12,666 DOM nodes · 833ms blocking | **372 · 0ms** | boot 970→283ms, scan 37→27ms. Costs +9.4KB gz on /pos, recorded |
+| 4.1 memo boundaries | NOT STARTED | | | | Measured: not the bottleneck. Plain scan was already 37ms |
+| 4.3 History virtualization | DONE | e34ad5d | 17 nodes/row | **declined** | Measured: 1,054 nodes at the default 50 rows. Tier 3. Threshold recorded |
 | 4.3 component split | NOT STARTED | | | | |
-| 5.1 wait register | NOT STARTED | | | | Table lives in this file |
-| 5.2 optimistic + spinner rules | NOT STARTED | | | | |
-| 5.3 iOS launch screens | NOT STARTED | | | | Blank white boot today — cheap, big |
-| 5.4 view transitions + scroll restore | NOT STARTED | | | | |
-| 6.1 storage grant, per platform | NOT STARTED | | | | Install = durability on iOS |
-| 6.2 quota & eviction order | NOT STARTED | | | | Queued sales never shed |
+| 5.1 wait register | DONE | 4e3c98e | | | Every wait enumerated and verified. Most were already resolved |
+| 5.2 optimistic + spinner rules | DONE | 4e3c98e | **954ms** | **87ms** | The till’s catalogue writes stopped awaiting the server |
+| 5.3 iOS launch screens | DONE | 51020da | blank white boot | **branded splash** | 15 devices, 0 bytes of precache. Brought forward — it was the biggest unclaimed win |
+| 5.4 view transitions + scroll restore | DONE | | | **assessed** | Most of 5.3's list was already in `globals.css`. Scroll restore: the case it targets does not exist. View transitions **declined** — see the note |
+| 6.1 storage grant, per platform | DONE | a6beefc | | | Durability state classified, shown to the shop, reported to the admin trail |
+| 6.2 quota & eviction order | DONE | 34422ca | | | Order is DATA and asserted, mutation-checked. Plus the cleared-catalogue fix |
 | 6.3 three-week shelf-life drill | NOT STARTED | | | | All three platforms |
-| 7.1 route budgets enforced | NOT STARTED | | | | |
-| 7.2 import audit /pos, /checkout | NOT STARTED | | | | |
-| 7.3 precache tiering | NOT STARTED | | | | |
-| 8.1 PostgREST cap audit | NOT STARTED | | | | |
-| 8.2 IndexedDB read strategy | NOT STARTED | | | | |
-| 8.3 pagination gaps | NOT STARTED | | | | |
-| 9.1 promote permanent gates | NOT STARTED | | | | |
-| 9.2 final numbers | NOT STARTED | | | | Per platform |
-| 9.3 keep-or-delete decision | NOT STARTED | | | | Branch A expected; tag first either way |
-| 9.4 update CLAUDE.md §8 + audit | NOT STARTED | | | | §8 becomes false if kept |
+| 7.1 route budgets enforced | DONE | | | **2 of 3 enforced** | Both shipped in 0.4 and gate every build. The third needs a browser — see the note |
+| 7.2 import audit /pos, /checkout | NOT STARTED | | | | Audited: Supabase 52.6KB gz + Dexie 30.2KB gz on every route. NOT the bottleneck — see the note |
+| 7.3 precache tiering | DONE | | **3.27 MB** | **2.94 MB** | −335 KB per device per deploy. recharts out, ZXing deliberately in. 4th SW gate, mutation-checked |
+| 8.1 PostgREST cap audit | DONE | 5300c53 | | | **No money figure is truncated.** One real gap found, on the public menu |
+| 8.2 IndexedDB read strategy | DONE | 0e518f5 | | | Premise no longer holds: 33ms read, 0 long tasks. Measured, not done |
+| 8.3 pagination gaps | DONE | 0e518f5 | truncated at 1,000 | **1,304 of 1,304** | `.limit()` above 1,000 is a LIE. Two live truncations fixed + a gate |
+| 9.1 promote permanent gates | DONE | 2569e42 | 2 gates | **3 gates, 7 checks** | `verify:invariants`. All 7 mutation-checked. Found 2 real violations |
+| 9.2 final numbers | DONE | b7330df | see the note | | Assembled from one build. Two things are honestly NOT comparable — said so |
+| 9.3 keep-or-delete decision | DONE | | | **KEEP (Branch A)** | Owner's decision 2026-09-01. Tagged `perf-refactor-complete`. CI wired, README checklist, CLAUDE.md §8 rewritten |
+| 9.4 update CLAUDE.md + audit | DONE | | | | Region, the 3 gates, migration 041, precache tiering. Audit: P2-7 half-closed, P0-9 opened |
+
+### 2.4 finding — an unused-looking index is not an unused index
+
+`pg_stat_user_indexes` on production, whose statistics have **never been
+reset**, so the scan counts cover the life of the app. `products` is the table
+worth caring about: **96,682 inserts and 139,592 deletes against 7,491 live
+rows**, so every redundant index there is paid for ~236,000 times.
+
+**Dropped one thing.** `idx_products_barcode_store` (001) and
+`idx_products_store_barcode_lookup` (019) are the same index — `(store_id,
+barcode)`, no `WHERE` on either. `019_performance_indexes.sql` carries the
+comment *"idx_products_barcode_store already exists from initial schema"*
+directly above the line that recreates it. The planner can only use one and
+split between them arbitrarily, 1,477 scans to 15.
+
+**Two things I recommended dropping, and was wrong about both.** Recording them
+because the reasoning that produced them was sound and still wrong, and the next
+person will reproduce it:
+
+- `idx_transactions_created_at_desc` is `(created_at DESC)` with no `store_id`,
+  while every application query is store-scoped — so it reads as dead weight
+  costing a write on every sale. It has **2,952 scans**. The cross-store readers
+  are the admin console and the retention cleanup, neither of which looks like
+  "the application" when you are reading `src/`.
+
+- The three `idx_cash_shifts_one_open_*` indexes have **zero scans**, and
+  dropping them would have been the worst change in this whole refactor. They
+  are partial UNIQUE indexes: a unique index is used to ENFORCE on write, not
+  scanned on read, so `idx_scan = 0` is what a perfectly healthy one looks like.
+  They are what make "one open shift per register" and "a cashier is on at most
+  one drawer" true. Nothing would have failed loudly.
+
+> **`idx_scan = 0` means "never used to look something up". It does not mean
+> "unused".** Check `indisunique` before believing that query, the same way
+> `evaluateReconcile()` refuses to delete without positive proof.
+
+**Added two FK indexes** — `recipe_components(ingredient_product_id)` and
+`combo_components(item_product_id)`. Both are `ON DELETE RESTRICT`, so every
+product delete must prove nothing references it, and without an index that proof
+is a sequential scan. Both tables are tiny today (9 and 4 rows) so this changes
+nothing measurable now; the cost is O(deletes x rows) and only one of those
+factors is small.
+
+**Open question this raised, not yet answered:** 139,592 deletes against 7,491
+live rows is ~18x the catalogue. That is the shape of an import that deletes
+everything and re-inserts it. If so it also rewrites every `updated_at`, which
+would defeat the delta sync in `products/refresh.ts` and make every device
+re-pull the whole catalogue after every import. Worth confirming before Phase 7.
+
+### 7.3 finding — a dynamic import is not an unprecached one (2026-09-01)
+
+`next/dynamic` keeps a library out of the initial **bundle**. It does nothing
+about the **precache manifest**, which is built from the whole build output — so
+a shop downloads it at **install** whether or not the code is ever reached, and
+then holds it on a device whose storage also holds queued sales. The PDF
+exporter was fixed for this once already; two more were still there.
+
+> **Correction (same day).** An earlier draft of this note, and the commit
+> message for `d9e2092`, said "on every deploy". That is wrong: each precache
+> entry's `revision` **is** the chunk's content hash, so Workbox refetches only
+> chunks whose content changed. The 2.94 MB is the FIRST-INSTALL cost. The
+> exclusion is still correct — install bytes on a phone on mobile data, and
+> device storage shared with the offline sale queue, are both real — but the
+> per-deploy framing overstated it.
+
+Measured on a real build: **119 entries, 3.27 MB uncompressed**, 2.91 MB of it
+JavaScript across 97 chunks. The two largest were both dynamic imports:
+
+| Chunk | Size | What |
+|---|---:|---|
+| `1852` + `4087` | 560 KB | ZXing |
+| `123` | 345 KB | recharts + victory-vendor + d3 |
+
+**recharts is now excluded; ZXing deliberately is not.** The difference is
+whether the thing can be useful offline, and it is worth stating because the two
+look identical from the bundle graph:
+
+- Every screen that draws a chart takes its data from the network — the cash
+  page's register performance from `get_register_performance`, the analytics
+  panel from `/api/transactions/analytics`. **Offline there is nothing to
+  plot.** Precaching the plotting library cannot help a shop; runtime caching
+  picks it up on first use, which is necessarily online.
+- Mobile is camera-first, and scanning offline is core to the product. ZXing
+  stays precached on purpose. It is 560 KB — the largest single thing left — and
+  that is a deliberate purchase, not an oversight.
+
+The mechanism is the one 7.3's predecessor established: webpack names split
+chunks by content hash, which no stable pattern in `workboxOptions.exclude` can
+match, so a `splitChunks` cacheGroup gives the group a fixed name (`charts`) and
+the exclude entry matches that. **Both halves are required** — losing either
+silently puts the 345 KB back, which is why there is now a fourth gate in
+`verify-sw.mjs`, mutation-checked like the rest.
+
+The group is `chunks: "async"`, so it can only ever collect dynamically imported
+code and cannot drag anything into the initial bundle. Its package list is what
+recharts 3 actually pulls in; `clsx` and `use-sync-external-store` are recharts
+dependencies too and are deliberately excluded from it because the app shares
+them.
+
+### 5.4 — assessed, and most of it was already done (2026-09-01)
+
+Of 5.3's native-feel list, everything except two items was already in
+`globals.css`: `-webkit-touch-callout: none`, `user-select: none` on controls
+with `text` re-enabled for content, `-webkit-tap-highlight-color: transparent`,
+`overscroll-behavior: none` on the viewport and `contain` on inner scrollers.
+
+**Scroll restoration: the case it was written for does not exist.** The
+assumption was a cashier scrolling deep into inventory, opening a product, and
+being thrown back to the top. Opening a product is a `<Dialog>`, not a route
+change — the virtualized list never unmounts and scroll is already preserved.
+What remains is switching bottom-tab routes and returning, which resets scroll;
+real, but small, and returning to inventory usually means a new search anyway.
+
+**View transitions: declined.** React 19.2's `ViewTransition` is still
+experimental and needs `experimental.viewTransition` in `next.config.ts`.
+Phase 5's exit criteria are the wait register, a settled-state visual diff, and
+the `perf.sale` / `perf.scan` field percentiles — and a cross-fade moves none of
+them. It *adds* paint latency on the money path, on a till whose desktop
+keyboard flow is explicitly not to be disturbed. Enabling an experimental
+rendering flag on a live POS to make navigation prettier is the trade this plan
+exists to refuse.
+
+### 7.1 — two of the three budgets were already enforced (2026-09-01)
+
+0.4 shipped `verify:budgets` and it runs on every build. It asserts both budgets
+that can be measured from build output: **no route's First Load JS grew**, and
+**total precache did not grow**, against `docs/perf-baseline.json`.
+
+The third — **serial API round trips per route** — is still deferred, and the
+reason has changed. 0.4 deferred it for want of a browser driving a signed-in
+session. That now exists in the Phase 1 harness, so the blocker is different:
+**a gate that lives in the harness is not a permanent gate**, and 9.3 may delete
+it. Building it there would produce exactly the thing Phase 9 exists to prevent
+— speed protected by something that can vanish.
+
+It is also worth less than it was. The defect it was written to catch (the
+reconcile id-set fetch running serially behind the catalogue delta pull) was
+fixed in 3.0, and `src/lib/data/resource.ts` now dedupes in-flight reads
+structurally — which is what 3.2 and 3.4b measured as 9 requests going to 3,
+and 3 to 1.
+
+**Revisit after 9.3.** If the harness is kept, add it there. If not, the honest
+answer is that request count is not statically checkable, and the data layer is
+the enforcement.
+
+### 9.3 — KEEP, decided by the owner 2026-09-01
+
+Tagged **`perf-refactor-complete`** first, per the plan's rule that the decision
+commit is recoverable whichever branch is taken.
+
+**The evidence it was judged on:**
+
+| Criterion | Finding |
+|---|---|
+| Actual runtime | unit **175 tests, 1.6s wall**; contract ~2min; E2E ~1.8min |
+| Flake count across the whole refactor | **one**, a pre-existing race in `offline.spec.ts` (`setOffline(false)` before the 500 route), fixed the day it appeared |
+| Was adding a case ever a chore? | No — 3.1 added 27 cases for the data primitive without touching config |
+| Did it catch anything? | **Yes, repeatedly**: audit P1-11, P1-12, P1-13, the empty-catalogue till render, and 7/7 on `harness:mutation` |
+
+**Branch A work done:**
+
+- **`harness:visual` was already out of the default run** — `harness:all` is
+  guard + unit. Confirmed rather than changed.
+- **Nothing pruned.** The criterion was "flaked more than twice, or asserts
+  implementation detail rather than behaviour", and nothing met it. Pruning to
+  satisfy a checklist would have been theatre.
+- **CI wired** — `harness:unit` on every push, in `ci.yml`. It can be, because
+  it is pure logic: no DB, no network, no browser, **no secrets**.
+- **Nightly written but INERT** — `harness-nightly.yml` skips until the
+  repository secrets exist. Enabling it means putting a service-role key that
+  bypasses RLS into GitHub Actions and pointing a scheduled job at the
+  production project. That is a decision with a blast radius, not a default, so
+  the file explains the trade and waits.
+- **`harness/README.md`** gained the "adding a feature" checklist: which suite a
+  case belongs in, in descending order of value and ascending order of cost.
+- **`CLAUDE.md` §8 rewritten.** It said there was deliberately no test suite,
+  which Branch A makes false.
+
+### 7.1's third budget — unblocked, and deliberately not shipped today
+
+The API-depth budget was blocked behind 9.3 because a gate living in the harness
+is worthless if the harness is deleted. It is now kept, so the blocker is gone.
+
+It is still not written, for a better reason: **there is currently nothing for it
+to catch.** A scan of all 26 API routes found exactly one place with consecutive
+awaited database calls — `POST /api/activity`, where the second call is an
+insert *retried* after a missing-partition error, which is a strict dependency
+and correctly serial. A matching scan of every client file found **zero** with
+three or more consecutive awaited network calls.
+
+And writing it today would mean shipping a case I could not run: `.env.test`
+still points at the Seoul project, and the E2E suite needs a built server and a
+seeded tenant. The rule this phase just wrote into `harness/README.md` and
+`CLAUDE.md` is that a flaky or unverified case is worse than none.
+
+**So: add it in `harness/e2e/` when `.env.test` is on Ireland**, asserting a
+request-count ceiling per route. The numbers to assert are the post-refactor
+ones — `/pos` 3, `/pos/products` 3, feature flags 1 — not 0.4's originals, which
+3.2, 3.3 and 3.4b superseded.
+
+### P-2 finding — RESOLVED (2026-08-30)
+
+**Both migrations are applied on production. No action needed, and one action
+is now explicitly forbidden.**
+
+**037** — all seven RPCs it depends on are live: `decrement_stock_batch`,
+`get_transaction_analytics`, `get_shift_totals`, `get_register_performance`,
+`get_unassigned_totals`, `maintain_activity_log_partitions`, and the older
+`decrement_stock`. The batch decrement and the analytics aggregate are on
+their fast paths, not their fallbacks.
+
+**025** — confirmed by running its own pre-flight query in the SQL editor.
+Every column matches the post-apply expectation exactly: `numeric(14,2)` on
+`transactions.{subtotal,total_amount,amount_paid,change_given}`,
+`transaction_items.{unit_price,total_price}` and
+`products.{cost_price,selling_price}`, with `products.profit_percentage` at
+`numeric(10,2)`.
+
+> **Do not run 025.** It is already applied. Running it would take an
+> ACCESS EXCLUSIVE lock and rewrite the three largest tables to no effect.
+> The audit's P1-3 overflow (a basket over ~$1,111 dead-lettering after the
+> money was taken) is **not** live on production.
+
+**Two introspection methods were tried first and are both invalid.** Recorded
+so nobody burns the time again — and because either one, believed, would have
+reported a serious production money bug that does not exist:
+
+1. *PostgREST's OpenAPI root (`GET /rest/v1/`) reports column `format`.* It
+   reports every numeric column as bare `numeric`, including the nine above
+   that are demonstrably `numeric(14,2)`. The field does not carry precision
+   on this project. Read naively it says "025 was never applied" — the exact
+   opposite of the truth.
+2. *An over-range literal in a `WHERE` filter raises `22003`.* It does not.
+   `cash_shifts.opening_ll`, known `DECIMAL(12,2)` from migration 021 and
+   never touched by 025, accepts a 14-digit filter value happily. PostgREST
+   does not cast filter literals to the column type, so the probe is vacuous
+   and its "everything fits" result means nothing either way.
+
+The lesson generalises past this step: **the REST API cannot answer schema
+questions.** Anything about column types, constraints, indexes or triggers
+needs the SQL editor, a direct Postgres connection, or a Management API
+token. Phase 2.4's `EXPLAIN` work will need one of those three.
+
+### 0.3 baseline — bundles (2026-08-30)
+
+`npm run baseline` after `npm run build`. Committed to `docs/perf-baseline.json`
+so 0.4 has something to compare against. Regenerate after every build;
+**`npm run dev` overwrites `.next`, so a dev session invalidates these numbers**
+— the script says so when it cannot find the build.
+
+Next 16 no longer emits `app-build-manifest.json` and no longer prints the
+Size / First Load JS columns, so this reads the **prerendered HTML** in
+`.next/server/app/*.html` and sums the `/_next/static/*.js` it references.
+That is what the browser is actually handed, which makes it a better source
+than a manifest rather than a workaround for losing one.
+
+**First Load JS, gzipped (raw), highest first:**
+
+| Route | gzip KB | raw KB | chunks | Tier |
+|---|---:|---:|---:|---|
+| `/pos/products` | 356.7 | 1167.6 | 31 | 3 |
+| **`/pos`** | **344.2** | **1120.9** | **29** | **1** |
+| **`/checkout`** | **336.0** | **1080.8** | **30** | **1** |
+| `/pos/cash` | 334.4 | 1088.6 | 29 | 2 |
+| `/transactions` | 329.6 | 1067.6 | 28 | 3 |
+| `/kitchen` | 322.5 | 1042.4 | 28 | 2 |
+| `/barcodegen` | 317.4 | 1061.0 | 22 | — |
+| `/admin/activity` | 310.7 | 1014.1 | 22 | 3 |
+| `/admin` | 310.6 | 1016.6 | 23 | 3 |
+| `/login` | 289.4 | 945.9 | 20 | — |
+| `/admin/login` | 289.1 | 942.3 | 21 | 3 |
+| `/admin/transactions` | 288.9 | 944.1 | 20 | 3 |
+| `/` | 155.0 | 499.9 | 6 | — |
+
+**Shared by every route: 155.0 KB gz / 499.9 KB raw across 6 chunks.**
+
+**Precache: 119 entries, 3.28 MB raw** — 95 JS files (2909.5 KB), 11 woff2
+(143.0 KB), 4 png (172.6 KB), 1 css (86.4 KB), 1 ico (41.4 KB), 2 json.
+
+**Three things these numbers say that change where effort goes:**
+
+1. **The shared baseline is 45% of `/pos`.** 155 of 344 KB is paid by every
+   route including `/`, so at most ~190 KB of `/pos` is even addressable by
+   route-level splitting. Phase 7 should attack the shared chunk first; a
+   route-by-route diet caps out well before it feels like anything.
+2. **The spread across routes is small — 289 to 357 KB, a 68 KB band.** Every
+   screen carries nearly the same bundle, which is the signature of weak code
+   splitting rather than genuinely heavy screens. `/admin/transactions`, which
+   a cashier never opens, costs 84% of what `/pos` costs.
+3. **§6's "918 KB" figure is wrong and should be retired.** Measured precache
+   is **3.28 MB raw**. The infra-cost argument in the business lens is
+   therefore understated by roughly 3.5×, not overstated — worth recomputing in
+   Phase 9 from this number.
+
+**Not done — needs a signed-in session:** cold/warm boot to interactive under
+4× CPU and Slow 4G, request count and request depth per screen, and
+main-thread long tasks. Every Tier 1 and Tier 2 screen is behind auth. The
+`perf.*` events from 0.2 will supply the field version of these from real
+devices, which is the better number anyway; local traces remain useful for
+attributing a regression to a specific change.
+
+### 1.4 E2E golden flows — PARTIAL (2026-08-31)
+
+`npm run harness:e2e`. **12 passed, 4 skipped, 0 failed in ~21s** across
+desktop and Android.
+
+Flows 1 (scan → cart, total rounding), 3 (park a lane, serve another) and 4
+(unknown barcode prompts) are covered, plus a session smoke file and a tenancy
+check. Flows 2, 5, 6, 7 and 8 are still to write.
+
+**Auth without a password.** `harness/e2e/fixtures.ts` constructs the session
+directly — `goldensquirrel_user` plus the legacy `goldensquirrel_auth`, which
+IS the `x-auth-data` tenancy header for every API call (omitting it reproduces
+audit P1-10 exactly). Driving the login form would put a plaintext credential
+(audit P0-4) into Playwright traces and CI logs, and would make forty tests
+depend on one screen.
+
+**No browser download was needed.** `channel: "chrome"` drives the Chrome
+already installed, which is also the browser the plan mandates for desktop and
+Android (§1) — so it is the more honest target, not just the cheaper one.
+
+> ### Two things the suite exposed immediately
+>
+> 1. **The fixture barcodes were not barcode-shaped.** `looksLikeBarcode()` is
+>    `/^[0-9]+$/` — "anything with a letter in it is somebody typing a product
+>    name". `FIX000000001` therefore routed to **search**, not **scan**, so the
+>    wedge path was never exercised. Fixture barcodes are now 13 digits in the
+>    `2…` in-store range. Had I written the test around the search dropdown
+>    instead, it would have passed while testing the wrong code path entirely.
+> 2. **`/pos` has two layouts and the wedge only exists on one.** Mobile is
+>    camera-first; `SmartScanInput` is the desktop Pro till. The three wedge
+>    flows skip on Android via `requireWedge()`, which tests for **the absence
+>    of the UI**, not a hardcoded project name — so it follows the layout if
+>    that ever changes rather than silently skipping forever. Camera scanning
+>    is named in §9.1 as something the harness does not cover; pretending
+>    otherwise would read as coverage.
+
+**Flow 2 (made-to-order) added, and iOS unblocked.** WebKit is installed, so
+all three profiles run: **22 passed, 20 skipped, 0 failed in 1.2 minutes**. The
+skips are the wedge and modifier flows on Android/iOS, which is honest — the
+Pro till does not exist on a phone.
+
+> ### Second finding — audit **P1-12**
+>
+> A menu item scanned **before the recipe cache loads** is sold as a plain
+> line: no modifier sheet, `modifiers` NULL so the kitchen never sees a ticket,
+> and the menu item's own meaningless stock decremented instead of its
+> ingredients. Nothing errors.
+>
+> The window is small on a warm till but widest exactly when a device is new,
+> cleared, or evicted — and a device offline on first launch has no recipes at
+> all, so every menu item it sells that day takes this path.
+>
+> The root cause is a conflation: an absent cache and an absent recipe look
+> identical. Belongs in **Phase 3**, where the data layer gains a real loading
+> state. Recorded, not fixed.
+>
+> **CLOSED by 3.2 (2026-08-31)** — see the 3.2 note below, including the second
+> defect of the same shape it uncovered in the feature flags.
+
+**Two testing lessons worth keeping:**
+
+1. **A cache landing in localStorage is not the same as React holding it.**
+   `refreshRecipes()` writes storage and calls `setRecipes()` separately, so
+   polling storage still races the state update. `openTill()` reloads after the
+   cache arrives — deterministic, and exactly the state a real till is in on
+   every launch after its first.
+2. **`getByText` is not specific enough in this app.** A product name appears on
+   the quick-grid tile *and* in the dialog heading, so a bare text locator hits
+   Playwright's strict-mode violation. Scope to the dialog and match by role.
+
+**A console error to chase:** every `/pos` load logs
+`SyntaxError: Unexpected end of input` on desktop and Android, and
+`Unexpected end of script` on iOS/WebKit — the same defect in two engines'
+wording, so it is real rather than an artefact. Almost
+certainly a `JSON.parse` of a truncated localStorage value. Recorded rather
+than failed on — this is characterization — but it is a real defect and should
+be tracked down.
+
+**iOS is unblocked** (WebKit installed 2026-08-31), so invariant #24 is
+satisfied for the flows written so far. The row stays PARTIAL because flows
+5-8 — cash shift, inventory, CSV import, kitchen — are still to write.
+
+### 2.5 the edge runtime pass — declined, and what the measurement found instead (2026-09-01)
+
+The premise: `/api/health` is Edge because as a Node function it was "the app's
+RTT floor at ~200ms plus a cold start", so other routes might follow it.
+
+**They should not, and the reason is the largest single performance fact in this
+application.**
+
+#### Where the ~270ms floor actually goes
+
+Every route this session brought to "the one-round-trip floor" sits at ~270ms.
+Supabase reports its own upstream time in `x-envoy-upstream-service-time`, which
+separates *time inside Supabase* from *time on the wire*. On an **already-open
+keep-alive connection**, so no TCP or TLS setup is counted:
+
+| Probe | Total | Inside Supabase | Network |
+|---|---:|---:|---:|
+| one row by primary key | 279 ms | **19 ms** | **~260 ms** |
+| count only | 366 ms | 3 ms | ~363 ms |
+| 50 rows | 277 ms | 6 ms | ~271 ms |
+| `get_cash_overview` RPC | 280 ms | 9 ms | ~271 ms |
+
+**The database does its work in 3–19 ms. Everything else is distance.**
+
+Calibrated against known hosts from the same machine, same moment, warm
+connections: **6 ms** to `cloudflare.com` (the Beirut PoP — `CF-Ray: …-BEY`) and
+**42 ms** to `google.com`. So the local network is fine; the ~260 ms is the trip
+from Cloudflare's Beirut edge to the Supabase origin and back.
+
+#### Why that rules Edge out rather than in
+
+- Edge cannot shorten the origin distance. It moves *compute*, and the compute
+  is 19 ms.
+- For a DB-touching route it can make things **worse**: putting the function at
+  a PoP near the shop while the database stays where it is adds a hop rather
+  than removing one.
+- `/api/health` is the exception that proves it — it touches **no database**, so
+  for that one route the function's own invocation cost is the whole cost, and
+  Edge is exactly right. CLAUDE.md's warning that importing a Supabase client
+  there "silently drops it back to Node" is the same fact from the other side.
+
+So: **no route moves to Edge.** Recorded as a decision, with numbers, rather
+than left NOT STARTED for someone to try later.
+
+#### What the measurement found instead
+
+Everything removed server-side this session — `cash-shifts` 849→291,
+`register-requests` 817→274, `kitchen/tickets` 543→271, `stores/features`
+543→270 — saved ~270 ms per removed round trip **because each round trip is
+~260 ms of distance**. That work was worth doing and is done; the distance
+itself is now the floor under all of it.
+
+Two things follow, and both are the owner's call because both are
+infrastructure rather than code:
+
+1. **No Vercel region is configured.** There is no `vercel.json` and no
+   `preferredRegion` anywhere in `src/`, so every route but `/api/health` runs
+   Node in Vercel's **default region (`iad1`, Washington DC)**. A shop in Beirut
+   therefore crosses to Washington, which then talks to Supabase wherever it
+   is, and back. Pinning `preferredRegion` to the Supabase region removes that
+   leg outright.
+2. **The Supabase project is in Seoul** (`ap-northeast-2`) — confirmed by the
+   owner. RTTs measured from Beirut against AWS regional endpoints, warm
+   connections: Paris 55 ms, Frankfurt 61 ms, **Ireland 67 ms**, N. Virginia
+   127 ms, **Seoul 246 ms**. Seoul at 246 ms matches the ~260 ms measured
+   against Supabase itself, which is what makes the model trustworthy rather
+   than a guess.
+
+Neither is a code change and neither is safe to do speculatively: moving a
+Supabase project's region migrates the whole database, and pinning a Vercel
+region to the wrong one makes things worse.
+
+#### Decided (2026-09-01): move to Europe
+
+The owner has created a new Supabase project in **Ireland (`eu-west-1`)** and
+the runbook is **[`docs/REGION-MIGRATION.md`](REGION-MIGRATION.md)**.
+
+```
+today   shop (Beirut) --127ms--> Vercel iad1 --~180ms--> Supabase Seoul   ~307 ms
+after   shop (Beirut) --67ms---> Vercel dub1 ----~5ms--> Supabase Ireland  ~72 ms
+```
+
+**~235 ms off every API call** — larger than the sum of every server-side saving
+in this plan. Ireland vs Frankfurt is 6 ms, so colocating Vercel with the
+database (`dub1`) is worth more than the difference and the existing project
+stays.
+
+The runbook carries three traps worth naming here too:
+
+1. **Do not rebuild the schema by replaying migrations.** The repo does not
+   describe production — `001` gates every table on `auth.uid()`, which is
+   always NULL in an app that has never used Supabase Auth, so replaying it
+   would faithfully reproduce a schema that does not work. Dump and restore.
+2. **`NEXT_PUBLIC_SUPABASE_URL` is compiled into the client bundle** and
+   precached by the service worker — verified, the project ref is in a built
+   chunk. The server switches on redeploy; a till does not until its worker
+   updates. So the old project stays alive until the fleet rolls over, or a till
+   pushes sales to Ireland while pulling its catalogue from Seoul.
+3. **The Vercel region pin is the LAST step.** `dub1` while the database is
+   still in Seoul is 67 ms + ~250 ms — worse than today.
+
+What makes the window safe at all is that this is an offline-first POS: with the
+API unreachable, sales queue and sync afterwards. That is exactly what
+`offline_queue` is for.
+
+### 4.3 History virtualization — measured, and declined with a threshold (2026-09-01)
+
+The till's grid was worth virtualising because it rendered **2,488 tiles and
+12,666 DOM nodes** and re-rendered them after every 30-second sync while a
+cashier was scanning. The question for History is whether it is the same
+problem.
+
+Measured as a delta — the empty feed, then the same page with 40 sales dated
+today, seeded through the real API and deleted afterwards:
+
+| | Nodes |
+|---|---:|
+| Empty feed | 203 |
+| 40 rows | 884 |
+| **Per row** | **17.0** |
+| Projected: 50 rows *(the default page)* | **1,054** |
+| Projected: 500 rows *(nine "load more" presses)* | 8,716 |
+
+**Declined at the default.** 1,054 nodes is a twelfth of what the till was
+carrying, on a screen the plan tiers as *"Tier 3 — back office, nobody is
+waiting at a counter. Correct and comfortable. A two-second report is fine. **Do
+not gold-plate these.**"* Virtualising it would add machinery and a scroll
+container to a list that does not need one.
+
+**The threshold, so the next person does not have to re-derive it:** it becomes
+worth doing past roughly **300 rows**, which takes five deliberate "load more"
+presses. If History ever gains an infinite scroll, a default range wider than
+today, or a store that habitually pages back through a month, this moves from
+declined to warranted — and the cheaper half is available first: the row is an
+inline closure per item, so a memoised row with a stable `onSelect(id)` would
+cut the per-keystroke re-render cost without a virtualiser at all.
+
+> Recorded also because getting this number was harder than the answer deserved.
+> Three attempts went into driving the date-range dialog before the measurement
+> was restructured to avoid it entirely — seed sales dated *today*, measure
+> against the default filter, delete them. When a measurement fights the UI,
+> change the measurement.
+
+**Verified:** 17/17 fixture integrity after the 40 seeded sales were deleted.
+
+### 8.2 / 8.3 — `.limit()` above 1,000 does not do what it looks like it does (2026-09-01)
+
+#### 8.2: the premise no longer holds
+
+*"The full catalogue read at boot is the largest main-thread block on a phone;
+consider a worker or an indexed partial read."*
+
+Measured instead: `getAll` over 2,492 products is **33 ms**, and after Phase 4.2
+there are **zero long tasks** during boot on desktop or android. There is no
+block left to move to a worker. Recorded as measured-and-declined rather than
+done for the row's sake — at the 20,000-product target it may return, and
+`harness:bench:till` is there to say so.
+
+#### 8.3: the finding
+
+Chasing pagination gaps turned up something worse than a gap. **Supabase
+configures PostgREST with `db-max-rows = 1000`, and that is a CEILING, not a
+default.** Measured against the live project, on a table with 2,492 matching
+rows:
+
+| Request | Rows returned |
+|---|---:|
+| no limit | 1,000 |
+| `.limit(2500)` | **1,000** |
+| `.limit(5000)` | **1,000** |
+
+So this shape, which appears three times in the codebase, is broken twice over:
+
+```ts
+.limit(RECIPE_CAP)                      // RECIPE_CAP = 5000
+truncated: rows.length >= RECIPE_CAP    // can NEVER be true
+```
+
+The read is silently cut at 1,000 **and** the guard that exists to notice it
+cannot fire. It reads as careful and is not.
+
+**Live consequences, on stock:**
+
+- **`/api/recipes`** (cap 5000) — a store past 1,000 recipe components served a
+  short recipe set flagged `truncated: false`. The client adopts it, and
+  `buildStockDecrements()` then deducts nothing for the components that fell off
+  the end. Silent, and invisible until a stock take.
+- **`/api/combos`** (cap 2000) — a meal missing half its contents, flagged
+  complete.
+- **The public menu** — and this one is mine: 8.1 "fixed" its unbounded read
+  three commits ago by adding `.limit(2000)`, which changed nothing. I made the
+  same mistake while fixing it, which is the best argument for the gate below.
+
+#### The fix
+
+`src/lib/supabase/paginate.ts` — `fetchAllPages()`, the `.range()` loop
+`fetchAllProducts()` has always had, extracted so the next caller cannot get it
+wrong. All three reads now page, with `.order("id")` added as the **tiebreaker**
+that `sort_order` cannot provide: without it, equal rows shift between requests
+and are skipped or duplicated across a page boundary.
+
+`callerAndRead` now also returns its `supabase` client, so later pages are read
+**after** the caller is confirmed — strictly safer than the first page, which
+deliberately races auth.
+
+**Proven against the live database**, not argued: 1,300 extra components seeded
+into the fixture store, read back through the real route, then deleted.
+
+| | Rows in the DB | Rows the API returned |
+|---|---:|---:|
+| Before | 1,304 | **1,000** *(truncated, flagged complete)* |
+| First attempt | 1,304 | **2,304** *(page 1 read twice)* |
+| After | 1,304 | **1,304** ✓ |
+
+The middle row is the point of testing at all. `fetchAllPages` started at row 0
+while `callerAndRead` had already read rows 0–999, so the first page came back
+twice. It takes a `startAt` now, and the reason is written above it. Fixture
+restored to its original 4 components, verified 17/17.
+
+> A second trap, recorded because it cost two attempts: **PostgREST `like` does
+> not apply to a `uuid` column.** The seed cleanup filtered `id=like.eeee000b*`,
+> matched nothing, deleted nothing, and returned 204 — leaving 1,300 rows behind
+> until they were removed by explicit id list. A DELETE that "succeeds" having
+> deleted nothing is a bad way to find that out.
+
+#### And a gate, because I made the mistake myself
+
+`verify:invariants` gains an **eighth** check: no `.limit()` with a literal above
+1,000, anywhere in `src/`. Mutation-checked — reintroducing `.limit(5000)` fails
+the build with the file and line.
+
+**Verified:** 17/17 fixture integrity, 124/124 contract, 26/26 E2E desktop,
+175/175 unit, typecheck clean, lint unchanged at 207, build green with all three
+gates and 8 invariant checks.
+
+### 5.1 / 5.2 the wait register — and the one that was still real (2026-09-01)
+
+#### The register, verified rather than assumed
+
+Every point the app can show a wait, checked against the code and the clock as
+it stands today. Most of the plan's candidate rows had already been closed by
+earlier phases, which is the useful result: **the register is short now.**
+
+| Moment | Status | Evidence |
+|---|---|---|
+| Boot → usable till | **resolved** | 129 ms desktop and android, 0 long tasks (9.2) |
+| Route change | **resolved** | 21 ms across all four shell routes (9.2) |
+| Scan → line in cart | **resolved** | 29 ms median (9.2) |
+| Sale complete → receipt | **already done** | `saleCompletion.ts` paints the QR and pushes with no await |
+| Open checkout | **not a wait** | no loading gate at all — the keypad renders from the cart, which is in localStorage |
+| Open History → profit | **already streams** | the card paints; profit shows `—` in a reserved slot until it lands, so there is no reflow |
+| Open Cash | **resolved** | snapshot first, and the route itself went 849 → 291 ms (2.6) |
+| **Save a product** | **WAS REAL — fixed below** | 954 ms → 87 ms |
+
+#### The one that was still real
+
+`createProduct()` awaited the server push before returning, and all three of the
+till's catalogue writes awaited *it*:
+
+- naming an unknown barcode at the till,
+- promoting a one-off line into the catalogue,
+- **retyping a cart line's price** (`repriceProduct` → `updateProduct`).
+
+So a cashier who named an item stood there for a full round trip before the line
+reached the cart — **with the customer holding it.** The local IndexedDB write,
+which is what makes the product durable and sellable, had already completed
+milliseconds earlier.
+
+| | Before | After |
+|---|---:|---:|
+| Press Save → line in the cart | **954 ms** | **87 ms** |
+
+Controlled comparison, six captures each, same machine, old code rebuilt minutes
+apart. This is Phase 5 rule 1 and rule 2 on a Tier-1 path, and it is the same
+move `saleCompletion.ts` already made for the sale itself.
+
+#### Keeping the one failure that still matters
+
+`pushOrQueue` can fail BOTH ways — push refused and queue write refused — and
+that is the one case where the product exists on this device and nowhere else,
+with nothing to retry it. Awaiting used to surface that; not awaiting must not
+lose it.
+
+So `ProductWriteResult.syncedNow: boolean` became **`pushed: Promise<boolean>`**:
+resolves true/false for sent-vs-queued, and **rejects** for neither. Every call
+site attaches a `.catch()` that names the product on screen. Everything milder
+than that — queued while offline, retried later — is already carried by the sync
+indicator and needs no toast of its own.
+
+The success toast is worded from `connectivity.isOnline` rather than from the
+push, which has not settled yet. It is the same fact a cashier can act on, and
+it is what decides the branch in practice.
+
+**Verified:** 26/26 E2E desktop, 175/175 unit, 124/124 contract, 17/17 fixture
+integrity (the six products each bench run created were deleted — twelve in
+total, confirmed zero remaining), typecheck clean, lint unchanged at 207, build
+green with all three gates.
+
+### 9.2 final numbers (2026-09-01)
+
+All from **one build**, production (`npm run start`), against the harness store:
+**2,492 products, 300 transactions**. Static assets are local; every API and
+Supabase call is the real remote project.
+
+#### Read this first — two things are NOT comparable
+
+1. **The Phase 0 boot baseline measures a different thing.** It recorded
+   `perf.boot` at 167 ms, and Phase 4.0 established that the metric was firing
+   when AUTH resolved rather than when the till was usable — every sample
+   carried `products: 0` while IndexedDB held 2,492. The honest pre-refactor
+   number for the same event is **970 ms**, measured during 4.0 on the pre-fix
+   build. Comparing today's figure to 167 ms would invent a regression;
+   comparing it to 970 ms is the real comparison, and that is the one used
+   below.
+2. **The Phase 0 runtime baseline was a different store** (`daoud`: 2,280
+   products, 93 transactions). Request *structure* is comparable; absolute paint
+   timings are not, and the plan already warns that localhost paint numbers are
+   a floor no shop will see.
+
+#### The client
+
+| | Phase 0 | Now | |
+|---|---:|---:|---|
+| Boot → usable till, desktop | 970 ms *(honest metric)* | **129 ms** | −87% |
+| Boot → usable till, android | not measured | **129 ms** | — |
+| Scan → paint, desktop | 37 ms *(pre-4.2)* | **29 ms** | −22% |
+| Route change | not measured | **21 ms** | — |
+| DOM nodes on the till | 12,666 | **361** | −97% |
+| Main-thread blocking during boot | 833 ms | **0 ms** | — |
+
+Boot improved twice: Phase 4.2 took it 970 → 283 ms by virtualising the grid,
+and the API work took it 283 → 129 ms, because the feature-flag fetch sits on
+the boot path.
+
+#### The server — every route at the one-round-trip floor but one
+
+| Route | Phase 0 / session start | Now |
+|---|---:|---:|
+| `/api/cash-shifts` | 849 ms | **293 ms** |
+| `/api/register-requests` | 817 ms | **275 ms** |
+| `/api/kitchen/tickets` | 543 ms | **271 ms** |
+| `/api/admin/stores/features` | 543 ms | **270 ms** |
+| `/api/categories` *(control, unchanged all session)* | 275 ms | **268 ms** |
+| `/api/recipes` | — | 268 ms |
+| `/api/cash-registers/analytics` | 576 ms → 303 ms *(2.2)* | 269 ms |
+| **`/api/transactions`** | — | **544 ms** — still open |
+
+The control is what makes the rest readable: `categories` was already one wave
+and did not move, so the routes that did, moved for the reason claimed.
+`/api/transactions` is the one outlier left — already one wave for caller and
+retention; the remainder is its nested `transaction_items` read.
+
+#### Requests per journey
+
+A **full page load** is unchanged by design — 4 API calls on `/pos`, same as
+Phase 0 — because `staleTime` is per-tab and a cold launch must never show a
+stale menu.
+
+The win is on **client-side navigation**, which is how a cashier actually moves:
+
+| Journey | Before | Now |
+|---|---:|---:|
+| `/pos` → Inventory → `/pos` (menu data) | 9 requests | **3** |
+| Same walk (feature flags) | 3 | **1** |
+| `/transactions` per mount | 2 | **1** |
+| `/kitchen` per mount | 2 | **1** |
+
+#### Bundles
+
+| Route | Phase 0 gz | Now gz | |
+|---|---:|---:|---|
+| `/pos` | 344.2 KB | 355.3 KB | **+11.1**, deliberate |
+| `/pos/products` | 356.7 KB | 359.4 KB | +2.7 |
+| `/checkout` | 336.0 KB | 337.2 KB | +1.2 |
+| `/pos/cash` | 334.4 KB | 335.4 KB | +1.0 |
+| `/transactions` | 329.6 KB | 330.7 KB | +1.1 |
+| `/kitchen` | 322.5 KB | 323.5 KB | +1.0 |
+
+**Bundles grew, and that is the right answer.** ~1 KB everywhere is the data
+layer and the durability code in the shared shell. The +11 KB on `/pos` is
+`@tanstack/react-virtual`, bought deliberately: it removed 833 ms of
+main-thread blocking per launch and made every scan 22% faster. `verify:budgets`
+blocked the build until that was recorded, which is exactly its job.
+
+The precache is **unchanged at 3.28 MB** — the 864 KB of iOS launch screens are
+excluded from it, and `verify-sw` asserts that.
+
+#### What did NOT move, and why
+
+- **`/api/transactions` at 544 ms** — nested read, not a wave problem.
+- **Supabase at 52.6 KB gz on every route** — audited in Phase 7 and left:
+  the payoff is parse time only (the bundle is precached), and with zero long
+  tasks there is no measured parse cost to reclaim.
+- **13 raw `* SELL_RATE` sites** — recorded in 9.1, needs a money audit.
+- **iOS numbers** — Playwright's WebKit posts no activity events, so `perf.*`
+  cannot be read there at all. Every iOS figure in this plan is desktop or
+  Android; the real device belongs to 6.3.
+
+#### Bugs found and fixed along the way
+
+Not the goal, but the more valuable half of the result: **P1-12**, **P1-13**,
+the till rendering with an empty catalogue, the cash page bouncing cashiers on a
+cold device, the unknown-barcode prompt inviting duplicate products, a
+`.limit()` that could hide a register's last shift, an unbounded read on the
+public menu, a double fetch on two screens, and a money test that passed for the
+wrong reason.
+
+Five of those are one root cause, now written down in three places and gated in
+one: **an absent answer is not a negative answer.**
+
+### 9.1 the permanent gates — and two things they caught on the way in (2026-09-01)
+
+The plan's insurance policy, stated in §0: whatever happens to the harness —
+kept, pruned or deleted — what stands afterwards is a set of **permanent
+build-time gates**. `verify:sw` and `verify:budgets` were the first two.
+`verify:invariants` is the third, and unlike them it reads the SOURCE rather
+than the build output.
+
+Seven checks, each naming its §1 invariant and each saying **what breaks in a
+real shop** — because these fire on somebody else's afternoon, months from now,
+and a rule with no reason attached gets deleted rather than obeyed:
+
+| Invariant | The check | What it prevents |
+|---|---|---|
+| 14 | no `merchant_id` / `restaurant_id` in `src/` | a query scoped by a column that does not exist is not scoped at all |
+| 2 | `roundToNearest5k(` only in `format.ts` and `cartStore.ts` | per-line rounding compounds; no two tills agree |
+| 16 | `isSellable()` is `!== "ingredient"` | the strict form shows an EMPTY CATALOGUE on a pre-030 device |
+| 17 | no `modifiers … \|\| null` | `[]` vs `null` is what the kitchen board filters on |
+| 13 | `PWAUpdateListener` uses `hasAnyLaneItems` | an SW update reloading over a parked customer's basket |
+| 9 | the sync replay forwards `stock_decrements` | a queued menu sale depleting the menu item, not its ingredients |
+| — | nothing imports `@/components/BarcodeScanner` | ~420KB of ZXing in the POS bundle for the scan beep |
+
+**All seven mutation-checked, 7/7 caught.** Each violation was introduced,
+confirmed to fail the gate, and reverted. A gate that cannot fail is theatre.
+
+Comments are **stripped before matching**. This codebase documents its dead
+patterns constantly — *"NOT `=== 'sellable'`"*, *"the dead `x-restaurant-id`
+header"* — and a gate that could not tell a warning from a violation would
+punish exactly the comments that prevent the violation.
+
+#### Two real violations, found by writing the gate
+
+1. **`combineCurrencyTotals()` re-implemented `convertUsdToLl()`.** It read
+   `(ll || 0) + roundToNearest5k((usd || 0) * SELL_RATE)` — which is character
+   for character what the helper does. Identical arithmetic, one fewer
+   definition of the USD→LL conversion. §3 rule 1 says that conversion lives in
+   `format.ts` and nowhere else, and four disagreeing copies of it is audit
+   P1-6. The rate choice the long comment above it defends is unchanged: that
+   helper is the SELL_RATE one.
+2. **Four mock RESTAURANT tables with a `restaurant_id`**, plus a
+   `from("tables")` branch, in `src/lib/supabase/client.ts` — dead TableMind
+   scaffolding for a table that does not exist in this product, and nothing
+   ever called it. Deleted. Lint went **down** by an error as a result.
+
+#### Recorded rather than gated: raw rate arithmetic
+
+§3 rule 5 says *"Use the named helpers, not raw arithmetic — a raw
+`* SELL_RATE` bypasses the 5k rounding that `convertUsdToLl` exists to apply."*
+There are **13 raw `* SELL_RATE` / `* RETURN_RATE` sites outside `format.ts`**,
+on money display paths — the till, the products page, the public menu, checkout,
+the modifier sheet, the combo editor, cartStore.
+
+Most look like deliberate *unrounded* display conversions rather than payable
+amounts, which is a different thing from the rule's target. Deciding each needs
+a money audit and may move numbers a shop reads, so it is **not** gated here —
+a gate nobody can make pass is a gate somebody deletes. Recorded with its
+count so the audit has a starting point.
+
+**Verified:** the gate runs inside `npm run build` (and `build:legacy`), 7/7
+checks passing and 7/7 mutation-caught; 175/175 unit, 124/124 contract, 26/26
+E2E desktop, typecheck clean, build green. Lint **improves** to 207 problems
+(76 errors, 131 warnings) — one fewer error than main's long-standing 77, from
+the deleted mock client.
+
+### 6.1 the durability state, made visible (2026-09-01)
+
+The exit criterion is precise: **"the 'at risk' state is impossible to be in
+without the shop being told."** That has two halves — deciding it and showing
+it — and only the first can be asserted, so it is the first that got a pure
+function.
+
+#### Deciding: `classifyDurability()`
+
+Whether queued sales survive is not a property of this app's code. It is a
+property of the browser the till happens to be in. `src/lib/pwa/durability.ts`
+turns the facts into one of five levels, worst first:
+
+| Level | When | Urgent |
+|---|---|---|
+| `full` | Nearly out of quota — the NEXT sale may fail to save | yes |
+| `at_risk` | Sales are queued AND the browser may delete them | yes |
+| `unprotected` | Evictable, but nothing queued yet | no |
+| `protected` | Grant given | no |
+| `unknown` | No Storage API — we cannot ask | no |
+
+`full` outranks `at_risk` deliberately: it fails the next sale whether or not
+the grant was given, which is a certainty rather than a risk.
+
+`unknown` is the rule this codebase keeps relearning, appearing for the fifth
+time: **do not tell a shop its sales are safe, and do not tell them they are
+not, when the browser cannot say.** 9 unit tests, including that a
+dead-lettered sale — a *server* refusal, already listed on the transactions
+page — must not turn a healthy device into a warning.
+
+#### Showing: an alarm, not a notice
+
+The existing surface was a toast: once per device, dismissible, and fired on
+"this app is not installed" — which is true for weeks before it matters, and
+therefore trains people to ignore it.
+
+`DurabilityBanner` shows for one condition: **money is on this device and the
+browser is allowed to delete it.** It has no dismiss control, because there is
+nothing to dismiss while cash is at risk — it disappears when the sales sync or
+the grant arrives, and re-checks on every reconnect for exactly that reason.
+The not-installed toast stays as it was. **One is advice and one is an alarm,
+and mixing them is how an alarm stops working.**
+
+It is mounted in the **`(shell)` layout, not `AppShell`** — so it is on every
+screen a cashier is on between sales and on none during payment. `/checkout`
+shares the same shell and passes no banner: a row appearing mid-payment both
+distracts and takes height from the keypad on a 1366×768 till.
+
+#### Showing it to the admin console
+
+The admin console cannot see any of this — it is per-browser state on a device
+it has never met. So the device reports itself, through the trail that already
+exists: a new `sync.durability` action carrying level, grant, quota ratio,
+queued and dead-lettered counts. No new admin page; `/admin/activity` already
+filters by category.
+
+Logged **only when the answer changes**, keyed on `level:queuedSales`. The till
+re-checks every minute all day, and logging that would be thousands of identical
+rows against a 3-day retention window shared with the events somebody reads.
+
+#### A harness limit worth knowing
+
+**Playwright's WebKit build has no `navigator.storage` at all** — verified, not
+assumed. So the app correctly reports `unknown` and shows nothing, and the alarm
+test skips there by testing for the capability rather than naming a platform.
+
+> This is a HARNESS limitation, not a statement about iOS. Real Safari
+> implements `storage.persist()`, and on iOS the install *is* the durability
+> mechanism. Verifying the grant on a real device belongs with 6.3's drill —
+> which is now the only part of Phase 6 still open.
+
+**Verified:** 26/26 E2E desktop, the alarm passing on desktop AND android and
+skipping honestly on ios, 9/9 visual desktop (the banner is correctly absent
+under normal conditions), 175/175 harness unit (nine new), typecheck clean, lint
+unchanged at 208, build green. The banner was also rendered and looked at.
+
+### 6.2 eviction discipline, and an empty catalogue that lied (2026-09-01)
+
+#### The order is data now, and asserted
+
+`freeExpendableSpace()` walks `EVICTION_ORDER`, an exported constant, instead of
+three hand-written blocks. Phase 6.2 asks for "queued sales are never shed" to
+be **asserted**, and a comment beside the code is exactly what a future edit does
+not have to read.
+
+`harness/unit/eviction-order.test.ts` — 5 tests — pins that `offline_queue` and
+`products_cache` are absent from the order, that the order itself is
+`activity_buffer → transactions_cache → pending_writes`, and that the
+`pending_writes` step touches **only** `favorite_add`/`favorite_remove` — never
+`cash_shift_open`, `cash_adjustment`, `product_upsert` or the other queued money
+writes that share that table.
+
+**Mutation-checked**: adding `offline_queue` to the order turns 2 of the 5 red.
+A full disk is not hypothetical — every till writes completed sales to IndexedDB
+before the network sees them, and `withQuotaRetry` calls this the moment a write
+hits `QuotaExceededError`.
+
+> **The plan's suggested order is declined, on purpose.** §6.2 says "activity
+> buffer → transaction history cache → **product cache**". The existing code
+> deliberately omitted the third with a better argument than the plan's, and it
+> is kept: `products_cache` would free the most, which is exactly the trap — it
+> is also the only thing letting the till sell while offline, so dropping it to
+> save one row takes the whole shop down instead of one write. Now recorded in
+> `NEVER_EVICTED` rather than left as a comment to be overruled by someone
+> reading the plan.
+
+#### "Detect a cleared origin and re-seed rather than presenting an empty catalogue as truth"
+
+The interesting half of that sentence turns out not to be the detection. **A
+device whose storage iOS cleared after seven idle days is indistinguishable from
+a brand-new one** — both have nothing, and nothing is left to compare against.
+So the question was never "was this cleared", it is "does this device *know* what
+the shop sells".
+
+An empty `products_cache` means one of two opposite things — *this shop sells
+nothing*, or *this device has not been told yet* — and the till gave the cashier
+opposite instructions for each while treating both as the first:
+
+> A real product scanned on a cleared or brand-new till, offline, produced the
+> **name-and-price fields** — inviting the cashier to create a **duplicate** of
+> something the shop already sells, priced by guess, on a device that was about
+> to download the real one.
+
+`hasEverSyncedProducts()` answers it the same way the rest of this refactor
+does: the sync watermark's existence is the proof, exactly like
+`hasCachedRecipes()`. When the catalogue is unknown the prompt says the product
+list has not been downloaded and to reconnect first — no fields, nothing added.
+
+**A fourth instance of one root cause**, now: `evaluateReconcile()`, P1-12,
+P1-13, and this. An absent answer is not a negative answer.
+
+`harness/e2e/durability.spec.ts` guards both directions, which is what stops the
+fix degenerating into "never offer to add a product": with the catalogue
+provably unknown the fields must NOT appear and nothing may reach the cart; once
+the watermark exists an unknown barcode prompts as it always did. Making
+`catalogueKnown` constant in either direction fails one of the two.
+
+**Verified:** 25/25 E2E desktop (two new), 15 passed / 34 skipped on
+android+ios with only the pre-existing iOS WebKit failure, 166/166 harness unit
+(five new), typecheck clean, lint unchanged at 208, build green.
+
+### 2.7 register-requests — the write stopped being a prerequisite (2026-09-01)
+
+§2.2 declined to convert this route, and **was right about the reason**: its GET
+ran `expireStale()` — a WRITE — before the read, and racing auth against a write
+means writing to a store before confirming the caller owns it. That trade is not
+worth any amount of latency, and it still isn't.
+
+What changed is the premise, not the risk tolerance. **Expiry is derivable**: a
+pending request is lapsed exactly when `expires_at` has passed. So the read
+applies it directly and returns the same rows write-then-read produced, the
+write is no longer a prerequisite for a correct answer, and with nothing written
+before the caller is known the established one-wave rule applies.
+
+`expireStale` is now bookkeeping for the other views and runs **after the
+response**, via `after()` from `next/server` — so it neither delays the answer
+nor gets dropped when the function returns. Fire-and-forget would have done the
+first and risked the second.
+
+| | Before | After |
+|---|---:|---:|
+| `GET /api/register-requests?status=pending` | **817 ms** | **274 ms** |
+
+#### Equivalence, demonstrated rather than argued
+
+One test, seeded against the real database — a live pending request, an
+**expired** pending request, and an already-decided one — asserting that
+`?status=pending` returns exactly the live one, `?status=all` returns all three,
+the `register_name` join survives, and the lapse is **persisted** to `expired`.
+
+**The same seven assertions pass on both builds.** Old code: 7/7 at 817 ms. New
+code: 7/7 at 274 ms. That is the equivalence proof and the latency measurement
+in one run, and the seeded rows are deleted afterwards either way.
+
+#### One thing deliberately not relied on
+
+`expires_at` is `NOT NULL` per migration 027 — but the db-migration skill's
+first rule is that the repo is not a reliable description of production, and the
+table was empty, so there was no data to confirm it against. The filter is
+therefore `expires_at.is.null,expires_at.gte.<now>`: the old write used
+`.lt("expires_at", now)`, which never matched a NULL, so such a row was never
+lapsed and still showed. A null-blind `.gte()` would have silently hidden it.
+
+**Verified:** 124/124 contract, 23/23 E2E desktop, typecheck clean, lint
+unchanged at 208, build green.
+
+### 2.6 the cash page's three round trips become one — migration 039 (2026-09-01)
+
+The biggest single number left after 2.2b. `GET /api/cash-shifts` was **849 ms**
+against a ~300 ms floor, and it was not slow code: three waves that genuinely
+depend on each other — registers, then the shifts on them, then those shifts'
+totals. Latency paid three times over.
+
+`get_cash_overview(p_store_id)` does the whole traversal in Postgres and is
+started in **wave 1**, because it needs nothing from wave 1. The success path is
+one wave, total.
+
+| | Before | After |
+|---|---:|---:|
+| `GET /api/cash-shifts` median | **849 ms** | **291 ms** |
+
+`registers` still comes from wave 1's own query rather than from the RPC, so
+that list is byte-identical to what it has always been and the change is
+confined to the parts that were costing round trips.
+
+#### It fixes a latent bug on the way
+
+The old code fetched closed shifts with `.limit(registerIds.length * 3)` —
+a **fetch** bound, not a semantic one. If three-times-the-register-count of more
+recently closed shifts all belonged to *other* registers, a register's own last
+shift fell outside the window and its card showed no figures at all. Rare,
+silent, and only on stores with many registers. `DISTINCT ON (register_id)`
+ordered by "open first, then most recently closed" has no window to fall outside
+of.
+
+#### Verified, not assumed — three ways
+
+1. **The selection rule, against the real database.** A throwaway fixture of
+   three registers — one with an open shift *and* an older closed one, one with
+   three closed shifts, one with none — asserting that the open wins, the most
+   recently closed wins, and a register with no shifts contributes none. All
+   five checks pass; the fixture is deleted afterwards.
+2. **The response is unchanged.** Same keys, same values, and the `cash` visual
+   snapshot passes untouched — which is the strongest available check that the
+   page renders identically.
+3. **The FALLBACK, by breaking it on purpose.** The RPC name was temporarily
+   pointed at a function that does not exist, rebuilt, and measured: identical
+   JSON, **844 ms** (the original three-wave latency), and the warning logged on
+   every request. That is the compatibility hinge for any deployment without 039
+   applied — the same shape migration 037 has for `decrement_stock_batch` — and
+   it now has a demonstration rather than an assumption behind it.
+
+> **This one was applied to Supabase by the owner during the session**, which is
+> what made verification 1 and 2 possible at all. Everything else about the
+> route is written so that a database *without* it is a supported state, not a
+> broken one.
+
+#### What it deliberately does not do
+
+No money is converted in SQL. `usd_amount_paid` comes back as its own component
+exactly as `get_shift_totals` returns it, because the LL/USD rate has one
+definition in `src/lib/utils/format.ts` — duplicating it in SQL is how this
+codebase ended up with four disagreeing conversions (audit P1-6).
+`summariseShift()` still does the arithmetic.
+
+Employees, pending requests and unassigned totals are not folded in either: they
+do not depend on the registers, so they already run in parallel and cost
+nothing.
+
+**Verified:** 124/124 contract, 23/23 E2E desktop, 9/9 visual desktop, typecheck
+clean, lint unchanged at 208, build green.
+
+### 8.1 PostgREST cap audit — the money paths are clean (2026-09-01)
+
+Every `.from(...).select(...)` in `src/app/api` and `src/lib` that is not a
+`.single()`, a write, or a count: **114 query sites, 14 without an explicit
+`.limit()`**. Each of the 14 checked by hand.
+
+**The headline is a negative result, and it is the valuable part: no money
+figure is truncated anywhere.** The class of bug that silently mis-stated
+revenue and profit for a year is absent from the paths that carry money:
+
+| Read | Why it is safe |
+|---|---|
+| `transactions/analytics` → products (the cost map) | Chunked by `ID_CHUNK` and looped — explicitly handled |
+| Shift and register totals | RPCs (`get_shift_totals`, `get_unassigned_totals`, `get_register_performance`) — aggregated in Postgres |
+| `/api/transactions` | Cursor-paginated, `.limit(limit + 1)` |
+| `/api/admin/activity` | Cursor-paginated |
+| `recipes` / `combos` ownership checks | `.in("id", ids)` over ONE recipe's components |
+| `cash_adjustments`, clash checks, `store_users`, `product_categories`, `product_favorites`, `my-shift` | Bounded by `.in()` over a handful of ids, or tens of rows by nature |
+
+#### The one real gap: the public menu
+
+`GET /api/public/menu/[token]` read `recipe_components` with
+`.in("menu_product_id", …)` over up to **1000** products and **no limit**. Past
+1000 components PostgREST drops the tail, so on a store with many recipes some
+items quietly lose their "comes with" lines on the customer-facing menu, with
+nothing anywhere saying so.
+
+Bounded at `MAX_COMPONENTS = 2000` and, more importantly, **noticed**: hitting
+the cap logs an error naming the store. A menu missing some ingredient lines is
+still a usable menu, so this does not fail the request — but it must not be
+invisible, which is the whole lesson of the analytics bug.
+
+#### And one cap worth naming
+
+`MAX_ITEMS = 1000` on the same route is **exactly PostgREST's own implicit
+cap**. That is now written down, because raising it without adding pagination
+would change nothing: the extra rows would be dropped by PostgREST instead of
+by us, which is the silent version of the same truncation.
+
+**Verified:** 124/124 contract, 23/23 E2E desktop, typecheck clean, lint
+unchanged at 208, build green.
+
+### Where the time actually is, after Phase 4 (2026-09-01)
+
+Phase 7 was next by the plan's order. Measuring first said otherwise, and
+pointed at unfinished Phase 2 work instead.
+
+#### The client is no longer the problem
+
+| | Desktop | Android |
+|---|---:|---:|
+| Boot (honest metric, median) | 283 ms | **128 ms** |
+| Scan → paint | 27 ms | — (camera till) |
+| Route change | **21 ms** | — |
+| Main-thread blocking during boot | **0 ms** | **0 ms** |
+
+Route changes were never measured before and needed nothing: 21 ms across
+`/pos`, `/transactions`, `/pos/products` and `/pos/cash`.
+
+#### Phase 7 audited, and deliberately not done yet
+
+`/pos` first load is 362 KB gz over 30 chunks, of which 155 KB is shared by
+every route (framework). The two biggest route-specific chunks are on **every**
+screen:
+
+| Chunk | gz | Why it is there |
+|---|---:|---|
+| `@supabase/ssr` | **52.6 KB** | `AuthContext` calls `createClient()` at MODULE SCOPE, and AuthContext is in the root providers |
+| `dexie` | **30.2 KB** | The offline queue and the products cache. Genuinely needed on `/pos` and `/checkout` |
+
+Getting Supabase off the initial parse means lazy-importing it in AuthContext,
+the sync engine, `frequentlyUsed` and the till's barcode fallback — four
+modules, two of them money-adjacent. **The payoff is parse time only**: the
+bundle is precached, so after the first install it is read from Cache Storage
+and never re-downloaded. With boot at 283/128 ms and **zero** long tasks, there
+is no measured parse cost left to reclaim. Audited, recorded, and left NOT
+STARTED rather than done on principle.
+
+#### What the measurement DID find: the server
+
+Every `/api/*` call in a normal session, wall time from the browser:
+
+| Route | ms |
+|---|---:|
+| `/api/cash-shifts` | 849 |
+| `/api/register-requests` | 838 |
+| `/api/admin/stores/features` | 613 |
+| `/api/transactions` | 577 |
+| categories / combos / recipes | ~320-350 |
+
+The plan's own §2.2 established the floor at **one round trip, ~300 ms**, and
+said seven routes still did a serial `resolveCaller`-then-read. Two of the
+worst offenders were never converted — and neither was on that survey's list,
+because the survey looked at the shape of the code and this looked at the
+clock.
+
+**Controlled comparison, same script, same machine, minutes apart:**
+
+| Route | Before | After | Saved |
+|---|---:|---:|---:|
+| `/api/admin/stores/features` | 543 ms | **325 ms** | −218 ms (−40%) |
+| `/api/kitchen/tickets` | 543 ms | **275 ms** | −268 ms (−49%) |
+| `/api/categories` *(control, already one wave)* | 275 ms | 277 ms | unchanged |
+
+The control is the point: it did not move, so the two that did, moved for the
+reason claimed.
+
+**`kitchen/tickets`** polls all service long on a screen a cook stands in front
+of, and paid full latency twice on every poll. Converted with `callerAndRead`;
+the `kitchen` section check still gates the RESPONSE, so a cashier without it
+gets 403 and never sees a ticket.
+
+**`admin/stores/features`** carried a comment asserting the serial shape was
+necessary — *"the read below cannot start until we know which store is
+allowed, and that is the point"*. It is not, for the till's path, and the fix
+turns on **why**:
+
+> The read must be scoped to the store the caller is **claiming in their own
+> header**, so that a failed auth discards a read of *their own* store. Here
+> the store id arrives as a **query parameter**, which a caller controls
+> independently of their header — so racing auth against a read scoped to the
+> parameter would be a genuinely weaker property than the one §2.2 established,
+> not the same one.
+>
+> So the equality check `callerStore === storeId` comes FIRST. It costs no
+> round trip, and once it holds, the parameter *is* the caller's own claim and
+> the race is exactly the established pattern. Any other store means an admin,
+> and that path stays serial on purpose: `verifyAdminSession` is a cookie
+> verification with no database round trip, so racing it would save nothing and
+> would start a read of a store the caller has not claimed.
+
+#### Still open, with numbers
+
+- **`/api/cash-shifts` at 849 ms** — three parallel waves, but the waves are
+  serial with respect to each other (register ids → shifts → totals), so it is
+  ~3 round trips. Collapsing it needs an RPC, i.e. a migration.
+- **`/api/register-requests` at 838 ms** — §2.2 deliberately declined to
+  convert it because its GET calls `expireStale()`, a WRITE, before the read.
+  That reasoning still holds; the number is now recorded against it.
+- **`/api/transactions` at 577 ms** — already one wave for caller + retention;
+  the remainder is the nested `transaction_items` read.
+
+**Verified:** 124/124 contract, 23/23 E2E desktop, 161/161 unit, typecheck
+clean, lint unchanged at 208, build green.
+
+### Phase 4 — the till grid, and the metric that was lying (2026-09-01)
+
+Measured before touching anything, and the measurement redirected the work
+twice.
+
+#### First finding: `perf.boot` was timing the wrong moment
+
+The plan grades itself on `perf.boot`, and it reported **167 ms**. Every sample
+carried `products: 0` while IndexedDB held **2,492** — so the number was real
+but it was not measuring a usable till.
+
+`/pos`'s load effect began `if (!user) { setIsLoading(false); return; }`.
+AuthContext hydrates from localStorage in a mount effect, so `user` is null for
+the first render or two of **every launch**, and that line declared the load
+finished before the catalogue had been read. The instant auth resolved:
+
+- the render guard let the till paint with an **empty catalogue** — blank quick
+  grid, and a scan that missed the local barcode index and fell through to a
+  server lookup, or to "unknown barcode" with no internet;
+- `perf.boot` stamped that instant as "usable".
+
+Another absent answer read as an answer — the same shape as `evaluateReconcile`,
+P1-12 and P1-13. Fixed by only ending the load on a **resolved** absence of a
+user (`!authLoading`).
+
+**The honest number was 970 ms, not 167 ms.** Every field boot sample collected
+so far is optimistic by roughly 6×; the plan's Phase 9.2 comparison must use
+post-fix numbers on both sides.
+
+#### Second finding: the till rendered 2,488 tiles
+
+With boot honest, the cost was suddenly visible: **833 ms of main-thread
+blocking** across 6 long tasks, and `MenuBrowser`'s "All" tab handing
+`QuickGrid` every sellable product — **2,488 tiles, 12,666 DOM nodes** on first
+paint.
+
+The first paint is only half of it. `setProducts` fires again after **every
+background sync**, which runs every 30 seconds all day, so the till was
+reconciling thousands of tiles **while the cashier was scanning**.
+
+`QuickGrid` is virtualised now, same `@tanstack/react-virtual` the inventory
+list uses. Rows, not tiles: the CSS grid stays the layout, one virtual row per
+grid row, columns computed from the same three numbers `auto-fill` used.
+
+| | Before | After |
+|---|---:|---:|
+| DOM nodes on the till | 12,666 | **372** |
+| Grid tiles rendered | 2,488 | **27** |
+| Main-thread blocking during boot | 833 ms | **0 ms** |
+| Boot (honest metric, median) | 970 ms | **283 ms** |
+| **Scan → paint (median)** | 37 ms | **27 ms** |
+
+The scan number is the Tier-1 one: every scan got faster because the grid no
+longer reconciles thousands of tiles behind it.
+
+**It costs +9.4 KB gz on `/pos`** — `@tanstack/react-virtual` was only on the
+inventory route before. `verify:budgets` blocked the build until that was
+recorded deliberately, which is exactly its job; the baseline is updated and
+the trade is one round trip of payload against ~700 ms on every launch and a
+27% faster scan.
+
+#### 4.1 memo boundaries — measured, and not the bottleneck
+
+A plain-product scan was **37 ms** before any of this. The till's render layer
+was not what was slow; the DOM size was. Left NOT STARTED with the number
+recorded, rather than done for the sake of the row.
+
+#### The benches are permanent now
+
+`npm run harness:bench:till` — boot, scan, and weight (DOM nodes, grid tiles,
+blocking), per platform, read off the REAL `perf.*` instrumentation rather than
+re-instrumented, so the bench and the field data cannot disagree about what they
+are timing. That mattered immediately: it is how the `products: 0` above was
+caught. It carries one assertion — that the catalogue is in hand when boot is
+declared — because `products: 0` is not a slow number, it is a wrong one.
+
+#### What the visual baselines had frozen
+
+Five of the 24 snapshots were pinning **bugs**:
+
+- all three `cash` baselines were screenshots of the **POS till**, because
+  P1-13 redirected `/pos/cash` away on a fresh context;
+- `pos-with-cart` and `modifier-sheet` were captured with an **empty
+  catalogue** — "All 0", "No quick items yet", "No ingredients in inventory
+  yet" — the state the boot fix removed.
+
+Regenerated after inspecting each diff. The plan warns that a test pinning a
+spinner forbids the improvement; this is the same hazard one step further on —
+a *settled* state can be settled and wrong.
+
+> **And three were never really running.** The visual suite's three "viewports"
+> are one **desktop user agent** at three widths, so `isMobile()` reports
+> desktop and the Pro till renders even at 375 px — where the remembered 380 px
+> cart panel squeezes the scan input to **zero width**. The guard tested
+> `count() === 0`, which is presence, so it did not skip: it found the input,
+> tried to click something invisible, and timed out after 90 seconds. They guard
+> on **visibility** now and skip honestly. Confirmed pre-existing by rebuilding
+> without the virtualisation and re-probing: input width 0 either way.
+>
+> Worth knowing against invariant #24: `mobile-375` is not a phone, it is a
+> desktop browser made narrow. The E2E suite gets this right with real device
+> descriptors; the visual suite does not, and its "mobile" result should not be
+> read as an Android or iOS result.
+
+**Verified:** 23/23 E2E desktop, 15 passed / 30 skipped on android+ios with only
+the pre-existing iOS WebKit failure, 24 passed / 3 skipped visual and stable on
+re-run, 161/161 harness unit, typecheck clean, build green with all 8 SW checks.
+Lint moves to **208 (77 errors, 131 warnings)**: one new React Compiler notice
+that `useVirtualizer` returns functions it cannot memoize, which is the
+library's documented shape and is why the component is a leaf.
+
+### 5.3 iOS launch screens — the blank white boot is gone (2026-09-01)
+
+Brought forward out of Phase 5 because after 3.4b it was the biggest unclaimed
+win in the plan, and the plan already called it "cheap, big".
+
+An installed iOS PWA showed **blank white for its entire cold boot**, and iOS
+launches a cold WebView *every single time* — so that blank screen was most of
+what "the app takes a long time to open" means on an iPhone. Nothing about the
+code got faster here; what changed is that the time is no longer spent looking
+at nothing.
+
+`scripts/generate-splash.mjs` renders 15 device resolutions from the launcher
+icon: solid `#09090b` — the exact `themeColor`, the exact `--background` — with
+the icon centred, so the launch reads as the app starting rather than as a page
+loading. `metadata.icons` carries the 15 `apple-touch-startup-image` tags with
+their media queries.
+
+#### Three things that make this correct rather than just present
+
+1. **The size must match the device EXACTLY.** iOS matches on device-width,
+   device-height and pixel ratio; anything else is ignored and you are back to
+   white. Hence a generated list rather than a few hand-made files.
+2. **Portrait only, deliberately.** The till on a phone is camera-first and held
+   upright, and a device launched in landscape falls back to today's behaviour
+   rather than showing something wrong.
+3. **They are NOT precached, and that is load-bearing.** 864 KB across 15
+   files, of which any one device uses exactly ONE — and iOS shows the startup
+   image *before the web app runs*, so the service worker is not alive to serve
+   it and has no say in the matter. Precaching them would be pure waste on
+   every install, on every deploy.
+
+> **The trap, and it cost a build.** The exclusion belongs in **`publicExcludes`**,
+> NOT in `workboxOptions.exclude`. The latter filters WEBPACK assets — which is
+> why `pdf-export` lives there — and never sees files copied out of `public/`.
+> Put in the wrong one it silently does nothing: the build succeeded and the
+> precache was 864 KB heavier. `verify:budgets` caught it, which is exactly what
+> that gate exists for, and `publicExcludes` already existed a few lines further
+> down with the manifest screenshots in it, so the duplicate key was a build
+> error too.
+>
+> `verify-sw.mjs` now asserts it directly — **8 checks** — so the next person
+> gets "the iOS launch screens are NOT precached" instead of "the precache grew
+> 25%".
+
+**Verified:** image served at 1179×2556 and rendered to look at; 15 link tags in
+the prerendered HTML; **zero** `/splash/` entries in `public/sw.js`;
+`verify:budgets` back at baseline; 23/23 E2E desktop, iOS profile unchanged
+(only the pre-existing WebKit failure), 161/161 unit, lint at 207/77/130.
+
+> **What could NOT be verified here, honestly:** the splash itself only appears
+> for an app installed on a real iPhone home screen. Playwright's WebKit is not
+> that. The tags, the images and the precache exclusion are all verified; the
+> *appearance at launch* needs a real device, and belongs with Phase 6.3's
+> real-device drill.
+
+### 3.5 /pos/cash + /kitchen — measured, and there was nothing to do (2026-09-01)
+
+Same discipline as 3.4: measure, then decide. Requests on mount, and again on a
+client-side remount:
+
+| Screen | First mount | Second mount |
+|---|---|---|
+| `/pos/cash` | `cash-shifts`, `register-requests`, `cash-registers/analytics`, `features` | the same three, **no duplicates** |
+| `/kitchen` | `kitchen/tickets`, `features` | `kitchen/tickets`, **no duplicates** |
+
+**No duplicate fetches remain on either screen.** 3.4's `replay: false` fix had
+already removed `/kitchen`'s double load, and 3.4b removed the repeated
+`features` call. Every remaining request is a distinct piece of data fetched
+once.
+
+Migrating them onto the resource would buy **nothing measurable, at the cost of
+staleness on money figures**: `cash-shifts` is the drawer's current position,
+`register-requests` is a live approval queue, and `kitchen/tickets` polls
+because a cook is waiting on it. A stale window is right for a menu that changes
+weekly and wrong for all three of these.
+
+The cash page's `snapshot.ts` IS a hand-rolled copy of the pattern and could be
+folded in for tidiness. It would change no number, and it is the money screen.
+Left alone deliberately — §11 says small reversible changes and correctness over
+cleverness, and "one fewer mechanism" is not worth a Tier-2 money screen's risk
+on its own.
+
+**Phase 3 is complete.** The end-to-end number is in the 3.3 note: a `/pos` →
+Inventory → `/pos` walk went from **9 menu requests to 3**, plus flags 3 → 1,
+plus the duplicate removals in 3.4.
+
+### 3.4b feature flags onto the data layer — and a live bug fell out (2026-09-01)
+
+Flagged as "still open, deliberately" by 3.4 and taken next, because it was the
+biggest remaining win: `useFeatureFlags` is mounted by around ten components and
+had no stale window, so **every screen mount re-fetched the flags**.
+
+#### Measured
+
+Controlled comparison, old code rebuilt on the same machine minutes apart.
+`/pos` → History → `/pos`, client-side, counting `/api/admin/stores/features`:
+
+| | Before | After |
+|---|---:|---:|
+| after `/pos` | 1 | 1 |
+| after History | 2 | **1** |
+| after returning | **3** | **1** |
+
+The hook lost its own in-flight map, its own cache read/write, its own
+`sameFlags` re-render guard and its own state machine — all of which the
+resource already had — and kept only the mapping from `ResourceState` to what
+its callers expect.
+
+#### Two additions to the primitive, both earned by this migration
+
+1. **`equals`.** Without it a revalidate replaces `data` with a new object and
+   re-renders every subscriber even when the server confirmed exactly what was
+   already on screen. `useFeatureFlags` had this as a hand-written check with a
+   comment explaining why it could not afford to lose it — confirming the flags
+   re-renders the tab bar, whose height feeds the inventory list's virtualiser.
+   It is now a property of the primitive, available to every resource.
+2. **`loading` means a FIRST load, not any load.** `fetchedAt` moved out of the
+   public state (nothing read it; it is `staleTime` bookkeeping) and a
+   revalidation of already-hydrated data no longer announces itself. Together
+   these mean a revalidate that changes nothing costs **zero renders** where it
+   previously cost two — one when it started, one when it finished — for every
+   subscriber. It also matches Phase 5 rule 2: nobody should spin for work that
+   cannot change what they do next.
+
+#### The bug it found — audit P1-13
+
+**`cash_register` defaults to FALSE**, and the cash page's guard keyed on
+`isLoading`, which goes false as soon as there is something renderable — the
+*guess*. Opening `/pos/cash` on a device that had never cached this store's
+flags threw the cashier back to `/pos` with "Cash Register is not enabled for
+this store", for a store that has it switched on.
+
+Reproduced on the pre-fix build: the browser lands on `/pos`. It self-corrects
+on the next visit, once a flags cache exists, which is exactly why it would have
+read as flakiness rather than a bug.
+
+**Third instance of one root cause**, and it keeps recurring because the code
+had no word for it until this refactor gave it one:
+
+| Where | What was mistaken for an answer |
+|---|---|
+| `evaluateReconcile()` | a truncated id list read as "these products were deleted" |
+| P1-12 | an unloaded recipe cache read as "this product has no recipe" |
+| **P1-13** | an unresolved feature flag read as "this feature is off" |
+
+`isLoading` keeps its meaning on purpose: a guard that waited for a real answer
+on a device offline with no cache would spin forever. The two signals are
+genuinely different questions, which is why the fix is a second signal rather
+than a redefinition of the first.
+
+Regression-guarded by `harness/e2e/flags.spec.ts` on a fresh context — the
+population that hits it.
+
+**Verified:** 23/23 E2E desktop (two new), 15 passed / 30 skipped on
+android+ios with only the pre-existing iOS WebKit failure, 161/161 harness unit
+(four new), typecheck clean, lint unchanged at main’s 207/77/130, build green.
+
+### 3.4 /transactions — the migration was the wrong tool, and measuring said so (2026-08-31)
+
+**The step as written was "migrate /transactions onto the data layer". It should
+not be, and the measurement is why.** Recorded in full so this is a decision
+rather than a step someone skipped.
+
+#### What /transactions actually does on mount — measured first
+
+| Request | Count |
+|---|---:|
+| `/api/transactions?limit=50` | **2** |
+| `/api/transactions/analytics` | 1 |
+| `/api/admin/stores/features` | 1 |
+
+The duplicate is real and it is the whole finding. It is **not** the shape the
+primitive fixes, though:
+
+- **In-flight dedup would not have caught it.** The two calls are 500 ms apart,
+  by an explicit `setTimeout`. The first has usually resolved before the second
+  starts.
+- **`staleTime` would have caught it — and been wrong.** History is the screen
+  a cashier opens *to see the sale they just made*. A stale window that skips
+  the revalidate is a correct optimisation for a menu that changes weekly and a
+  behaviour regression for a list of today's takings.
+
+So the primitive would have masked the bug with a mechanism that costs freshness
+on the one screen whose job is freshness. **Tier 3 also says do not gold-plate
+the back office.** The fit is poor in three further ways: the cache is Dexie
+(async, while `read()` is synchronous by design so the first paint is right),
+the list is cursor-paginated with `loadMore` appending, and the feed is merged
+with the offline queue before it is rendered.
+
+#### The actual defect: a replay mistaken for a transition
+
+`connectivity.subscribe()` calls its listener **once immediately with the
+current status**. That is right for a subscriber asking *"am I online?"* — an
+indicator, a banner, a disabled button. It is wrong for one acting on a
+*transition*, and two screens read it as "the network just came back":
+
+```ts
+// mount effect: fetch page 1
+// connectivity effect: subscribe(...) -> replays "online" -> fetch page 1 AGAIN
+```
+
+`subscribe` now takes `{ replay: false }`. Purely additive; the default is
+unchanged, and each call site opts in explicitly.
+
+**Controlled comparison, old code rebuilt and measured on the same machine
+minutes apart:**
+
+| Screen | Before | After |
+|---|---:|---:|
+| `/transactions` — `/api/transactions?limit=50` per mount | **2** | **1** |
+| `/kitchen` — `/api/kitchen/tickets` per mount | **2** | **1** |
+
+`/kitchen` was the same bug, found by grepping the other subscribers rather than
+by looking for it: `start()` loads the board, then the replay loads it again.
+
+#### What was deliberately NOT changed
+
+- **`syncEngine`** replays into `syncNow()` at boot. Left alone: the code says
+  in a comment that it is guarded by `syncInProgress` and that the listener may
+  fire alongside `initialize()`, `initialize()` has a `count === 0` fallback for
+  exactly that case, and there is no measured defect. It is the money path;
+  a speculative change there is the trade §11 forbids.
+- **The activity flusher** replays into `drainActivityBuffer()`. It wants the
+  boot trigger, the buffer is expendable, and it has its own interval anyway.
+
+#### Still open on this screen, deliberately
+
+`/api/admin/stores/features` is fetched again on **every screen mount** —
+three times across a `/pos` → History → `/pos` walk. `useFeatureFlags` dedups
+in flight but has no stale window. That IS a textbook resource: small,
+store-scoped, already localStorage-cached, read synchronously. It is also the
+highest-blast-radius module on the client — it gates the menu, the cash page and
+the kitchen board across ten components, and §2.2 already records one near-miss
+there. **Worth doing, worth doing on its own, and not worth bolting onto a step
+about the History screen.**
+
+**Verified:** 21/21 E2E desktop, 158/158 harness unit, typecheck clean, lint
+unchanged at main’s 207/77/130, build green.
+
+### 3.3 migrate /pos/products — Phase 3’s number, end to end (2026-08-31)
+
+The inventory page joins the same three subscriptions the till uses, so both
+screens now share one entry, one request and one answer.
+
+#### Measured — the whole walk, three trees, same machine
+
+`/pos` → Inventory → `/pos`, **client-side** navigation, counting requests to
+`/api/categories`, `/api/recipes` and `/api/combos`. Cumulative:
+
+| Tree | after `/pos` | after Inventory | after returning |
+|---|---:|---:|---:|
+| Before Phase 3 (`a96b1db`) | 3 | 6 | **9** |
+| After 3.2 (`17edb7b`) | 3 | 6 | **6** |
+| After 3.3 | 3 | **3** | **3** |
+
+**9 → 3.** Every leg after the first is now free, and the till and the
+inventory screen cannot disagree about the menu because there is only one copy.
+A FULL page load still revalidates, by design.
+
+#### What got deleted
+
+`refreshRecipes`, `refreshCombos` and `getCategories` had no callers left and
+are gone. `refreshCategories` stays for exactly one caller,
+`CategoryManagerDialog`, which re-reads straight after an edit — `force` is the
+point there: a re-read the stale window could answer would show the list as it
+was BEFORE the change the user just made.
+
+That dialog also lost its `onCategoriesChange` prop, and the products page lost
+its `setRecipes`/`setCombos` calls after a save. All three wrote a second copy
+of data the resource already owns, which is how two copies drift. `saveRecipe`
+and `saveCombo` write THROUGH the resource, so the inventory page and the till
+are both notified without anyone knowing they exist. There is a unit test
+pinning that notify, because the editor's post-save display now rests on it.
+
+#### A pre-existing race in a money test, surfaced not caused
+
+`offline.spec.ts` "a failing server does NOT delete the queued sale" — invariant
+#6, the one that says a completed sale is never dropped — went red once in the
+full run and passed alone. The queue was **empty**, meaning the sale had synced
+for real:
+
+```
+await context.setOffline(false);          // sync engine pushes IMMEDIATELY
+await page.route("**/api/transactions**", …500…);   // installed too late
+```
+
+Restoring connectivity triggers a push at once, and the POST went out during
+the round trip that installs the route. The two lines are now the other way
+round. The timing was always this close; it only needed a small shift elsewhere
+to tip over, and the failure mode was maximally misleading — a test that
+guards against dropped sales reporting that a sale was dropped, because it had
+actually been sold successfully.
+
+**Verified:** 21/21 E2E desktop, 11 passed / 30 skipped on android+ios with only
+the pre-existing iOS WebKit failure, 158/158 harness unit (one new), the
+inventory page rendered and screenshotted with zero console errors and all three
+caches populated, typecheck clean, lint unchanged at main’s 207/77/130, build
+green.
+
+### 3.2 migrate /pos — and P1-12 is closed (2026-08-31)
+
+Three `useState`s, two effects and three copies of cache-then-revalidate on the
+till became three `useResource` subscriptions. The loaders keep their old
+signatures for /pos/products (Phase 3.3) but **delegate** to the resource
+rather than duplicating it, so there is one in-flight map, not two.
+
+#### Measured — duplicate fetches
+
+Controlled comparison, old code rebuilt and measured on the same machine
+minutes apart. `/pos` → History → `/pos`, **client-side** navigation:
+
+| | Before | After |
+|---|---:|---:|
+| First `/pos` mount | 3 requests | 3 requests |
+| Client-side remount | **3 more** | **0** |
+| Total for the round trip | **6** | **3** |
+
+Three requests saved every time a cashier checks history or inventory and comes
+back, which is many times a day. A FULL page load still revalidates, by design:
+`fetchedAt` is in-memory and per-tab, so the stale window can never make a cold
+launch show yesterday's menu. That distinction cost a measurement — the first
+attempt navigated with `page.goto`, saw 6 requests, and looked like the feature
+had not worked at all.
+
+#### Audit P1-12 — closed, and it had a second half nobody had seen
+
+The till now HOLDS a scanned product for at most `MENU_HOLD_MS` (1.2s) when
+this device does not yet know what is on the menu, then decides against what
+arrived. Not a refusal (tried, reverted — it refused every scan), not a guess,
+and never unbounded: invariant #10 applies to a hanging request as much as to a
+missing register. On a warm till `whenResourceSettles` returns immediately, so
+the common path costs nothing.
+
+**Writing the E2E test for it found a second defect of exactly the same shape,
+one layer up.** The first version of the fix did not work, and the reason was
+not the recipes:
+
+> `useFeatureFlags` reports `isLoading: false` while serving
+> `optimisticDefaults()`. On a first-ever launch — no `store_features_` cache —
+> `menu_items` therefore reads **false** for a few hundred ms. A sandwich
+> scanned in that window is sold as a plain line, for the same reason and with
+> the same consequences as P1-12, and the recipe-level hold never even engages
+> because the feature looks switched off.
+
+So `flagsResolved` was added to `useFeatureFlags` — purely additive, nothing
+existing changed. `isLoading` deliberately still means "is there something
+usable to render", which is what a route guard needs so it cannot spin forever
+on an offline device; `flagsResolved` means "has anything told us", which is
+what anything deciding **what a customer is sold** needs. Same rule as
+`evaluateReconcile()` and `hydrated`: an absent answer is not a negative
+answer.
+
+The hold therefore has two stages — flags, then the menu. The flags are React
+state with no promise to await, so stage 1 is a bounded 25 ms poll; stage 2 is
+`whenResourceSettles`. Stage 1 runs only on a device that has never loaded this
+store's flags.
+
+#### Two things that were subtly wrong first, and are worth not repeating
+
+1. **`decide` closed over `enabled`.** The held path resumes on a LATER render
+   — that is what holding means — so calling the captured callback used
+   `menu_items: false`, the very value the wait existed to replace, and sold
+   the sandwich plain anyway. It goes through a `decideRef` now. Anything that
+   resumes after an await must re-read, not remember.
+2. **Both ref writes had to move into effects.** Writing a ref during render is
+   an ESLint error in this repo, and the held path always resumes after a
+   commit, so an effect is early enough by construction.
+
+#### A flaky test the change EXPOSED rather than caused
+
+`menu.spec.ts` "sold as a plain line when recipes cannot load" blocks
+`/api/recipes` with `page.route`. **`page.route` does not intercept a request
+the SERVICE WORKER makes on the page's behalf**, and whether the worker claims
+the page before or after the recipe fetch varies run to run on a fresh context.
+The block leaked about one run in five.
+
+It was invisible before 3.2 because the till decided immediately, so a
+late-arriving recipe changed nothing. Now that it waits, the leak decides the
+outcome. `test.use({ serviceWorkers: "block" })` on that describe makes
+`page.route` authoritative — 4/4 stable since. The offline suite, which IS
+about the service worker, is a different file and keeps it.
+
+**Verified:** 21/21 E2E desktop (one new flow), 11 passed / 30 skipped on
+android+ios with the same pre-existing iOS failure recorded above and no other,
+157/157 harness unit, typecheck clean, lint unchanged at main's 207/77/130,
+build green with `verify:sw` and `verify:budgets`.
+
+### Harness finding — the iOS offline cold-launch flow cannot be verified here (2026-08-31)
+
+`offline.spec.ts` "a cold launch offline still reaches the till" **fails on the
+`ios` profile**, and has nothing to do with any change in this session:
+
+- It reproduces on a clean checkout of `cdc1e31` with a fresh `npm run build`.
+  Controlled comparison, same machine, minutes apart.
+- The error is `page.goto: WebKit encountered an internal error` — a driver
+  error on the navigation itself, **not** a content assertion. The app's own
+  assertions are never reached.
+- Every other offline scenario passes on `ios`. The ones that pass use
+  `setOffline` **without navigating**, or intercept routes; this is the only
+  one that calls `page.goto` while the context is offline.
+
+So the likeliest reading is a Playwright/WebKit limitation, not a product
+defect — but that is a reading, not a proof, and the thing it would be hiding
+is the one that matters most on iOS: every launch there is a cold WebView, and
+the `pages` runtime rule opening the till with no internet is what the whole
+service-worker configuration exists for.
+
+**Do not "fix" this by deleting or loosening the test.** It belongs to Phase
+6.3's three-week shelf-life drill, which is on real devices precisely because
+the harness cannot answer questions like this one. Recorded here so the red is
+understood rather than rediscovered, and so nobody reads it as a 3.1
+regression.
+
+> Watch out for a second trap this session hit: `TaskStop` on `npm run start`
+> kills the npm wrapper, **not** the `next start` child. The port stays held,
+> the next `npm run start` dies with `EADDRINUSE`, and the suite silently keeps
+> testing the OLD build — which invalidated the first attempt at the comparison
+> above. Kill by port, then verify `/api/health` is actually gone.
+
+### 3.1 the data primitive (2026-08-31)
+
+`src/lib/data/` — 2 files, no dependencies, 27 harness tests.
+**Nothing is migrated onto it yet; that is 3.2 onward.** The only production
+behaviour that changed is one line in `clearUserFromStorage()`.
+
+Two files, and the split is the point:
+
+| File | What it is |
+|---|---|
+| `resource.ts` | **Pure.** No React, no `fetch`, no imports at all. Every environment-specific thing arrives through the `ResourceDefinition` the caller supplies. |
+| `useResource.ts` | The React wiring — `useSyncExternalStore` plus one effect. ~30 lines of substance. |
+
+The store is where the decisions live that can lose a shop data — keep the
+cache when a revalidate fails, one request per store, "we do not know yet" is
+a state — so it is tested directly in the node suite rather than through a
+rendered component.
+
+#### What it replaces
+
+Fifteen hand-rolled copies of "read the cache, paint it, revalidate in a
+`useEffect`". Four properties they could not have individually:
+
+1. **In-flight sharing across components.** One request per
+   `(resource, store)`, and **one notify per real change** rather than one per
+   subscriber — `commit()` compares the next state field-by-field and returns
+   early on a no-op, so a second component joining a load in progress does not
+   push a render through everyone already watching it.
+2. **`staleTime`.** In-memory and per-tab, so a page load always revalidates.
+   What it collapses is the *cross-screen* duplicate: `/pos` and
+   `/pos/products` each refresh categories and recipes on mount, so walking
+   between them costs four requests for data that changes a few times a week.
+3. **Tenancy in the key, structurally.** The entry key is `name:storeId`.
+   There is no way to ask for a resource without saying whose.
+4. **`hydrated` — the P1-12 fix's missing half.** See below.
+
+#### The inversion that makes it worth having
+
+`ResourceDefinition.fetch` **must reject on failure.** Today's loaders
+(`refreshCategories`, `refreshRecipes`, `refreshCombos`) all catch their own
+errors and *resolve with the cached copy*, so a caller's `.then()` says
+nothing about whether the fetch worked and a `.catch()` beside it is dead
+code. That is exactly the trap the first P1-12 attempt fell into.
+
+Moving the swallow into one place buys the two things the loaders could not
+express: an observable `error`, and a `hydrated` flag that a failed fetch
+leaves **alone** — because a failed fetch is not evidence that the cached copy
+is wrong. Same rule as `evaluateReconcile()`: removing things requires
+positive proof.
+
+#### What 3.2 inherits for P1-12
+
+The audit's fix is "HOLD a scanned menu item until recipes settle, then add it
+properly — do not refuse it, do not guess." Two pieces exist now:
+
+- `isAwaitingFirstLoad(state)` — `!hydrated && loading`. The **only** state in
+  which waiting is right. An empty answer (`hydrated: true`, `data: {}`) is a
+  real answer: a shop can genuinely have no recipes.
+- `whenResourceSettles(def, storeId, { timeoutMs })` — resolves the moment the
+  device has an answer, **immediately** when it already had one, so every scan
+  on a warm till costs nothing. The timeout is not optional and defaults to
+  1.2s: invariant #10 says a sale is never blocked, and a till that pauses a
+  scan on a hanging request is a worse failure than the mis-sale it prevents.
+
+#### Three things that had to be got right, recorded so they are not undone
+
+1. **`clearResourceCache()` resets entries in place, it does not delete them.**
+   `subscribeResource` closes over the entry object, so dropping it from the
+   map would leave every mounted component watching an orphan that nothing
+   notifies again — deaf until it remounts, which a logout does not guarantee.
+   Only unwatched entries are dropped. It is now called from
+   `clearUserFromStorage()` beside the localStorage prefix sweep: those are the
+   same caches, and one of them was only being cleared on disk.
+2. **The entry map is never touched without a `window` check.** Client
+   components still execute on the server for SSR, where a module-level `Map`
+   is shared by every request on the instance. The server path returns a frozen
+   per-definition empty state and writes nothing.
+3. **The in-flight slot is cleared from a `.then`, never a `finally` in the
+   same synchronous turn.** A `ResourceDefinition` whose `fetch` throws
+   *synchronously* would otherwise clear the slot before it was set, stranding
+   the resource as permanently loading for the life of the tab. There is a test
+   for it.
+
+**Verified:** 157/157 harness unit (27 new), typecheck clean, lint unchanged at
+main's 207/77/130, build green with `verify:sw` and `verify:budgets` both
+passing. No route, screen, or API changed.
+
+### 2.2 (part 2) — serial GETs become one wave (2026-08-31)
+
+Four routes resolved the caller and *then* read, two serial round trips for
+every request. Converted to `callerAndRead`, which issues both together.
+
+**Controlled comparison** — old code rebuilt and measured on the same machine
+minutes apart, median of 10 each:
+
+| Route | Before | After | Saved |
+|---|---:|---:|---:|
+| `/api/transactions/analytics` | 594 ms | **318 ms** | −276 ms |
+| `/api/cash-registers` | 576 ms | **307 ms** | −269 ms |
+| `/api/cash-registers/analytics` | 576 ms | **303 ms** | −273 ms |
+| `/api/my-shift` (earlier) | 922 ms | **308 ms** | −614 ms |
+
+Consistently ~270 ms and ~47% apiece. The floor is now one round trip for all
+of them — the ~300 ms is the network, not the code.
+
+Safe for the reason CLAUDE.md gives for the routes already doing it: the read
+is scoped to the `store_id` the caller is **claiming**, so a failed auth
+discards a read of their own store and nothing is returned before the caller is
+confirmed. On `transactions/analytics` the `transactions` section check still
+gates the RESPONSE, so a cashier without it gets 403 and never sees the
+numbers.
+
+> **`/api/register-requests` was deliberately NOT converted.** Its GET calls
+> `expireStale()` — a **write** — before the read. Running auth alongside a
+> write means writing to a store before confirming the caller owns it, which
+> trades a real safety property for latency on a low-traffic approval panel.
+> Not worth it.
+>
+> `/api/cash-shifts` needed nothing: its GET is already three parallel waves.
+> The earlier survey flagged it on its POST, which is a write path and
+> correctly serial.
+
+### 2.2 (part 1) — closing the four unauthenticated routes, audit P0-2 (2026-08-31)
+
+A survey of all 26 API routes by auth pattern found the shape of the remaining
+work, and one thing the audit had missed:
+
+| Pattern | Count |
+|---|---|
+| `callerAndRead` (one wave) | 3 |
+| **serial `resolveCaller` then read** | 7 — the remaining speed work |
+| `requireAdmin` | 1 |
+| raw header only | 3 |
+| genuinely public | 4 (`health`, admin login/logout, the two `public/*`) |
+| **no auth, service role** | **4 — audit P0-2** |
+
+All four are now gated, each needing a different answer:
+
+- **`admin/store-users`** — `verifyAdminSession()` on all four verbs. Confirmed
+  nothing till-side calls it.
+- **`admin/stores/features`** — GET accepts an admin session **or** a resolved
+  store caller asking for their OWN store; PATCH is admin-only.
+- **`products/import`** — `resolveCaller()`, the body's `storeId` **ignored**,
+  and the `inventory` permission required: importing a catalogue sets what
+  customers are charged, so it is a pricing action.
+- **`products/export`** — `resolveCaller()`, body `storeId` ignored.
+
+> ### The near-miss worth recording
+>
+> `stores/features` GET could not simply become admin-only. `useFeatureFlags`
+> calls it **from the till**, and it drives the nav, the POS layout, the cash
+> page and the kitchen board across ten components. Admin-only returns 401,
+> every flag silently falls back to its default, and the menu, cash page and
+> kitchen board stop existing **in every shop**.
+>
+> I spotted the till caller before writing the gate — but I still shipped it
+> without the client header, and **the E2E suite caught it**: five menu tests
+> went red. A grep found the caller; only running the app found the
+> consequence.
+
+Three client call sites now send `x-auth-data` via `buildAuthHeaders()`:
+`CSVImportDialog`, the products page's export logging, and `useFeatureFlags`.
+The admin console needed no change — it uses the httpOnly session cookie, which
+same-origin fetch sends automatically.
+
+**Still to do in 2.2:** the seven routes still doing a serial
+`resolveCaller`-then-read. Each is the same one-wave conversion `/api/my-shift`
+just had, worth a few hundred milliseconds apiece.
+
+### /api/my-shift — 3 serial trips to 1 wave (2026-08-31)
+
+The slowest call on the Phase 0.3 boot trace (599ms), for a fact a cashier does
+not need in order to scan anything.
+
+It took THREE serial round trips: `resolveCaller`, then the shift (whose filter
+depended on knowing whether the caller was the owner), then the register (whose
+id came from the shift).
+
+Two changes collapse it to one wave:
+
+1. **The register is EMBEDDED in the shift query.** PostgREST follows
+   `cash_shifts.register_id` in the same request, so that trip never had to
+   exist.
+2. **Auth runs ALONGSIDE the read**, through the `callerAndRead` helper that
+   already existed in `src/lib/auth/apiRoute.ts` and that this route simply was
+   not using. The filter used to depend on the caller, so the read had to wait;
+   now the query asks for BOTH candidate rows — the owner's shift and this
+   user's — and the answer is selected once the caller is known.
+
+Safe for exactly the reason CLAUDE.md gives for the routes that already do it:
+the read is scoped to the `store_id` the caller is **claiming**, so a failed
+auth discards a read of their own store, and nothing is returned before the
+caller is confirmed. The chosen row is matched against the **resolved** caller,
+never the header, so it cannot be used to read someone else's assignment.
+
+**Controlled comparison** — same fixture, same assignment, shift found, median
+of 12, old code rebuilt and measured on the same machine minutes apart:
+
+| | Before | After |
+|---|---:|---:|
+| median | **922 ms** | **308 ms** |
+| p90 | 1021 ms | 340 ms |
+| min | 840 ms | 272 ms |
+
+**−67%, 614 ms.** The response body is byte-identical: the two fields used only
+for matching are stripped, and `register` is lifted out of the embed.
+
+### FIRST MEASURED SPEED WIN — the boot chain's serial pair (2026-08-31)
+
+Brought forward from Phase 3 because 0.3 had already measured it and the fix
+was three lines.
+
+`runRefresh()` in `src/lib/products/refresh.ts` awaited the product **delta**
+(`updated_at > since`) and the **live count** (`count(*)`) one after the other.
+Neither reads what the other writes — they were serialised purely by the order
+of two `await`s. The 0.3 trace caught it exactly: the count started at 468ms,
+one millisecond after the delta finished at 467ms.
+
+Now one `Promise.all`.
+
+| | Before | After |
+|---|---|---|
+| Second call starts at | **t+468ms** (after the first ends) | **t+~90ms** (with the first) |
+| Span of the pair | ~612ms (313 + 299, serial) | **~300ms** (median of 3: 373 / 298 / 302) |
+
+**~300ms saved on every till launch, and again every 30 seconds** while the
+shop is open, on every device. It is pure latency: no query changed, no less
+data is fetched, nothing about correctness moved.
+
+The local IndexedDB count is deliberately left out of the pair — it costs no
+network, and starting it early would only add main-thread work while the two
+network calls are in flight.
+
+> Worth noting how this was found. It is invisible to query tuning: both
+> queries were already fast. It is only visible in a **request-depth** trace,
+> which is why 0.3 recorded request depth as well as request count.
+
+### 2.1 atomic sale RPC — DONE, MIGRATION APPLIED (2026-08-31)
+
+**The first change a cashier can feel.**
+
+| `POST /api/transactions`, 3-line sale, median of 15 | Before | After |
+|---|---|---|
+| median | **1226 ms** | **307 ms** |
+| p90 | 1243 ms | 409 ms |
+| min | 1127 ms | 270 ms |
+
+**−75%, or 919 ms off every single sale.** Reproduce with
+`npm run harness:bench`.
+
+Three serial waves to Postgres became one call in one transaction. Nothing was
+made to skip work: the same shift is resolved, the same rows are written, the
+same stock moves. What was removed is *waiting*.
+
+**It also closed two of the bugs the harness found:**
+
+- **audit P1-4** — a sale could be half-written. The transaction committed,
+  the items insert failed, and that failure was deliberately swallowed because
+  the sale already existed. The result was an empty receipt, no kitchen ticket
+  and analytics under-counting, silently. All three writes now share one
+  transaction.
+- **audit P1-11** — a `user_id` naming a deleted employee raised 23503 → 500 →
+  the client read it as offline → retried → dead-lettered a sale whose money
+  was already taken. It is now coerced to NULL, scoped by store, exactly as
+  shift resolution already degrades.
+
+**Regression check, all green on the atomic path:** 120/120 contract, 20/20
+E2E desktop **including the offline sell → reconnect → exactly-one-row and
+stock-decremented-exactly-once scenarios** (the riskiest part of changing an
+idempotency path), 130/130 unit, 17/17 fixture assertions.
+
+> **One deliberate contract change.** The duplicate-replay response now returns
+> the full transaction row where it previously returned a narrow column list —
+> a **superset**: `store_id`, `payment_method`, `usd_*`, `receipt_token`, and
+> `store_id`/`transaction_id` on the nested items. Nothing was removed.
+> Verified nothing consumes it: no client reads `duplicated` or the body shape,
+> and the sync engine only checks `response.ok`. Snapshot updated deliberately
+> rather than narrowed, because narrowing would have cost another migration to
+> change a field nothing reads.
+
+### 2.1 atomic sale RPC — original notes (2026-08-31)
+
+Migration **038** creates `create_sale(store_id, sale jsonb)`: resolve the
+shift, insert the transaction, insert the line items, apply the stock — one
+call, one database transaction, replacing THREE serial waves.
+
+It also closes **audit P1-4** (a sale can currently be half-written: the
+transaction commits, the items insert fails, and that failure is deliberately
+swallowed, leaving an empty receipt and no kitchen ticket) and **audit P1-11**
+(a `user_id` naming a deleted employee raises 23503 → 500 → the client reads
+it as offline → retries → dead-letters a sale whose money was taken).
+
+**Baseline to beat, measured on the fallback path** (`npm run harness:bench`,
+3-line sale): **median 1226ms, p90 1243ms**.
+
+The route falls back to the existing multi-step path when the function is
+absent, verified 13/13 on the sale contract suite with 038 unapplied — so the
+deploy is safe in either order, which is the only way to ship a money-path
+change without a coordinated migration window.
+
+### 1.7 mutation check — PHASE 1 EXIT CRITERION MET (2026-08-31)
+
+`npm run harness:mutation`. Breaks one §1 invariant at a time, runs the suite
+that should notice, and asserts it **fails**. A mutation that survives is a
+hole in the net.
+
+**7 of 7 caught**: total-only rounding (#2), the SELL/RETURN rate spread (#3),
+`isSellable` strict equality (#16), `[]` collapsed to null (#17), reconcile
+deleting on partial evidence (#8), per-unit stock rounding (#9), and a
+permission granted on truthiness rather than the literal `true` (#21/#23).
+
+> **Running it found two defects in the runner itself, and the second is a
+> finding about the invariant.**
+>
+> 1. **The revert failed silently and left a mutation in the tree.** A plain
+>    `writeFileSync` in a `finally` hit `UNKNOWN: unknown error` on Windows — a
+>    transient file lock — and `src/lib/pos/lineItems.ts` was left carrying the
+>    per-unit rounding bug. Caught by checking `git status` straight after, not
+>    by the script. A tool that breaks code on purpose has to be far more
+>    careful about putting it back: `restore()` now retries, falls back to
+>    `git checkout` of that one path, then shouts and exits 2.
+> 2. **The `|| null` vs `?? null` mutation was a no-op.** An empty array is
+>    **truthy** in JavaScript, so `[] || null` is `[]` — the two operators
+>    behave identically for that field. It "survived" for a reason that said
+>    nothing about the net. The rule in CLAUDE.md is still worth keeping as a
+>    habit, but the bug it guards against has a different shape: *emptiness
+>    treated as absence*, i.e. `modifiers?.length ? modifiers : null`. That is
+>    what is mutated now, and the net catches it.
+
+**Phase 1's exit criterion is met**, and independently of this: the net caught
+**three real production bugs** during construction — P1-11, P1-12 and P2-20 —
+none of which anyone went looking for. That is stronger evidence than a
+deliberate mutation, because nobody planted them.
+
+### 1.5 visual snapshots (2026-08-31)
+
+`npm run harness:visual` — **separate config, separate command, deliberately
+out of the default run.** These are the high-maintenance part of the harness
+and legitimately break on every intentional UI change; keeping them opt-in
+means a redesign is one considered `npm run harness:visual:update`, not a wall
+of red on unrelated work. Phase 9 branch A asks for exactly this, so it may as
+well be true from the start.
+
+**24 baselines** across three viewports (desktop 1440, tablet 768, mobile 375):
+`/pos`, `/pos` with a cart line, `/checkout`, `/transactions`, `/pos/products`,
+`/pos/cash`, `/kitchen`, the modifier sheet, and `/login`. Mobile has 6 rather
+than 9 — the three wedge-driven captures skip there, because the Pro till does
+not exist on a phone.
+
+> **The rule that keeps these compatible with Phase 5: snapshots assert
+> SETTLED states only, never mid-load.** Phase 5 exists to change what appears
+> *while* something is arriving; a snapshot that pinned a spinner in place
+> would forbid the improvement it sits next to. Every capture waits for the
+> screen to finish, for `document.fonts.ready`, and for one idle frame.
+
+Volatile regions are **masked, not stubbed**: clocks, relative times, the
+connectivity pill, generated ids. A masked box honestly says "this varied and
+was not asserted"; freezing the clock would claim coverage that does not exist.
+`maxDiffPixelRatio` is 0.01, because a few pixels of antialiasing is not a UI
+change and too tight a threshold is how a visual suite becomes noise people
+learn to ignore.
+
+**Verified stable**: a second full run against the freshly written baselines
+passed 22/22 with exit 0. A visual suite that is not reproducible is worse than
+none, so this is the check that mattered.
+
+### 1.6 offline & sync scenarios (2026-08-31)
+
+`harness/e2e/offline.spec.ts` — **6 scenarios**, driving the REAL service
+worker and the REAL Dexie queue against a production build. Nothing mocked:
+every failure this protects against lives in the seams between those pieces.
+
+Covered:
+
+| Scenario | What it holds |
+|---|---|
+| Sell with no internet | Sale completes, is durable in `offline_queue`, and has NOT reached the server |
+| Reconnect | **Exactly one** server row, and `created_at` is the SALE moment (audit P1-1), not the flush moment |
+| Stock on replay | Decremented **exactly once** — the `UNIQUE(store_id, transaction_number)` + 23505 idempotency |
+| Wifi with no upstream | The app detects the outage while `navigator.onLine` still says `true` |
+| Cold launch offline | The till opens from the app shell |
+| Server rejecting everything | A queued sale is **never deleted**, and is not dead-lettered early (invariant #6) |
+
+**Four things had to be right for this to test anything**, each of which was
+wrong first and is now documented in the file:
+
+1. **The device must be genuinely warm before going offline.** The "Loading…"
+   gate drops when the load *finishes*, which on an empty IndexedDB is before
+   the network pull lands — the till then renders with zero products and a scan
+   falls through to the unknown-barcode prompt. `openTill()` now waits for
+   `products_cache` to be non-empty.
+2. **Navigate by CLICKING, not `page.goto`.** A full navigation needs the
+   network or an already-warm worker; a cashier clicks Checkout, which is a
+   client-side route change and works offline. Using `goto` tested the service
+   worker by accident and failed for an unrelated reason.
+3. **F4, not a click, to take payment.** The Process Payment button is
+   deliberately disabled until the tender covers the total — a disabled control
+   on the button that takes money is the point. F4 records the exact amount.
+4. **`context.route`, not `page.route`.** `/api/health` is `NetworkOnly`, so
+   the probe is issued BY the service worker, and `page.route()` does not
+   intercept service-worker-originated requests. This one silently made the
+   hang case look like a product bug.
+
+The hang case is worth its own note: the probe is left **pending**, not
+aborted, because that is what a dead upstream actually does and it is the case
+`navigator.onLine` gets wrong. The heartbeat's own 5s `AbortSignal` is what has
+to save it — which is exactly why connectivity is a heartbeat and why
+`/api/health` must never be cached (invariant #12).
+
+Desktop-only, deliberately: completing a sale needs the wedge and keypad. The
+offline MECHANISMS are platform-independent (Dexie + sync engine); the
+platform-specific half — iOS's 7-day storage clear, quota eviction — is Phase
+6.3's shelf-life drill on real devices, where it honestly belongs.
+
+### Flow 6 — inventory (2026-08-31)
+
+`harness/contract/inventory.test.ts`, 6 tests. The mirror of flow 7's claim:
+**deleting a sold product must not delete what it sold.** A product is created,
+sold, then discontinued; the sale and its line survive with `product_id` NULL
+and the denormalised name, quantity and price intact — so a receipt still
+prints for a product that no longer exists.
+
+Also pins the offline-capable write path: a **client-generated id makes
+`POST /api/products` an idempotent upsert** (which is what lets a reprice be
+queued and replayed), a reprice updates rather than duplicating, the store is
+taken from the caller and not the body, and `profit_percentage` is
+**trigger-computed** — sending 99999 yields the formula's 400.
+
+And the counterpart to P2-20: an in-use ingredient **cannot** be deleted
+(`ON DELETE RESTRICT`), refused rather than cascaded.
+
+### Flow 7 — CSV import (2026-08-31)
+
+`harness/contract/csv-import.test.ts`. **Genuinely destructive**: it really
+does replace the fixture catalogue, because a test for a destructive operation
+that does not perform it proves nothing. It re-seeds in `afterAll`, which is
+why it is slow and lives in its own file.
+
+**The claim it exists to hold, verified:** `replace_all` replaced 2,492
+products with 3 and **every one of the 300 transactions and 592 sold lines
+survived**. The orphaned lines keep their denormalised name, quantity and
+price and simply stop pointing at a catalogue row, so a receipt is still
+printable for a product that no longer exists — migration 028 working as
+intended. This used to delete the store's entire sales history.
+
+> ### Third finding — audit **P2-20**
+>
+> `replace_all` returns **500** for any store that has recipes. The bulk
+> product delete collides with `recipe_components_ingredient_product_id_fkey`
+> (`ON DELETE RESTRICT`, migration 031). That constraint is correct — deleting
+> an in-use ingredient should be refused — the two features were just never
+> tried together.
+>
+> It hits bakeries, coffee shops and snack counters: exactly the store types
+> §13 exists for. It **fails safe** (single statement, nothing deleted), which
+> is why it is P2 rather than P1 — what is lost is the feature and an
+> afternoon, not data. The error says only *"Failed to clear existing
+> products"*, naming neither cause nor remedy.
+
+The route's **lack of authentication is also pinned** (audit P0-2): it accepts
+a caller with no `x-auth-data` at all and takes `storeId` from the body. The
+test asserts today's behaviour so Phase 2.2's route kernel has a
+before-and-after, and flipping it to expect a 401 will be a deliberate, visible
+change. It deliberately does **not** demonstrate the hole against another
+tenant — proving it by wiping a real store's catalogue is not a test, it is the
+damage.
+
+### Flows 5 and 8 — placed in the CONTRACT suite (2026-08-31)
+
+Golden flows **5 (cash shift)** and **8 (kitchen ticket states)** are covered
+by `harness/contract/cash.test.ts` and `harness/contract/kitchen.test.ts`
+rather than by a browser, and that is a deliberate placement rather than a
+shortcut.
+
+Both flows' rules **are** API contracts. The kitchen's legal transitions, its
+409-on-stale, and its lazy row creation are decided entirely server-side; the
+board is a renderer for them. The drawer's figures come from RPCs
+(`get_shift_totals`, `get_register_performance`) for the explicit reason that
+summing a PostgREST select in JS is capped at 1,000 rows. Driving four cards
+across three columns in a browser would assert the same facts far more slowly
+and far more fragilely. The plan's §1 rule — *no test asserts on
+implementation detail, only on behaviour visible to a cashier or to an API
+caller* — is satisfied either way; these are the API-caller half.
+
+**Kitchen (12 tests):** the full walk `new → in_progress → ready → served`,
+backwards moves allowed (a cook who mistaps must be able to undo) without
+clearing `ready_at`, `served`/`voided` terminal, illegal transitions 400, a
+stale move 409 **carrying `current`** so the losing station can retry from the
+real state, and a forged `transaction_id` from another store refused with no
+row created.
+
+**Cash (7 tests):** one open shift per register enforced by the partial unique
+index rather than the API, a close recording the counted amount, a **second
+close returning 409 without overwriting the physical count** (the offline queue
+can push a close twice), a negative count rejected, another store's shift
+refused, and nothing auto-closing. It restores the fixture's open shift in
+`afterAll`, because other suites read it.
+
+> **One flaky test was rewritten rather than kept or deleted.** The first
+> version of the P1-12 cold-device test scanned quickly and hoped to beat
+> `refreshRecipes()` — it passed or failed on network timing. The plan has zero
+> tolerance for that, because one intermittent test teaches everyone to ignore
+> red. Blocking `/api/recipes` with `page.route(...abort())` makes it
+> deterministic **and** models the worse real case: a device offline on its
+> first launch has no recipes at all.
+
+### 1.3 API contract snapshots (2026-08-31)
+
+`npm run harness:contract` — **89 tests in ~47s** against a production build
+and the seeded store. Needs `npm run build && npm run start` first; `next dev`
+compiles on demand and skews both timings and behaviour.
+
+Three files: `auth.test.ts` (61 — every store route refuses anonymous,
+malformed, no-store-id and unknown-store callers, and accepts the fixture
+caller), `read-shapes.test.ts` (15 — response shape snapshots plus explicit
+tenancy assertions on the rows themselves), `sale.test.ts` (13 — the money
+path).
+
+Snapshots record **shape, not values**. Literal values would break on every
+re-seed and every generated id, and would then be updated reflexively until
+they asserted nothing.
+
+Invariants now pinned end-to-end: **#7** (same `transaction_number` twice
+creates exactly one row, the duplicate is flagged, and stock is not
+double-decremented), **#9** (client `stock_decrements` take priority and the
+line's own product is NOT also decremented), **#10** (a sale succeeds with no
+user, with no matching shift, and with stock at zero), **#17**, **#19**,
+**#21**, **#23**, plus `created_at` clamping in both directions — a future
+timestamp is pulled back, a past one is preserved, which is the audit P1-1 fix.
+
+> ### The suite found a real money bug on its first run — audit **P1-11**
+>
+> `POST /api/transactions` returns **500** when `user_id` names a deleted
+> `store_users` row (`23503` on `transactions_user_id_fkey`).
+>
+> A cashier rings sales offline → the employee leaves and an admin removes them
+> (a **hard** delete) → the till reconnects → the insert violates the FK → the
+> client reads 500 as an offline condition, retries, exhausts five attempts and
+> **dead-letters** the sale. Money taken, sale never recorded.
+>
+> `ON DELETE SET NULL` protects sales already written; it does nothing for ones
+> still in a device's queue. This contradicts **invariant #10** — shift
+> resolution already degrades to a null `shift_id`, but the user reference does
+> not degrade the same way.
+>
+> **Left unfixed on purpose.** Phase 1 freezes behaviour; the test pins the 500
+> so Phase 2.1's atomic sale RPC cannot change it unnoticed in either
+> direction. The fix (coerce an unresolvable `user_id` to null, as shift
+> resolution already does) belongs with 2.1, which rewrites that insert anyway.
+>
+> This is also the answer to Phase 1's exit criterion — *"a net that has never
+> caught anything is not known to work."* It caught something before 1.7 even
+> ran.
+
+**A fixture problem it also surfaced:** `GET /api/transactions` filters on
+`store.transaction_retention_days`, so the March-2026 fixture sales were
+outside the default window and the route returned `[]`. `seed.mjs` now sets
+retention to 0 for the fixture store. Fixtures need dates spread enough to span
+a DST boundary *and* need to stay readable; only a store that keeps everything
+gets both.
+
+### 1.2 pure-logic characterization (2026-08-31)
+
+`npm run harness:unit` — **130 tests across 8 files in under a second**, no
+database, no network, no DOM. Comfortably inside the 10s budget Phase 1 sets.
+
+Covered: `utils/format`, `stores/cartStore` (mutations, totals, lanes,
+one-offs, configured lines), `pos/lineItems`, `pos/lineKey`,
+`products/kind`, `products/refresh.evaluateReconcile`,
+`auth/permissions.parsePermissions`, `features.mergeFeaturesWithDefaults` +
+preset completeness, and `db/localDB.computeRetryBackoffMs`.
+
+Invariants now pinned by a test: **#2** (rounding at the total only — asserted
+against what per-line rounding *would* have given), **#5** (`updateLine` resets
+`original_unit_price` so no phantom discount is reported), **#8** (deletion
+requires positive proof, including the 1,000-row truncation case), **#9**
+(components decrement, not the menu item; integerised once at the line),
+**#16** (`isSellable` defaults to sellable on a pre-030 `undefined` kind),
+**#17** (`[]` survives as `[]`, never collapsed to null), **#18** (`lineKey`).
+
+> **Three of my assumptions were wrong, and being wrong is the point.**
+> Characterization only has value if it records reality:
+>
+> 1. **`addItem` REFUSES a repeat** — it returns `false` and leaves the
+>    quantity alone. Scanning twice does not double a line; quantity only rises
+>    via the manual "+". Documented in the code and deliberate.
+> 2. **Lines are PREPENDED**, so `items[0]` is the newest.
+> 3. **`CartLineModifier.state` is `'included' | 'removed' | 'extra'`** — there
+>    is no `'kept'`. My first draft used `'kept'` and *passed*, because only
+>    `'removed'` is special-cased. A test that passes for the wrong reason is
+>    worse than one that fails, and typechecking the harness is what caught it.
+
+`unit/setup.ts` supplies a memory `localStorage` (the cart store is a zustand
+`persist` store) and nothing else — needing more of the browser is a signal a
+"pure logic" test is reaching too far.
+
+**Gates:** typecheck clean, lint unchanged from `main` at 207/77/130, budgets
+green. The harness is typechecked by `npm run typecheck` because `tsconfig`
+includes `**/*.ts` — worth keeping, since it is what caught the invalid state.
+
+### 1.1 fixtures (2026-08-31)
+
+`npm run harness:seed` / `harness:verify` / `harness:seed:down`.
+`harness/README.md` is written and is the entry point for anyone adding a case.
+
+**Contents:** 2,492 products (USD-priced, zero-cost, one above the old
+`DECIMAL(10,2)` ceiling, discounted, a variant pair, 4 ingredients in grams, a
+menu item, a combo), 5 categories, a 4-component recipe, 2 store users with
+*different* permissions (one full, one `pos`-only — `inventory` is the pricing
+permission and the till behaves materially differently without it), 1 register,
+1 closed + 1 open shift, and 300 transactions / 592 line items spanning the
+**2026-03-29 Beirut DST boundary**.
+
+**Two properties were proven rather than assumed:**
+
+1. **Determinism.** Every table was fingerprinted (SHA over ordered rows),
+   re-seeded, and fingerprinted again — **byte-identical**. Ids are derived,
+   prices come from a seeded PRNG, timestamps from fixed anchors. Without this
+   every contract and visual snapshot in Phase 1 would be meaningless.
+2. **Tenant isolation held.** After seeding, the other stores still have
+   exactly their pre-existing **4,999 products, 118 transactions, 5 stores**.
+   This is asserted in `verify.mjs` on every run, because the service-role key
+   bypasses RLS and the harness's own filtering is the only thing enforcing it.
+
+`verify.mjs` runs 17 assertions including the trigger-computed
+`profit_percentage` (zero-cost → 0, no divide-by-zero; discounted row matches
+the formula), the 150,000,000 LL price surviving, sales on both sides of the
+DST boundary, and retail lines carrying `modifiers` NULL rather than `[]`.
+
+> **PostgREST rejects a bulk insert whose objects differ in shape**
+> ("All object keys must match") — it builds one multi-row INSERT with a fixed
+> column list. `uniformKeys()` pads the union with nulls. Worth knowing before
+> adding a column to only some fixture rows.
+
+### 0.4 budget gates (2026-08-30)
+
+`npm run verify:budgets`, wired into `npm run build` after `verify:sw`, in the
+same shape. Enforces `docs/perf-baseline.json`:
+
+- **No route's First Load JS grew.**
+- **Total precache did not grow.**
+
+Measurement lives in `scripts/lib/measure-build.mjs` and is shared by the
+reporter and the gate — a gate that measures differently from the reporter
+fails for reasons nobody can reproduce.
+
+**Growth is allowed, but only deliberately.** A new feature legitimately costs
+bytes; the gate does not re-baseline itself, so that cost has to be accepted by
+a person:
+
+```
+npm run build && npm run baseline:update
+```
+
+**The 1% tolerance is noise absorption, not slack.** Gzip output differs by a
+few bytes across zlib/Node versions, and a gate that reddens on a Node upgrade
+is a gate people learn to ignore — which Phase 1's maintainability rules warn
+about directly.
+
+**The third budget from the plan — serial API round trips per route — is NOT
+implemented**, because measuring it needs a browser driving a signed-in
+session, which arrives with the Phase 1 harness. A placeholder would have been
+a gate asserting nothing. Baseline for when it lands (store `daoud`): `/pos`,
+`/pos/products`, `/pos/cash`, `/transactions` each issue **4 API calls at
+depth 2**; `/checkout` issues **1**. The defect it must catch is the reconcile
+id-set fetch running serially behind the catalogue delta pull.
+
+**Verified:** passes on an unchanged build; a control that tightened the
+recorded `/pos` budget by 20% and precache by 10% produced both failures with
+exit code 1, so the gate is known to catch rather than merely known to pass. A
+missing baseline file fails closed with instructions.
+
+### 0.3 baseline — runtime (2026-08-30)
+
+Captured on the **production build** (`npm run start`, not `next dev` — dev
+serves unminified code with on-demand compilation and its numbers mean
+nothing), signed in as store **`daoud`**: **2,280 products, 93 transactions**.
+A later run is only comparable against the same store.
+
+> **Read the asymmetry before reading the numbers.** Static assets came from
+> **localhost** — no network latency, warm HTTP cache (`transferKB` reads 0
+> throughout, which is the tell). Those paint timings are a floor no shop will
+> ever see. But the **API and Supabase calls went to the real remote project**,
+> so *those* latencies are real. The request-structure and API columns are the
+> trustworthy part of this table; FCP/LCP are useful only for detecting a
+> regression under identical conditions.
+
+| Route | requests | depth | API calls | API depth | FCP | LCP |
+|---|---:|---:|---:|---:|---:|---:|
+| `/pos` | 73 | 34 | 4 | 2 | 28 | 68 |
+| `/pos/products` | 59 | 35 | 4 | 2 | 80 | 136 |
+| `/pos/cash` | 61 | 34 | 4 | 2 | 24 | **1460** |
+| `/checkout` | 60 | 33 | 1 | 1 | 56 | 140 |
+| `/transactions` | 59 | 32 | 4 | 2 | 88 | 776 |
+
+**The `/pos` boot chain, with real remote latency:**
+
+| # | start | dur | call |
+|---|---:|---:|---|
+| 1 | 82 | 310 | `/api/admin/stores/features` |
+| 2 | 102 | **599** | `/api/my-shift` |
+| 3 | 150 | 291 | `product_favorites` |
+| 4 | 154 | 313 | `products` (catalogue delta) |
+| 5 | **468** | 299 | `products?select=id` (reconcile id set) |
+
+**Four findings worth acting on:**
+
+1. **Call 5 is serial behind call 4.** It starts at 468 ms, and call 4 ended at
+   467 ms. The reconcile id-set fetch waits for the delta pull, so the boot
+   chain is ~767 ms of API time where ~470 ms would do. This is the single
+   clearest Phase 3 target on the till, and it is invisible in any
+   localhost-only measurement because it is a *dependency*, not a slow query.
+2. **`/api/my-shift` is the slowest call at boot (599 ms)** and it gates
+   nothing a cashier needs in order to scan. Phase 5 candidate: move it off the
+   boot path entirely.
+3. **`/pos/cash` LCP is 1460 ms even with zero asset latency** — 10× to 20×
+   every other route. Probably the analytics chart, which CLAUDE.md says loads
+   *after* the drawer figures deliberately, so this may be correct behaviour
+   rather than a defect. **Confirm which before touching it**; if the drawer
+   numbers paint early and only the chart is late, this is working as designed.
+4. **Request depth is 32–35 on every route** while API depth is only 1–2. The
+   depth is script chunks loading in sequence, not data — which points at the
+   same weak code splitting the bundle numbers showed, and at Phase 7 rather
+   than Phase 2.
+
+**Not measured, and why:**
+
+- **CPU 4× and Slow 4G throttling** — the browser tooling here exposes no CDP
+  throttling. The `perf.*` events from 0.2 are the intended answer: real
+  devices on real connections beat any emulation.
+- **Main-thread long tasks** — the `longtask` PerformanceObserver **never fires
+  in this browser**, confirmed with a control that deliberately blocked the
+  main thread for 200 ms and still produced zero entries. Recording 0 would
+  have been a fabricated number, so the metric is dropped rather than reported.
+
+### 0.2 notes (2026-08-30)
+
+`perf.boot` / `perf.scan` / `perf.sale` / `perf.route` are in the vocabulary and
+emitted from `src/lib/activity/perf.ts`. Design points worth not undoing:
+
+- **Every duration ends at a PAINT**, via a double-rAF, not at the callback
+  that finished the work. Stopping at the commit reports a number reliably a
+  frame or more optimistic — which is exactly the gap Phase 5 attacks, so
+  measuring it away would hide the work. The emit itself happens inside that
+  post-paint callback, so instrumentation is never inside what it measures.
+- **`performance.now()`, never `Date.now()`.** These tills routinely have wrong
+  clocks; a wall-clock jump would produce negative durations.
+- **`source` on a scan and `measuredFrom` on a route are reported, never
+  inferred.** "It was fast so it must have been a local hit" stops being true
+  on exactly the slow devices this exists to find. The page marks the branch
+  that answered; the tab bar marks the tap. A route with no marker (browser
+  back) is labelled `commit` rather than blended into the same average.
+- `logPerfBoot()` fires once per JS context — returning to `/pos` by
+  client-side nav is a route change, not a boot.
+
+**Verified:** all four accepted by the real `POST /api/activity` (4 accepted,
+0 dropped) and stored in `activity_logs` with the category derived correctly.
+Control run confirms the vocabulary gate actually rejects — `perf.bogus` and
+`totally.made_up` both dropped, and a mixed batch split 1 accepted / 1 dropped.
+Typecheck clean, lint unchanged from baseline, build green.
+
+**Not yet observed:** the client emitters firing from a real interaction, which
+needs a signed-in browser session. The emit path they share is proven, so what
+is unverified is call-site placement, not the pipeline.
+
+### P-1 resolution (2026-08-30) — and what it does NOT buy
+
+Supabase branching needs Pro; this project is on the free plan. The owner
+directed the harness at the **main project** instead, on the grounds that it
+has no real clients. A read-only survey agreed: **5 stores, 4,999 products,
+118 transactions, 174 line items** — demo volume, not a live book of business.
+CLAUDE.md's "serving multiple paying stores" is stale.
+
+The harness is therefore confined to a **dedicated tenant** rather than given
+the run of the database:
+
+| | |
+|---|---|
+| Harness store | `00000000-0000-4000-8000-000000000001` (`__harness__`) |
+| Guard | Refuses the main host unless `HARNESS_ALLOW_PRODUCTION_HOST=yes` **and** `HARNESS_STORE_ID` are both set |
+| Isolation | Every table is store-scoped, so the store id is the isolation |
+
+> **The confinement is a convention, not an enforcement.** Nothing in the
+> database stops a harness query that forgets its `store_id` filter — the
+> service-role key bypasses RLS by design (audit P0-3). Fixtures and teardown
+> must filter on `HARNESS_STORE_ID` every time. Treat an unscoped write in
+> `harness/` as a defect on the same level as a money bug.
+
+**Three things P-1 asked for that this does not deliver**, to be honest about
+rather than discover in Phase 5:
+
+1. **No separate origin.** Service workers, Cache Storage, IndexedDB and
+   `localStorage` are origin-scoped, so the Phase 6 durability drills are only
+   truly clean on their own origin. A Vercel preview deployment of
+   `refactor/perf` gives one for free and should be stood up before Phase 6.
+2. **Schema is shared.** Any migration the refactor adds lands on the same
+   database as the existing stores. Phase 2's RPC work needs care here — it is
+   the one part of the plan that cannot be confined by a `store_id`.
+3. **Not a clean-room.** Row counts, query plans and cache behaviour are all
+   measured next to five other tenants' data. Fine for characterization;
+   remember it when reading Phase 8's scale numbers.
 
 ---
 

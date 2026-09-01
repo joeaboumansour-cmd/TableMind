@@ -1,0 +1,43 @@
+# =============================================================================
+# Supabase CLI configuration
+#
+# Added for P-1 of docs/PERF-REFACTOR-PLAN.md. The CLI reads this file to know
+# which project it is talking to, so it is needed both to push this repo's
+# migrations to the staging project (`supabase link` + `supabase db push`) and
+# to run a local stack (`supabase start`).
+#
+# Branching would also have used it, but branching is a Pro-plan feature and
+# this project is on the free plan.
+#
+# This project has never used the Supabase CLI before — migrations are applied
+# by hand (see the db-migration skill). So this file is deliberately minimal
+# and does not attempt to describe a local dev stack nobody runs.
+#
+# `project_id` is the production project ref. It is not a secret — it is the
+# hostname in NEXT_PUBLIC_SUPABASE_URL and ships in every client bundle.
+#
+# ⚠️ `supabase db push` targets whatever project is LINKED, not this value.
+# Always run `supabase link --project-ref <STAGING-REF>` first and check
+# `supabase projects list` before any push. This ref is production.
+# =============================================================================
+
+project_id = "xflmpowmxcuiqxzhuqbl"
+
+[db]
+# Match production. Supabase projects of this vintage run Postgres 15; if the
+# dashboard reports 17 for this project, change this to 17 — a mismatch here
+# makes the branch a dishonest place to measure query plans in Phase 2.4.
+major_version = 15
+
+[db.seed]
+# ⚠️ OFF ON PURPOSE.
+#
+# supabase/seed.sql inserts an admin user whose password_hash is the LITERAL
+# STRING "admin123" — not a bcrypt hash — with a comment admitting it is for
+# demo purposes. Running it would create a known-credential admin on the
+# staging database.
+#
+# The harness supplies its own deterministic fixtures (Phase 1.1) with fixed
+# UUIDs and a fixed clock, which is what snapshots require anyway. Seeding
+# from two places would fight that.
+enabled = false

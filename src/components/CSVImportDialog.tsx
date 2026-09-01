@@ -31,6 +31,7 @@ import {
   type ProductCSVRow,
   type ValidationError,
 } from "@/lib/csv/utils";
+import { buildAuthHeaders } from "@/lib/auth/apiHeaders";
 
 interface CSVImportDialogProps {
   open: boolean;
@@ -166,8 +167,12 @@ export default function CSVImportDialog({
       try {
         const response = await fetch("/api/products/import", {
           method: "POST",
+          // The route resolves tenancy from this header now, not from the
+          // storeId in the body -- taking tenancy from the same request that
+          // names the rows is what made it wipeable by anyone (audit P0-2).
           headers: {
             "Content-Type": "application/json",
+            ...buildAuthHeaders(),
           },
           body: JSON.stringify({
             products: parsedData,

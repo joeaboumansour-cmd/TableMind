@@ -58,6 +58,7 @@ import {
 import { StorageFullError } from "@/lib/db/localDB";
 import { cn } from "@/lib/utils";
 import { logActivity, flushActivity } from "@/lib/activity/logger";
+import { perfNow, logPerfSale } from "@/lib/activity/perf";
 import { connectivity } from "@/lib/connectivity";
 
 /** Which amount the keypad is typing into. Both are always displayed. */
@@ -332,6 +333,9 @@ function CheckoutContent() {
       }
     }
 
+    // Payment is committed here -- after validation, so a rejected tender
+    // never lands in the sale timings as a slow sale.
+    const saleStartedAt = perfNow();
     setIsProcessing(true);
 
     try {
@@ -493,6 +497,14 @@ function CheckoutContent() {
           assumed_exact: assumeExact,
           was_offline: wasOffline,
         },
+      });
+      // Queue time, ending at the frame that shows the receipt. Emitted after
+      // the sale is durable for the same reason sale.payment is, and it is
+      // fire-and-forget: logPerfSale defers its own work past the paint, so
+      // nothing here is on the path the customer is standing in.
+      logPerfSale(saleStartedAt, {
+        line_count: items.length,
+        was_offline: wasOffline,
       });
       toast.success("Payment processed successfully!");
       if (wasOffline) {

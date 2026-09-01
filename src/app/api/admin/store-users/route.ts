@@ -1,6 +1,34 @@
+// =============================================
+// Employee administration. (audit P0-2)
+//
+// This route had NO authentication of any kind while holding the service-role
+// key. GET listed any store's employees; POST created one in ANY store with
+// ARBITRARY permissions; PATCH changed any employee's password_hash, username
+// or permissions BY ID ALONE with no store scoping; DELETE removed any
+// employee. That is a full multi-tenant takeover from an unauthenticated
+// request.
+//
+// Every verb is now behind the admin session. Confirmed first that nothing on
+// the till side calls it — the only callers are /admin and /admin/activity.
+// (The cash page gets its employee list from GET /api/cash-shifts, which is
+// separately gated.)
+//
+// PATCH and DELETE still address an employee BY ID ALONE, with no store
+// filter, and that is left as it is deliberately. The audit lists it as part
+// of this finding, but it is only a takeover while the route is open: the
+// admin console is a cross-store superuser by design, so an admin editing an
+// employee in any store is that role working correctly. Requiring a store_id
+// would mean changing both console call sites for no security gain, on a
+// screen this change is not otherwise touching.
+//
+// If the admin role is ever narrowed to a subset of stores, THAT is when this
+// needs a store filter — and it will need one urgently.
+// =============================================
+
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { getDefaultPermissions } from "@/lib/auth/permissions";
+import { verifyAdminSession } from "@/lib/auth/adminSession";
 
 const supabaseAdmin = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -10,6 +38,11 @@ const supabaseAdmin = createClient(
 // GET /api/admin/store-users?store_id=xxx — list employees for a store
 export async function GET(request: Request) {
   try {
+    const admin = await verifyAdminSession(request);
+    if (!admin) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
     const { searchParams } = new URL(request.url);
     const storeId = searchParams.get("store_id");
 
@@ -47,6 +80,11 @@ export async function GET(request: Request) {
 // POST /api/admin/store-users — create a new employee
 export async function POST(request: Request) {
   try {
+    const admin = await verifyAdminSession(request);
+    if (!admin) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
     const body = await request.json();
     const { store_id, username, password, display_name, permissions } = body;
 
@@ -101,6 +139,11 @@ export async function POST(request: Request) {
 // PATCH /api/admin/store-users — update employee (permissions, name, password, active status)
 export async function PATCH(request: Request) {
   try {
+    const admin = await verifyAdminSession(request);
+    if (!admin) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
     const body = await request.json();
     const { id, username, password, display_name, is_active, permissions } = body;
 
@@ -152,6 +195,11 @@ export async function PATCH(request: Request) {
 // DELETE /api/admin/store-users?id=xxx — delete an employee
 export async function DELETE(request: Request) {
   try {
+    const admin = await verifyAdminSession(request);
+    if (!admin) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
     const { searchParams } = new URL(request.url);
     const id = searchParams.get("id");
 

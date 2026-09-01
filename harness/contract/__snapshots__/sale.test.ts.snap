@@ -1,0 +1,69 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`a plain sale > is accepted and returns the created transaction 1`] = `
+{
+  "transaction": {
+    "amount_paid": "number",
+    "change_given": "number",
+    "created_at": "string",
+    "id": "string",
+    "payment_method": "string",
+    "receipt_token": "null",
+    "register_id": "null",
+    "shift_id": "null",
+    "store_id": "string",
+    "subtotal": "number",
+    "total_amount": "number",
+    "transaction_number": "string",
+    "usd_amount_paid": "number",
+    "usd_change_given": "number",
+    "usd_subtotal": "number",
+    "usd_total_amount": "number",
+    "user_id": "string",
+    "user_name": "string",
+  },
+}
+`;
+
+exports[`idempotency — invariant #7 > the duplicate response is flagged as such 1`] = `
+{
+  "duplicated": "boolean",
+  "transaction": {
+    "amount_paid": "number",
+    "change_given": "number",
+    "created_at": "string",
+    "id": "string",
+    "payment_method": "string",
+    "receipt_token": "null",
+    "register_id": "null",
+    "shift_id": "null",
+    "store_id": "string",
+    "subtotal": "number",
+    "total_amount": "number",
+    "transaction_items": [
+      {
+        "combo_children": "null",
+        "currency": "string",
+        "id": "string",
+        "modifiers": "null",
+        "note": "null",
+        "product_id": "string",
+        "product_name": "string",
+        "quantity": "number",
+        "store_id": "string",
+        "total_price": "number",
+        "transaction_id": "string",
+        "unit_price": "number",
+      },
+      "...",
+    ],
+    "transaction_number": "string",
+    "usd_amount_paid": "number",
+    "usd_change_given": "number",
+    "usd_subtotal": "number",
+    "usd_total_amount": "number",
+    "user_id": "string",
+    "user_name": "string",
+  },
+}
+`;

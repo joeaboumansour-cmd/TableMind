@@ -117,7 +117,7 @@ const EMPTY_ADJ: AdjustmentValues = {
 export function CashRegisterPage() {
   const router = useRouter();
   const { user, isLoading: authLoading, canAccess } = useAuth();
-  const { isEnabled, isLoading: flagsLoading } = useFeatureFlags();
+  const { isEnabled, flagsResolved } = useFeatureFlags();
 
   // Read the last-known state during the FIRST render, not from an effect.
   // This is the whole difference between a spinner and an instant page: the
@@ -450,8 +450,18 @@ export function CashRegisterPage() {
   }, []);
 
   // ── Guards ─────────────────────────────────────────────────────────────────
+  // `flagsResolved`, NOT `isLoading`. `cash_register` DEFAULTS TO FALSE, and
+  // `isLoading` goes false as soon as there is something renderable — which on
+  // a device that has never cached this store's flags is the optimistic
+  // defaults, i.e. a guess. This guard read that guess as an answer and bounced
+  // the cashier off the cash page, with a toast saying the feature was not
+  // enabled, for a store that has it switched on. New device, cleared storage,
+  // evicted storage, private window: the same population that hits P1-12.
+  //
+  // An absent answer is not a negative answer. Denying waits for a real one;
+  // the PERMISSION check below is the security boundary and is unaffected.
   useEffect(() => {
-    if (!authLoading && user && !flagsLoading) {
+    if (!authLoading && user && flagsResolved) {
       if (!isEnabled("cash_register")) {
         toast.error("Cash Register is not enabled for this store");
         router.replace("/pos");
@@ -462,7 +472,7 @@ export function CashRegisterPage() {
         router.replace("/pos");
       }
     }
-  }, [authLoading, user, flagsLoading, isEnabled, canAccess, router]);
+  }, [authLoading, user, flagsResolved, isEnabled, canAccess, router]);
 
   // Record that somebody was shown the "this drawer still needs counting"
   // state, so the admin trail can tell an unnoticed overdue shift from an

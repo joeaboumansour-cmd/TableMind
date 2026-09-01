@@ -34,7 +34,6 @@ interface CategoryManagerDialogProps {
   onOpenChange: (open: boolean) => void;
   storeId: string;
   categories: Category[];
-  onCategoriesChange: (categories: Category[]) => void;
 }
 
 export default function CategoryManagerDialog({
@@ -42,7 +41,6 @@ export default function CategoryManagerDialog({
   onOpenChange,
   storeId,
   categories,
-  onCategoriesChange,
 }: CategoryManagerDialogProps) {
   const [newName, setNewName] = useState("");
   const [busy, setBusy] = useState(false);
@@ -52,11 +50,17 @@ export default function CategoryManagerDialog({
     if (open) setLocal(categories);
   }, [open, categories]);
 
-  /** Re-read from the server and push the result up. The server is the truth. */
+  /**
+   * Re-read from the server. The server is the truth.
+   *
+   * There is no `onCategoriesChange` any more: `refreshCategories` writes
+   * through the categories RESOURCE, so every subscriber — the inventory page
+   * behind this dialog and the till's rail — is notified without this
+   * component knowing who they are. Pushing a copy up as well would make two
+   * writers for one list, which is how the two drift.
+   */
   const resync = async () => {
-    const fresh = await refreshCategories(storeId);
-    setLocal(fresh);
-    onCategoriesChange(fresh);
+    setLocal(await refreshCategories(storeId));
   };
 
   const create = async () => {

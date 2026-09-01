@@ -11,10 +11,9 @@
 // shared helpers so the exchange rate has exactly one definition.
 // =============================================
 
-import { createServiceRoleClient } from "@/lib/supabase/server";
 import { NextResponse } from "next/server";
 import { errorMessage } from "@/lib/errors";
-import { readAuthHeader, resolveCaller } from "@/lib/auth/apiCaller";
+import { callerAndRead } from "@/lib/auth/apiRoute";
 import { combineCurrencyTotals, computeExpectedDrawer, computeVariance } from "@/lib/cashShift";
 
 /** Clamp to a sane window so a hand-typed range cannot scan years of sales. */
@@ -68,21 +67,22 @@ interface PerfRow {
 
 export async function GET(request: Request) {
   try {
-    const supabase = await createServiceRoleClient();
-    const { storeId, userId } = readAuthHeader(request);
-
-    const caller = await resolveCaller(supabase, storeId, userId);
-    if (!caller) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-
+    // Range parsing is pure — no I/O — so it happens before the wave.
     const { from, to } = parseRange(new URL(request.url));
 
-    const { data, error } = await supabase.rpc("get_register_performance", {
-      p_store_id: storeId,
-      p_from: from.toISOString(),
-      p_to: to.toISOString(),
-    });
+    // Auth runs ALONGSIDE the read. The report is scoped to the `store_id` the
+    // caller is CLAIMING, so a failed auth discards a read of their own store
+    // and nothing is returned before the caller is confirmed.
+    const outcome = await callerAndRead(request, (client, storeId) =>
+      client.rpc("get_register_performance", {
+        p_store_id: storeId,
+        p_from: from.toISOString(),
+        p_to: to.toISOString(),
+      })
+    );
+
+    if ("error" in outcome) return outcome.error;
+    const { data, error } = outcome.result;
 
     if (error) {
       console.error("Register analytics error:", error.message);

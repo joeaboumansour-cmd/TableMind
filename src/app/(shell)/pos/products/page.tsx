@@ -75,16 +75,15 @@ import {
 } from "@/lib/products/bulkPricing";
 import { logActivity } from "@/lib/activity/logger";
 import { isSellable, isIngredient, normaliseKind, formatStock, STOCK_UNITS, type ProductKind } from "@/lib/products/kind";
-import { getCategories, refreshCategories } from "@/lib/categories/load";
-import type { Category } from "@/lib/categories/types";
-import { getCachedRecipes, refreshRecipes, saveRecipe } from "@/lib/recipes/load";
-import type { RecipeMap } from "@/lib/recipes/types";
+import { categoriesResource } from "@/lib/categories/load";
+import { useResource } from "@/lib/data/useResource";
+import { recipesResource, saveRecipe } from "@/lib/recipes/load";
 import RecipeEditor, { type DraftComponent, type IngredientOption } from "@/components/inventory/RecipeEditor";
 import ComboEditor, { type DraftComboItem, type ComboItemOption } from "@/components/inventory/ComboEditor";
-import { getCachedCombos, refreshCombos, saveCombo } from "@/lib/combos/load";
-import type { ComboMap } from "@/lib/combos/types";
+import { combosResource, saveCombo } from "@/lib/combos/load";
 import CategoryManagerDialog from "@/components/inventory/CategoryManagerDialog";
 import MenuQrDialog from "@/components/inventory/MenuQrDialog";
+import { buildAuthHeaders } from "@/lib/auth/apiHeaders";
 
 interface Product {
   id: string;
@@ -252,9 +251,25 @@ function StoreProductsPageContent() {
   const [servingQty, setServingQty] = useState("1");
   const [categoryId, setCategoryId] = useState("");
   const [recipeDraft, setRecipeDraft] = useState<DraftComponent[]>([]);
-  const [categories, setCategories] = useState<Category[]>([]);
-  const [recipes, setRecipes] = useState<RecipeMap>({});
-  const [combos, setCombos] = useState<ComboMap>({});
+  // ---- Menu data (Phase 3.3) ----
+  //
+  // The same three `useResource` subscriptions the till uses, so both screens
+  // share one entry, one request and one answer. Walking /pos -> here -> /pos
+  // used to cost six requests for data that changes a few times a week; the
+  // resource's stale window collapses it to three.
+  //
+  // `enabled` gates the NETWORK only — the cached copy is always returned, so
+  // the category filter and the recipe editor paint on the first frame with no
+  // internet, exactly as the localStorage reads in the load effect used to do.
+  const { data: categories } = useResource(categoriesResource, user?.storeId, {
+    enabled: isEnabled("product_categories"),
+  });
+  const { data: recipes } = useResource(recipesResource, user?.storeId, {
+    enabled: isEnabled("menu_items"),
+  });
+  const { data: combos } = useResource(combosResource, user?.storeId, {
+    enabled: isEnabled("menu_items"),
+  });
   const [comboDraft, setComboDraft] = useState<DraftComboItem[]>([]);
   const [kindFilter, setKindFilter] = useState<KindFilter>("sellable");
 
@@ -347,51 +362,13 @@ function StoreProductsPageContent() {
       setFreqVersion(v => v + 1);
     });
 
-    // Categories and recipes: paint from the localStorage copy immediately.
-    // Free and synchronous, so it stays unconditional. The NETWORK refreshes
-    // moved to their own flag-gated effect below — see the comment there.
-    setCategories(getCategories(user.storeId));
-    setRecipes(getCachedRecipes(user.storeId));
-    setCombos(getCachedCombos(user.storeId));
+    // Categories, recipes and combos are `useResource` subscriptions now — see
+    // above. They seed from the same localStorage copies on the FIRST RENDER
+    // rather than after this effect, so they are right one paint sooner.
     // Invalidate whatever is still in flight. Without this, a fetch that
     // resolves after the user has left writes into an unmounted page.
     return invalidateLoads;
   }, [user, invalidateLoads]);
-
-  // Menu data — fetched ONLY by stores that have the menu features on.
-  //
-  // Same change as the till (see src/app/(shell)/pos/page.tsx): three network
-  // round trips, each with its own server-side caller resolution, fired on
-  // every visit regardless of whether the store has anywhere to show the
-  // result. `product_categories` and `menu_items` both default to false.
-  //
-  // Its own effect keyed on the flags, so a device whose flags arrive from the
-  // database a moment after mount still fetches.
-  useEffect(() => {
-    const storeId = user?.storeId;
-    if (!storeId) return;
-
-    let cancelled = false;
-
-    if (isEnabled("product_categories")) {
-      void refreshCategories(storeId).then((c) => {
-        if (!cancelled) setCategories(c);
-      });
-    }
-
-    if (isEnabled("menu_items")) {
-      void refreshRecipes(storeId).then((r) => {
-        if (!cancelled) setRecipes(r);
-      });
-      void refreshCombos(storeId).then((c) => {
-        if (!cancelled) setCombos(c);
-      });
-    }
-
-    return () => {
-      cancelled = true;
-    };
-  }, [user?.storeId, isEnabled]);
 
   // Helper: check if user auth exists in localStorage (works offline)
   function hasAuthInStorage(): boolean {
@@ -704,13 +681,10 @@ function StoreProductsPageContent() {
           const cleaned = recipeDraft
             .filter((c) => c.ingredient_product_id)
             .map((c, i) => ({ ...c, sort_order: i }));
-          const saved = await saveRecipe(storeId, parentProductId, cleaned);
-          setRecipes((prev) => {
-            const next = { ...prev };
-            if (saved.length > 0) next[parentProductId!] = saved;
-            else delete next[parentProductId!];
-            return next;
-          });
+          // No local setState: saveRecipe writes THROUGH the resource, so
+          // every subscriber — this page and the till — sees it. Keeping a
+          // second writer here is how the two copies drift.
+          await saveRecipe(storeId, parentProductId, cleaned);
         } catch (recipeError) {
           console.error("Recipe save error:", recipeError);
           toast.error(
@@ -726,13 +700,8 @@ function StoreProductsPageContent() {
           const cleanedCombo = comboDraft
             .filter((c) => c.item_product_id)
             .map((c, i) => ({ ...c, sort_order: i }));
-          const savedCombo = await saveCombo(storeId, parentProductId, cleanedCombo);
-          setCombos((prev) => {
-            const next = { ...prev };
-            if (savedCombo.length > 0) next[parentProductId!] = savedCombo;
-            else delete next[parentProductId!];
-            return next;
-          });
+          // Same as the recipe above — saveCombo writes through the resource.
+          await saveCombo(storeId, parentProductId, cleanedCombo);
         } catch (comboError) {
           console.error("Combo save error:", comboError);
           toast.error(
@@ -985,6 +954,7 @@ function StoreProductsPageContent() {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          ...buildAuthHeaders(),
         },
         body: JSON.stringify({
           storeId,
@@ -2035,7 +2005,6 @@ function StoreProductsPageContent() {
         onOpenChange={setShowCategories}
         storeId={storeId}
         categories={categories}
-        onCategoriesChange={setCategories}
       />
 
       <Dialog open={showMore} onOpenChange={setShowMore}>

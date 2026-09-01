@@ -6,6 +6,7 @@ import { StoreUser, canAccess, getFullPermissions, parsePermissions, SectionKey,
 import { cacheCredentials, clearCachedCredentials, validateCachedCredentials } from "./offlineAuth";
 import { logActivity, invalidateActivityIdentity, flushActivity } from "@/lib/activity/logger";
 import { connectivity } from "@/lib/connectivity";
+import { clearResourceCache } from "@/lib/data/resource";
 
 const supabase = createClient();
 
@@ -131,6 +132,11 @@ function clearUserFromStorage() {
   } catch {
     /* a storage we cannot read is a storage with nothing to leak */
   }
+
+  // The same data held in memory by the data layer. The persisted copies are
+  // gone above, but a component that never remounts would keep painting the
+  // last person's from the in-memory entry.
+  clearResourceCache();
 
   localStorage.removeItem("goldensquirrel_user");
   localStorage.removeItem("goldensquirrel_auth"); // legacy cleanup

@@ -151,6 +151,32 @@ export function getLastSyncKey(storeId: string): string {
   return `products_last_sync_${storeId}`;
 }
 
+/**
+ * Has this device EVER successfully pulled this store's catalogue?
+ *
+ * The watermark's existence is the proof, and it is written only after a pull
+ * has actually returned rows — the same "the cache KEY is the signal" rule as
+ * `hasCachedRecipes()`.
+ *
+ * The distinction it draws is the one that keeps costing this codebase money:
+ * an empty `products_cache` means either "this shop sells nothing" or "this
+ * device has not been told yet", and those are opposite instructions to a
+ * cashier holding a barcode. A device whose storage iOS cleared after seven
+ * idle days looks exactly like a brand-new one, which is why this asks about
+ * knowledge rather than trying to detect the clear.
+ */
+export function hasEverSyncedProducts(storeId: string): boolean {
+  if (typeof window === "undefined" || !storeId) return false;
+  try {
+    return (
+      localStorage.getItem(getLastSyncKey(storeId)) !== null ||
+      localStorage.getItem("products_last_sync") !== null
+    );
+  } catch {
+    return false;
+  }
+}
+
 function readLastSync(storeId: string): number | null {
   if (typeof window === "undefined") return null;
   try {
@@ -549,12 +575,30 @@ async function runRefresh(
   }
 
   const sinceIso = new Date(Math.max(0, lastSync - WATERMARK_SAFETY_MS)).toISOString();
-  const changedRows = await fetchProductsUpdatedSince(supabase, storeId, sinceIso);
+
+  // ── Two independent reads, ONE wave ──────────────────────────────────────
+  //
+  // The delta (`updated_at > since`) and the live count (`count(*)`) do not
+  // read anything the other writes, so nothing about them needed to be
+  // sequential — they were serialised purely by the order of two `await`s.
+  //
+  // Measured on the Phase 0.3 baseline, that cost a full extra round trip on
+  // the /pos boot chain: the count started at 468ms, one millisecond after the
+  // delta finished at 467ms. Against a remote Supabase that is ~300ms of pure
+  // waiting, on every till launch and again every 30 seconds while the shop is
+  // open.
+  //
+  // The local cache count stays out of this pair on purpose: it is an
+  // IndexedDB read, so it costs no network, and starting it early would only
+  // add main-thread work while the two network calls are in flight.
+  const [changedRows, liveCount] = await Promise.all([
+    fetchProductsUpdatedSince(supabase, storeId, sinceIso),
+    fetchLiveProductCount(supabase, storeId),
+  ]);
 
   // The delta only carries rows that changed. If the cache is missing products
   // for any other reason — a partial first fetch, seed data, a cleared DB — no
   // number of deltas will ever fill the gap, so compare against the real count.
-  const liveCount = await fetchLiveProductCount(supabase, storeId);
   if (liveCount !== null) {
     const cachedCount = await getCachedProductsCount(storeId);
     if (cachedCount < liveCount) {

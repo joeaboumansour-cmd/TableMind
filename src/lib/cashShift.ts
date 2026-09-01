@@ -1,6 +1,6 @@
 // Cash Register - Drawer Math (shared utility)
 // Single source of truth for expected drawer and variance
-import { SELL_RATE, roundToNearest5k } from "./utils/format";
+import { convertUsdToLl } from "./utils/format";
 import type { CashShift, CashAdjustment, ShiftSummary } from "./cash/types";
 
 /**
@@ -36,7 +36,13 @@ import type { CashShift, CashAdjustment, ShiftSummary } from "./cash/types";
  * matching them is what makes the variance figure mean anything.
  */
 export function combineCurrencyTotals(ll: number, usd: number): number {
-  return (ll || 0) + roundToNearest5k((usd || 0) * SELL_RATE);
+  // `convertUsdToLl` IS `roundToNearest5k(usd * SELL_RATE)` — which is what this
+  // line used to spell out by hand. Identical arithmetic, one fewer definition
+  // of the USD→LL conversion: CLAUDE.md §3 rule 1 says that conversion lives in
+  // format.ts and nowhere else, and four disagreeing copies of it is audit
+  // P1-6. The rate choice the comment above defends is unchanged — that helper
+  // is the SELL_RATE one.
+  return (ll || 0) + convertUsdToLl(usd || 0);
 }
 
 /**
