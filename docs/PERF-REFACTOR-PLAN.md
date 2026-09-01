@@ -850,7 +850,7 @@ these three it is achievable only in a real shop, on one store, watched.
 | 4.0 perf.boot was measuring the wrong moment | DONE | e164eef | "167ms" | **970ms honest** | The metric AND a real defect: the till rendered with an empty catalogue |
 | 4.2 virtualize the till grid | DONE | e164eef | 12,666 DOM nodes · 833ms blocking | **372 · 0ms** | boot 970→283ms, scan 37→27ms. Costs +9.4KB gz on /pos, recorded |
 | 4.1 memo boundaries | NOT STARTED | | | | Measured: not the bottleneck. Plain scan was already 37ms |
-| 4.3 History virtualization | DONE | | 17 nodes/row | **declined** | Measured: 1,054 nodes at the default 50 rows. Tier 3. Threshold recorded |
+| 4.3 History virtualization | DONE | e34ad5d | 17 nodes/row | **declined** | Measured: 1,054 nodes at the default 50 rows. Tier 3. Threshold recorded |
 | 4.3 component split | NOT STARTED | | | | |
 | 5.1 wait register | DONE | 4e3c98e | | | Every wait enumerated and verified. Most were already resolved |
 | 5.2 optimistic + spinner rules | DONE | 4e3c98e | **954ms** | **87ms** | The till’s catalogue writes stopped awaiting the server |
