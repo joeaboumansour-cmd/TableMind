@@ -863,8 +863,8 @@ these three it is achievable only in a real shop, on one store, watched.
 | 7.2 import audit /pos, /checkout | NOT STARTED | | | | Audited: Supabase 52.6KB gz + Dexie 30.2KB gz on every route. NOT the bottleneck — see the note |
 | 7.3 precache tiering | NOT STARTED | | | | |
 | 8.1 PostgREST cap audit | DONE | 5300c53 | | | **No money figure is truncated.** One real gap found, on the public menu |
-| 8.2 IndexedDB read strategy | DONE | | | | Premise no longer holds: 33ms read, 0 long tasks. Measured, not done |
-| 8.3 pagination gaps | DONE | | truncated at 1,000 | **1,304 of 1,304** | `.limit()` above 1,000 is a LIE. Two live truncations fixed + a gate |
+| 8.2 IndexedDB read strategy | DONE | 0e518f5 | | | Premise no longer holds: 33ms read, 0 long tasks. Measured, not done |
+| 8.3 pagination gaps | DONE | 0e518f5 | truncated at 1,000 | **1,304 of 1,304** | `.limit()` above 1,000 is a LIE. Two live truncations fixed + a gate |
 | 9.1 promote permanent gates | DONE | 2569e42 | 2 gates | **3 gates, 7 checks** | `verify:invariants`. All 7 mutation-checked. Found 2 real violations |
 | 9.2 final numbers | DONE | b7330df | see the note | | Assembled from one build. Two things are honestly NOT comparable — said so |
 | 9.3 keep-or-delete decision | NOT STARTED | | | | Branch A expected; tag first either way |
