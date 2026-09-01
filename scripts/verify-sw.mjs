@@ -139,6 +139,21 @@ const CHECKS = [
     ].join("\n    "),
   },
   {
+    name: "the iOS launch screens are NOT precached",
+    test: (sw) => !precachedUrls(sw).some((u) => u.includes("/splash/")),
+    why: [
+      "The 15 apple-touch-startup-image files are 864KB, of which any one",
+      "device uses exactly ONE — and iOS shows the startup image BEFORE the",
+      "web app runs, so the service worker is not alive to serve it and has no",
+      "say in the matter. Precaching them is pure waste on every install.",
+      "They are excluded by `!splash/**/*` in publicExcludes — note",
+      "publicExcludes, NOT workboxOptions.exclude, which only filters WEBPACK",
+      "assets and never sees files copied out of public/. Putting it in the",
+      "wrong one silently does nothing, which is how this check earned its",
+      "place.",
+    ].join("\n    "),
+  },
+  {
     name: "`app-shell` falls back to cache quickly (networkTimeoutSeconds)",
     test: (sw) => {
       const opts = appShellOptions(sw);

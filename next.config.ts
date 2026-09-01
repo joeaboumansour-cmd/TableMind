@@ -12,6 +12,7 @@ const withAnalyzer = withBundleAnalyzer({
 
 const withPWA = withPWAInit({
   dest: "public",
+
   disable: process.env.NODE_ENV === "development",
   cacheOnFrontEndNav: true,
   aggressiveFrontEndNavCaching: true,
@@ -56,8 +57,22 @@ const withPWA = withPWAInit({
   // screenshots (~265KB combined) are only ever read by the OS install
   // dialog, which fetches them from the network — precaching them just
   // makes every install download a quarter-megabyte it will never use.
-  // The leading "!" entries are exclusion globs (next-pwa convention).
-  publicExcludes: ["!noprecache/**/*", "!screenshots/**/*"],
+  //
+  // `splash` is the same argument, harder: the iOS launch screens are 864 KB
+  // across 15 device resolutions, of which any one device uses exactly ONE,
+  // and iOS displays the startup image BEFORE the web app runs — so the
+  // service worker is not alive to serve it and has no say in the matter.
+  // See scripts/generate-splash.mjs.
+  //
+  // NOTE this is `publicExcludes`, NOT `workboxOptions.exclude` below. That
+  // one filters WEBPACK assets, which is why `pdf-export` belongs there, and
+  // it never sees files copied out of public/. Putting `/splash/` there
+  // instead silently did nothing; `verify:budgets` caught it, reporting the
+  // precache 864 KB heavier, which is exactly what that gate is for.
+  //
+  // The leading "!" entries are exclusion globs (next-pwa convention), and
+  // supplying this REPLACES next-pwa's default — `!noprecache/**/*` must stay.
+  publicExcludes: ["!noprecache/**/*", "!screenshots/**/*", "!splash/**/*"],
   workboxOptions: {
     // CRITICAL: supplying `exclude` REPLACES next-pwa's defaults, exactly like
     // runtimeCaching above. The first three entries ARE those defaults and
@@ -80,6 +95,7 @@ const withPWA = withPWAInit({
     // actually presses Download. The chunk is named by the splitChunks group
     // in `nextConfig.webpack` below, because content-hashed chunk names cannot
     // be matched by a stable pattern.
+
     exclude: [
       /\/_next\/static\/.*(?<!\.p)\.woff2/,
       /\.map$/,

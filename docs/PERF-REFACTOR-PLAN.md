@@ -843,13 +843,13 @@ these three it is achievable only in a real shop, on one store, watched.
 | 3.3 migrate /pos/products | DONE | fb28138 | 9 menu requests per walk | **3** | Legacy loaders deleted. Also fixed a pre-existing race in the queued-sale test |
 | 3.4 migrate /transactions | DONE | deb9c71 | 2 fetches per mount | **1** | **Migration assessed and deliberately NOT done** — see the note. Fixed the real defect instead, which also fixed /kitchen |
 | 3.4b feature flags onto the data layer | DONE | bdcd675 | 3 flag fetches per walk | **1** | Found and fixed audit **P1-13** — the cash page bounced on a cold device |
-| 3.5 migrate /pos/cash + /kitchen | NOT STARTED | | | | |
+| 3.5 migrate /pos/cash + /kitchen | DONE | | 0 duplicates | **0** | **Measured: nothing left to remove.** Migration assessed and deliberately not done — see the note |
 | 4.1 memo boundaries | NOT STARTED | | | | |
 | 4.2 History virtualization | NOT STARTED | | | | |
 | 4.3 component split | NOT STARTED | | | | |
 | 5.1 wait register | NOT STARTED | | | | Table lives in this file |
 | 5.2 optimistic + spinner rules | NOT STARTED | | | | |
-| 5.3 iOS launch screens | NOT STARTED | | | | Blank white boot today — cheap, big |
+| 5.3 iOS launch screens | DONE | | blank white boot | **branded splash** | 15 devices, 0 bytes of precache. Brought forward — it was the biggest unclaimed win |
 | 5.4 view transitions + scroll restore | NOT STARTED | | | | |
 | 6.1 storage grant, per platform | NOT STARTED | | | | Install = durability on iOS |
 | 6.2 quota & eviction order | NOT STARTED | | | | Queued sales never shed |
@@ -1047,6 +1047,92 @@ be tracked down.
 **iOS is unblocked** (WebKit installed 2026-08-31), so invariant #24 is
 satisfied for the flows written so far. The row stays PARTIAL because flows
 5-8 — cash shift, inventory, CSV import, kitchen — are still to write.
+
+### 5.3 iOS launch screens — the blank white boot is gone (2026-09-01)
+
+Brought forward out of Phase 5 because after 3.4b it was the biggest unclaimed
+win in the plan, and the plan already called it "cheap, big".
+
+An installed iOS PWA showed **blank white for its entire cold boot**, and iOS
+launches a cold WebView *every single time* — so that blank screen was most of
+what "the app takes a long time to open" means on an iPhone. Nothing about the
+code got faster here; what changed is that the time is no longer spent looking
+at nothing.
+
+`scripts/generate-splash.mjs` renders 15 device resolutions from the launcher
+icon: solid `#09090b` — the exact `themeColor`, the exact `--background` — with
+the icon centred, so the launch reads as the app starting rather than as a page
+loading. `metadata.icons` carries the 15 `apple-touch-startup-image` tags with
+their media queries.
+
+#### Three things that make this correct rather than just present
+
+1. **The size must match the device EXACTLY.** iOS matches on device-width,
+   device-height and pixel ratio; anything else is ignored and you are back to
+   white. Hence a generated list rather than a few hand-made files.
+2. **Portrait only, deliberately.** The till on a phone is camera-first and held
+   upright, and a device launched in landscape falls back to today's behaviour
+   rather than showing something wrong.
+3. **They are NOT precached, and that is load-bearing.** 864 KB across 15
+   files, of which any one device uses exactly ONE — and iOS shows the startup
+   image *before the web app runs*, so the service worker is not alive to serve
+   it and has no say in the matter. Precaching them would be pure waste on
+   every install, on every deploy.
+
+> **The trap, and it cost a build.** The exclusion belongs in **`publicExcludes`**,
+> NOT in `workboxOptions.exclude`. The latter filters WEBPACK assets — which is
+> why `pdf-export` lives there — and never sees files copied out of `public/`.
+> Put in the wrong one it silently does nothing: the build succeeded and the
+> precache was 864 KB heavier. `verify:budgets` caught it, which is exactly what
+> that gate exists for, and `publicExcludes` already existed a few lines further
+> down with the manifest screenshots in it, so the duplicate key was a build
+> error too.
+>
+> `verify-sw.mjs` now asserts it directly — **8 checks** — so the next person
+> gets "the iOS launch screens are NOT precached" instead of "the precache grew
+> 25%".
+
+**Verified:** image served at 1179×2556 and rendered to look at; 15 link tags in
+the prerendered HTML; **zero** `/splash/` entries in `public/sw.js`;
+`verify:budgets` back at baseline; 23/23 E2E desktop, iOS profile unchanged
+(only the pre-existing WebKit failure), 161/161 unit, lint at 207/77/130.
+
+> **What could NOT be verified here, honestly:** the splash itself only appears
+> for an app installed on a real iPhone home screen. Playwright's WebKit is not
+> that. The tags, the images and the precache exclusion are all verified; the
+> *appearance at launch* needs a real device, and belongs with Phase 6.3's
+> real-device drill.
+
+### 3.5 /pos/cash + /kitchen — measured, and there was nothing to do (2026-09-01)
+
+Same discipline as 3.4: measure, then decide. Requests on mount, and again on a
+client-side remount:
+
+| Screen | First mount | Second mount |
+|---|---|---|
+| `/pos/cash` | `cash-shifts`, `register-requests`, `cash-registers/analytics`, `features` | the same three, **no duplicates** |
+| `/kitchen` | `kitchen/tickets`, `features` | `kitchen/tickets`, **no duplicates** |
+
+**No duplicate fetches remain on either screen.** 3.4's `replay: false` fix had
+already removed `/kitchen`'s double load, and 3.4b removed the repeated
+`features` call. Every remaining request is a distinct piece of data fetched
+once.
+
+Migrating them onto the resource would buy **nothing measurable, at the cost of
+staleness on money figures**: `cash-shifts` is the drawer's current position,
+`register-requests` is a live approval queue, and `kitchen/tickets` polls
+because a cook is waiting on it. A stale window is right for a menu that changes
+weekly and wrong for all three of these.
+
+The cash page's `snapshot.ts` IS a hand-rolled copy of the pattern and could be
+folded in for tidiness. It would change no number, and it is the money screen.
+Left alone deliberately — §11 says small reversible changes and correctness over
+cleverness, and "one fewer mechanism" is not worth a Tier-2 money screen's risk
+on its own.
+
+**Phase 3 is complete.** The end-to-end number is in the 3.3 note: a `/pos` →
+Inventory → `/pos` walk went from **9 menu requests to 3**, plus flags 3 → 1,
+plus the duplicate removals in 3.4.
 
 ### 3.4b feature flags onto the data layer — and a live bug fell out (2026-09-01)
 
