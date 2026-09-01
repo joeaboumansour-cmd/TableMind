@@ -101,6 +101,7 @@ const withPWA = withPWAInit({
       /\.map$/,
       /^manifest.*\.js$/,
       /pdf-export/,
+      /charts/,
     ],
     runtimeCaching: [
       // CRITICAL: Exclude /api/health from the service worker 'apis' cache.
@@ -201,6 +202,35 @@ const nextConfig: NextConfig = {
         chunks: "async",
         // Above Next's own `lib`/`commons` groups, which would otherwise claim
         // these first and give them a hashed name again.
+        priority: 50,
+        reuseExistingChunk: true,
+        enforce: true,
+      };
+      // Same treatment for the charting stack, for the same reason and with one
+      // extra one.
+      //
+      // recharts + victory-vendor + d3 is 345 KB precached, and EVERY screen
+      // that renders a chart gets its data from the network: the cash page's
+      // register performance comes from `get_register_performance`, and the
+      // analytics panel from /api/transactions/analytics. So offline there is
+      // nothing to plot, and precaching the plotting library buys a shop
+      // exactly nothing — it just costs 345 KB on every device on every deploy.
+      // Runtime caching picks it up on first use, which is necessarily online.
+      //
+      // This is NOT the same call as ZXing (560 KB, also precached, also behind
+      // next/dynamic). Mobile is camera-first and scanning offline is core, so
+      // that one stays precached deliberately.
+      //
+      // The package list is exactly what recharts 3 pulls in — nothing in src/
+      // imports redux, immer, d3-*, victory-vendor, es-toolkit or
+      // decimal.js-light directly. `clsx` and `use-sync-external-store` are
+      // recharts dependencies too and are deliberately NOT here: they are
+      // shared with the app. `chunks: "async"` is the backstop either way —
+      // it can only collect dynamically imported code.
+      groups.charts = {
+        test: /[\\/]node_modules[\\/](recharts|victory-vendor|d3-[a-z-]+|decimal\.js-light|@reduxjs[\\/]toolkit|react-redux|reselect|immer|es-toolkit)[\\/]/,
+        name: "charts",
+        chunks: "async",
         priority: 50,
         reuseExistingChunk: true,
         enforce: true,

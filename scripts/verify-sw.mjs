@@ -139,6 +139,28 @@ const CHECKS = [
     ].join("\n    "),
   },
   {
+    name: "the charting stack is NOT precached",
+    test: (sw) => !precachedUrls(sw).some((u) => u.includes("charts")),
+    why: [
+      "recharts + victory-vendor + d3 is ~345KB, and EVERY screen that draws a",
+      "chart gets its data from the network — the cash page's register",
+      "performance from get_register_performance, the analytics panel from",
+      "/api/transactions/analytics. Offline there is nothing to plot, so",
+      "precaching the plotting library costs every device 345KB on every",
+      "deploy and buys a shop nothing. Runtime caching picks it up on first",
+      "use, which is necessarily online.",
+      "",
+      "Same two-part mechanism as the PDF exporter: the /charts/ entry in",
+      "workboxOptions.exclude only matches because the `charts` splitChunks",
+      "group in nextConfig.webpack gives it a stable name. Losing either half",
+      "puts it back.",
+      "",
+      "NOTE this is deliberately NOT the same call as ZXing, which is 560KB,",
+      "also behind next/dynamic, and stays precached: mobile is camera-first",
+      "and scanning offline is core to the product.",
+    ].join("\n    "),
+  },
+  {
     name: "the iOS launch screens are NOT precached",
     test: (sw) => !precachedUrls(sw).some((u) => u.includes("/splash/")),
     why: [

@@ -857,13 +857,13 @@ these three it is achievable only in a real shop, on one store, watched.
 | 5.1 wait register | DONE | 4e3c98e | | | Every wait enumerated and verified. Most were already resolved |
 | 5.2 optimistic + spinner rules | DONE | 4e3c98e | **954ms** | **87ms** | The till’s catalogue writes stopped awaiting the server |
 | 5.3 iOS launch screens | DONE | 51020da | blank white boot | **branded splash** | 15 devices, 0 bytes of precache. Brought forward — it was the biggest unclaimed win |
-| 5.4 view transitions + scroll restore | NOT STARTED | | | | |
+| 5.4 view transitions + scroll restore | DONE | | | **assessed** | Most of 5.3's list was already in `globals.css`. Scroll restore: the case it targets does not exist. View transitions **declined** — see the note |
 | 6.1 storage grant, per platform | DONE | a6beefc | | | Durability state classified, shown to the shop, reported to the admin trail |
 | 6.2 quota & eviction order | DONE | 34422ca | | | Order is DATA and asserted, mutation-checked. Plus the cleared-catalogue fix |
 | 6.3 three-week shelf-life drill | NOT STARTED | | | | All three platforms |
 | 7.1 route budgets enforced | NOT STARTED | | | | |
 | 7.2 import audit /pos, /checkout | NOT STARTED | | | | Audited: Supabase 52.6KB gz + Dexie 30.2KB gz on every route. NOT the bottleneck — see the note |
-| 7.3 precache tiering | NOT STARTED | | | | |
+| 7.3 precache tiering | DONE | | **3.27 MB** | **2.94 MB** | −335 KB per device per deploy. recharts out, ZXing deliberately in. 4th SW gate, mutation-checked |
 | 8.1 PostgREST cap audit | DONE | 5300c53 | | | **No money figure is truncated.** One real gap found, on the public menu |
 | 8.2 IndexedDB read strategy | DONE | 0e518f5 | | | Premise no longer holds: 33ms read, 0 long tasks. Measured, not done |
 | 8.3 pagination gaps | DONE | 0e518f5 | truncated at 1,000 | **1,304 of 1,304** | `.limit()` above 1,000 is a LIE. Two live truncations fixed + a gate |
@@ -919,6 +919,70 @@ live rows is ~18x the catalogue. That is the shape of an import that deletes
 everything and re-inserts it. If so it also rewrites every `updated_at`, which
 would defeat the delta sync in `products/refresh.ts` and make every device
 re-pull the whole catalogue after every import. Worth confirming before Phase 7.
+
+### 7.3 finding — a dynamic import is not an unprecached one (2026-09-01)
+
+`next/dynamic` keeps a library out of the initial **bundle**. It does nothing
+about the **precache manifest**, which is built from the whole build output — so
+a shop still downloads it on every deploy, just at a different moment. The PDF
+exporter was fixed for this once already; two more were still there.
+
+Measured on a real build: **119 entries, 3.27 MB uncompressed**, 2.91 MB of it
+JavaScript across 97 chunks. The two largest were both dynamic imports:
+
+| Chunk | Size | What |
+|---|---:|---|
+| `1852` + `4087` | 560 KB | ZXing |
+| `123` | 345 KB | recharts + victory-vendor + d3 |
+
+**recharts is now excluded; ZXing deliberately is not.** The difference is
+whether the thing can be useful offline, and it is worth stating because the two
+look identical from the bundle graph:
+
+- Every screen that draws a chart takes its data from the network — the cash
+  page's register performance from `get_register_performance`, the analytics
+  panel from `/api/transactions/analytics`. **Offline there is nothing to
+  plot.** Precaching the plotting library cannot help a shop; runtime caching
+  picks it up on first use, which is necessarily online.
+- Mobile is camera-first, and scanning offline is core to the product. ZXing
+  stays precached on purpose. It is 560 KB — the largest single thing left — and
+  that is a deliberate purchase, not an oversight.
+
+The mechanism is the one 7.3's predecessor established: webpack names split
+chunks by content hash, which no stable pattern in `workboxOptions.exclude` can
+match, so a `splitChunks` cacheGroup gives the group a fixed name (`charts`) and
+the exclude entry matches that. **Both halves are required** — losing either
+silently puts the 345 KB back, which is why there is now a fourth gate in
+`verify-sw.mjs`, mutation-checked like the rest.
+
+The group is `chunks: "async"`, so it can only ever collect dynamically imported
+code and cannot drag anything into the initial bundle. Its package list is what
+recharts 3 actually pulls in; `clsx` and `use-sync-external-store` are recharts
+dependencies too and are deliberately excluded from it because the app shares
+them.
+
+### 5.4 — assessed, and most of it was already done (2026-09-01)
+
+Of 5.3's native-feel list, everything except two items was already in
+`globals.css`: `-webkit-touch-callout: none`, `user-select: none` on controls
+with `text` re-enabled for content, `-webkit-tap-highlight-color: transparent`,
+`overscroll-behavior: none` on the viewport and `contain` on inner scrollers.
+
+**Scroll restoration: the case it was written for does not exist.** The
+assumption was a cashier scrolling deep into inventory, opening a product, and
+being thrown back to the top. Opening a product is a `<Dialog>`, not a route
+change — the virtualized list never unmounts and scroll is already preserved.
+What remains is switching bottom-tab routes and returning, which resets scroll;
+real, but small, and returning to inventory usually means a new search anyway.
+
+**View transitions: declined.** React 19.2's `ViewTransition` is still
+experimental and needs `experimental.viewTransition` in `next.config.ts`.
+Phase 5's exit criteria are the wait register, a settled-state visual diff, and
+the `perf.sale` / `perf.scan` field percentiles — and a cross-fade moves none of
+them. It *adds* paint latency on the money path, on a till whose desktop
+keyboard flow is explicitly not to be disturbed. Enabling an experimental
+rendering flag on a live POS to make navigation prettier is the trade this plan
+exists to refuse.
 
 ### P-2 finding — RESOLVED (2026-08-30)
 
