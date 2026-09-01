@@ -839,7 +839,7 @@ these three it is achievable only in a real shop, on one store, watched.
 | 2.2b finish the serial-GET conversion | DONE | e73d864 | 543ms each | **325 / 275ms** | `features` and `kitchen/tickets`. Found by measuring, not by the survey |
 | 2.6 cash overview RPC (migration 039) | DONE | 9d66ba4 | **849ms** | **291ms** | −66%. Fallback proven by pointing at a missing RPC |
 | 2.7 register-requests, 3 trips to 1 | DONE | 4e7e184 | **817ms** | **274ms** | −66%. The write stopped being a prerequisite |
-| 2.5 edge runtime pass | NOT STARTED | | | | |
+| 2.5 edge runtime pass | DONE | | | **declined** | Measured: ~260ms of the ~280ms round trip is DISTANCE. Edge cannot touch it. See the note |
 | 3.1 data primitive | DONE | a36e978 | | | `src/lib/data/`. 27 harness tests. No screen migrated yet — that is 3.2 |
 | 3.0 parallelise the boot delta+count | DONE | | ~600ms serial | **~300ms parallel** | Brought forward from 0.3's finding |
 | 3.2 migrate /pos | DONE | 17edb7b | 6 menu requests per remount | **3** | Closes audit **P1-12** + a second gap it uncovered in the feature flags |
@@ -1052,6 +1052,78 @@ be tracked down.
 **iOS is unblocked** (WebKit installed 2026-08-31), so invariant #24 is
 satisfied for the flows written so far. The row stays PARTIAL because flows
 5-8 — cash shift, inventory, CSV import, kitchen — are still to write.
+
+### 2.5 the edge runtime pass — declined, and what the measurement found instead (2026-09-01)
+
+The premise: `/api/health` is Edge because as a Node function it was "the app's
+RTT floor at ~200ms plus a cold start", so other routes might follow it.
+
+**They should not, and the reason is the largest single performance fact in this
+application.**
+
+#### Where the ~270ms floor actually goes
+
+Every route this session brought to "the one-round-trip floor" sits at ~270ms.
+Supabase reports its own upstream time in `x-envoy-upstream-service-time`, which
+separates *time inside Supabase* from *time on the wire*. On an **already-open
+keep-alive connection**, so no TCP or TLS setup is counted:
+
+| Probe | Total | Inside Supabase | Network |
+|---|---:|---:|---:|
+| one row by primary key | 279 ms | **19 ms** | **~260 ms** |
+| count only | 366 ms | 3 ms | ~363 ms |
+| 50 rows | 277 ms | 6 ms | ~271 ms |
+| `get_cash_overview` RPC | 280 ms | 9 ms | ~271 ms |
+
+**The database does its work in 3–19 ms. Everything else is distance.**
+
+Calibrated against known hosts from the same machine, same moment, warm
+connections: **6 ms** to `cloudflare.com` (the Beirut PoP — `CF-Ray: …-BEY`) and
+**42 ms** to `google.com`. So the local network is fine; the ~260 ms is the trip
+from Cloudflare's Beirut edge to the Supabase origin and back.
+
+#### Why that rules Edge out rather than in
+
+- Edge cannot shorten the origin distance. It moves *compute*, and the compute
+  is 19 ms.
+- For a DB-touching route it can make things **worse**: putting the function at
+  a PoP near the shop while the database stays where it is adds a hop rather
+  than removing one.
+- `/api/health` is the exception that proves it — it touches **no database**, so
+  for that one route the function's own invocation cost is the whole cost, and
+  Edge is exactly right. CLAUDE.md's warning that importing a Supabase client
+  there "silently drops it back to Node" is the same fact from the other side.
+
+So: **no route moves to Edge.** Recorded as a decision, with numbers, rather
+than left NOT STARTED for someone to try later.
+
+#### What the measurement found instead
+
+Everything removed server-side this session — `cash-shifts` 849→291,
+`register-requests` 817→274, `kitchen/tickets` 543→271, `stores/features`
+543→270 — saved ~270 ms per removed round trip **because each round trip is
+~260 ms of distance**. That work was worth doing and is done; the distance
+itself is now the floor under all of it.
+
+Two things follow, and both are the owner's call because both are
+infrastructure rather than code:
+
+1. **No Vercel region is configured.** There is no `vercel.json` and no
+   `preferredRegion` anywhere in `src/`, so every route but `/api/health` runs
+   Node in Vercel's **default region (`iad1`, Washington DC)**. A shop in Beirut
+   therefore crosses to Washington, which then talks to Supabase wherever it
+   is, and back. Pinning `preferredRegion` to the Supabase region removes that
+   leg outright.
+2. **The Supabase project itself appears to be far from Lebanon.** ~260 ms RTT
+   is not a European origin; Beirut→Frankfurt is nearer 60–70 ms. If the project
+   were in `eu-central-1`, *every* API call in the app would drop by roughly
+   200 ms — which is larger than the sum of every server-side saving in this
+   plan.
+
+Neither is a code change and neither is safe to do speculatively: moving a
+Supabase project's region migrates the whole database, and pinning a Vercel
+region to the wrong one makes things worse. Both are recorded here with the
+evidence so the decision can be made on numbers.
 
 ### 4.3 History virtualization — measured, and declined with a threshold (2026-09-01)
 
