@@ -860,7 +860,7 @@ these three it is achievable only in a real shop, on one store, watched.
 | 7.1 route budgets enforced | NOT STARTED | | | | |
 | 7.2 import audit /pos, /checkout | NOT STARTED | | | | Audited: Supabase 52.6KB gz + Dexie 30.2KB gz on every route. NOT the bottleneck — see the note |
 | 7.3 precache tiering | NOT STARTED | | | | |
-| 8.1 PostgREST cap audit | NOT STARTED | | | | |
+| 8.1 PostgREST cap audit | DONE | | | | **No money figure is truncated.** One real gap found, on the public menu |
 | 8.2 IndexedDB read strategy | NOT STARTED | | | | |
 | 8.3 pagination gaps | NOT STARTED | | | | |
 | 9.1 promote permanent gates | NOT STARTED | | | | |
@@ -1050,6 +1050,48 @@ be tracked down.
 **iOS is unblocked** (WebKit installed 2026-08-31), so invariant #24 is
 satisfied for the flows written so far. The row stays PARTIAL because flows
 5-8 — cash shift, inventory, CSV import, kitchen — are still to write.
+
+### 8.1 PostgREST cap audit — the money paths are clean (2026-09-01)
+
+Every `.from(...).select(...)` in `src/app/api` and `src/lib` that is not a
+`.single()`, a write, or a count: **114 query sites, 14 without an explicit
+`.limit()`**. Each of the 14 checked by hand.
+
+**The headline is a negative result, and it is the valuable part: no money
+figure is truncated anywhere.** The class of bug that silently mis-stated
+revenue and profit for a year is absent from the paths that carry money:
+
+| Read | Why it is safe |
+|---|---|
+| `transactions/analytics` → products (the cost map) | Chunked by `ID_CHUNK` and looped — explicitly handled |
+| Shift and register totals | RPCs (`get_shift_totals`, `get_unassigned_totals`, `get_register_performance`) — aggregated in Postgres |
+| `/api/transactions` | Cursor-paginated, `.limit(limit + 1)` |
+| `/api/admin/activity` | Cursor-paginated |
+| `recipes` / `combos` ownership checks | `.in("id", ids)` over ONE recipe's components |
+| `cash_adjustments`, clash checks, `store_users`, `product_categories`, `product_favorites`, `my-shift` | Bounded by `.in()` over a handful of ids, or tens of rows by nature |
+
+#### The one real gap: the public menu
+
+`GET /api/public/menu/[token]` read `recipe_components` with
+`.in("menu_product_id", …)` over up to **1000** products and **no limit**. Past
+1000 components PostgREST drops the tail, so on a store with many recipes some
+items quietly lose their "comes with" lines on the customer-facing menu, with
+nothing anywhere saying so.
+
+Bounded at `MAX_COMPONENTS = 2000` and, more importantly, **noticed**: hitting
+the cap logs an error naming the store. A menu missing some ingredient lines is
+still a usable menu, so this does not fail the request — but it must not be
+invisible, which is the whole lesson of the analytics bug.
+
+#### And one cap worth naming
+
+`MAX_ITEMS = 1000` on the same route is **exactly PostgREST's own implicit
+cap**. That is now written down, because raising it without adding pagination
+would change nothing: the extra rows would be dropped by PostgREST instead of
+by us, which is the silent version of the same truncation.
+
+**Verified:** 124/124 contract, 23/23 E2E desktop, typecheck clean, lint
+unchanged at 208, build green.
 
 ### Where the time actually is, after Phase 4 (2026-09-01)
 

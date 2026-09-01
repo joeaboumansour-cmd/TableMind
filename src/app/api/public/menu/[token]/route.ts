@@ -39,7 +39,27 @@ import { compareCategories } from "@/lib/categories/types";
 import { SELL_RATE } from "@/lib/utils/format";
 
 /** PostgREST caps an unbounded select at 1000; state the limit rather than discover it. */
+/**
+ * Most products a public menu will show.
+ *
+ * 1000 is not an arbitrary round number: it is exactly **PostgREST's own
+ * implicit cap**, so this limit is the cap made explicit rather than a policy
+ * on top of it. Raising it without adding pagination would change nothing —
+ * the extra rows would be dropped by PostgREST instead of by us, which is the
+ * silent version of the same truncation.
+ */
 const MAX_ITEMS = 1000;
+
+/**
+ * Most recipe components to read for the menu's "comes with" lines.
+ *
+ * This query was UNBOUNDED. It is `.in(menu_product_id, …)` over up to
+ * MAX_ITEMS products, so a store with many recipes could exceed PostgREST's
+ * 1000-row cap and have the tail dropped — some sandwiches quietly losing
+ * their ingredient list on the customer-facing menu, with nothing anywhere
+ * saying so. Bounded and noticed now: audit 8.1.
+ */
+const MAX_COMPONENTS = 2000;
 
 function notFound() {
   // 404 for "no such token", "menu not published" and "malformed token"
@@ -114,8 +134,19 @@ export async function GET(
           .eq("store_id", storeId)
           .in("menu_product_id", productIds)
           .order("sort_order", { ascending: true })
+          .limit(MAX_COMPONENTS)
       ).data || []
     : [];
+
+  // Say so rather than serving a quietly incomplete menu. Nothing here is worth
+  // failing the request over — a menu missing some "comes with" lines is still
+  // a usable menu — but it must not be invisible.
+  if (recipeRows.length >= MAX_COMPONENTS) {
+    console.error(
+      `[Menu] recipe_components hit MAX_COMPONENTS (${MAX_COMPONENTS}) for store ${storeId}; ` +
+        "some items will be missing their ingredient lines. Paginate this read."
+    );
+  }
 
   // Ingredient NAMES only — never their stock or cost.
   const ingredientIds = Array.from(
