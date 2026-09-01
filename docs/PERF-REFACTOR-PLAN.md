@@ -844,8 +844,8 @@ these three it is achievable only in a real shop, on one store, watched.
 | 3.4 migrate /transactions | DONE | deb9c71 | 2 fetches per mount | **1** | **Migration assessed and deliberately NOT done** — see the note. Fixed the real defect instead, which also fixed /kitchen |
 | 3.4b feature flags onto the data layer | DONE | bdcd675 | 3 flag fetches per walk | **1** | Found and fixed audit **P1-13** — the cash page bounced on a cold device |
 | 3.5 migrate /pos/cash + /kitchen | DONE | 51020da | 0 duplicates | **0** | **Measured: nothing left to remove.** Migration assessed and deliberately not done — see the note |
-| 4.0 perf.boot was measuring the wrong moment | DONE | | "167ms" | **970ms honest** | The metric AND a real defect: the till rendered with an empty catalogue |
-| 4.2 virtualize the till grid | DONE | | 12,666 DOM nodes · 833ms blocking | **372 · 0ms** | boot 970→283ms, scan 37→27ms. Costs +9.4KB gz on /pos, recorded |
+| 4.0 perf.boot was measuring the wrong moment | DONE | e164eef | "167ms" | **970ms honest** | The metric AND a real defect: the till rendered with an empty catalogue |
+| 4.2 virtualize the till grid | DONE | e164eef | 12,666 DOM nodes · 833ms blocking | **372 · 0ms** | boot 970→283ms, scan 37→27ms. Costs +9.4KB gz on /pos, recorded |
 | 4.1 memo boundaries | NOT STARTED | | | | Measured: not the bottleneck. Plain scan was already 37ms |
 | 4.3 History virtualization | NOT STARTED | | | | Page size is 50; `loadMore` appends. Lower value than the till grid was |
 | 4.3 component split | NOT STARTED | | | | |
