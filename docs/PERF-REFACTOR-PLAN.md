@@ -835,7 +835,9 @@ these three it is achievable only in a real shop, on one store, watched.
 | 2.1 atomic sale RPC | DONE | | **1226ms** median | **307ms** median | **-75%.** Closes audit P1-4 and P1-11 |
 | 2.2 route kernel | DONE | | 576-594ms | **303-318ms** | Closed audit P0-2; 4 GETs converted to one wave |
 | 2.3 generated DB types | NOT STARTED | | | | |
-| 2.4 index & query audit | NOT STARTED | | | | |
+| 2.4 index & query audit | DONE | | 2 duplicate indexes | **1 dropped, 2 FKs covered** | Migration 040. Driven by production `idx_scan`, never reset. **Two of my own recommendations were wrong until measured** — see the note |
+| R.1 Supabase Seoul -> Ireland | DONE | 63ef865 | **285ms** | **81ms** | −70% on every call. Measured from Beirut, warm connection. `docs/REGION-MIGRATION.md` |
+| R.2 Vercel pinned to dub1 | DONE | bda0640 | iad1 | **dub1** | Colocated with the DB. Takes effect on the next production deploy |
 | 2.2b finish the serial-GET conversion | DONE | e73d864 | 543ms each | **325 / 275ms** | `features` and `kitchen/tickets`. Found by measuring, not by the survey |
 | 2.6 cash overview RPC (migration 039) | DONE | 9d66ba4 | **849ms** | **291ms** | −66%. Fallback proven by pointing at a missing RPC |
 | 2.7 register-requests, 3 trips to 1 | DONE | 4e7e184 | **817ms** | **274ms** | −66%. The write stopped being a prerequisite |
@@ -869,6 +871,54 @@ these three it is achievable only in a real shop, on one store, watched.
 | 9.2 final numbers | DONE | b7330df | see the note | | Assembled from one build. Two things are honestly NOT comparable — said so |
 | 9.3 keep-or-delete decision | NOT STARTED | | | | Branch A expected; tag first either way |
 | 9.4 update CLAUDE.md §8 + audit | NOT STARTED | | | | §8 becomes false if kept |
+
+### 2.4 finding — an unused-looking index is not an unused index
+
+`pg_stat_user_indexes` on production, whose statistics have **never been
+reset**, so the scan counts cover the life of the app. `products` is the table
+worth caring about: **96,682 inserts and 139,592 deletes against 7,491 live
+rows**, so every redundant index there is paid for ~236,000 times.
+
+**Dropped one thing.** `idx_products_barcode_store` (001) and
+`idx_products_store_barcode_lookup` (019) are the same index — `(store_id,
+barcode)`, no `WHERE` on either. `019_performance_indexes.sql` carries the
+comment *"idx_products_barcode_store already exists from initial schema"*
+directly above the line that recreates it. The planner can only use one and
+split between them arbitrarily, 1,477 scans to 15.
+
+**Two things I recommended dropping, and was wrong about both.** Recording them
+because the reasoning that produced them was sound and still wrong, and the next
+person will reproduce it:
+
+- `idx_transactions_created_at_desc` is `(created_at DESC)` with no `store_id`,
+  while every application query is store-scoped — so it reads as dead weight
+  costing a write on every sale. It has **2,952 scans**. The cross-store readers
+  are the admin console and the retention cleanup, neither of which looks like
+  "the application" when you are reading `src/`.
+
+- The three `idx_cash_shifts_one_open_*` indexes have **zero scans**, and
+  dropping them would have been the worst change in this whole refactor. They
+  are partial UNIQUE indexes: a unique index is used to ENFORCE on write, not
+  scanned on read, so `idx_scan = 0` is what a perfectly healthy one looks like.
+  They are what make "one open shift per register" and "a cashier is on at most
+  one drawer" true. Nothing would have failed loudly.
+
+> **`idx_scan = 0` means "never used to look something up". It does not mean
+> "unused".** Check `indisunique` before believing that query, the same way
+> `evaluateReconcile()` refuses to delete without positive proof.
+
+**Added two FK indexes** — `recipe_components(ingredient_product_id)` and
+`combo_components(item_product_id)`. Both are `ON DELETE RESTRICT`, so every
+product delete must prove nothing references it, and without an index that proof
+is a sequential scan. Both tables are tiny today (9 and 4 rows) so this changes
+nothing measurable now; the cost is O(deletes x rows) and only one of those
+factors is small.
+
+**Open question this raised, not yet answered:** 139,592 deletes against 7,491
+live rows is ~18x the catalogue. That is the shape of an import that deletes
+everything and re-inserts it. If so it also rewrites every `updated_at`, which
+would defeat the delta sync in `products/refresh.ts` and make every device
+re-pull the whole catalogue after every import. Worth confirming before Phase 7.
 
 ### P-2 finding — RESOLVED (2026-08-30)
 
