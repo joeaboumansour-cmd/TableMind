@@ -865,7 +865,7 @@ these three it is achievable only in a real shop, on one store, watched.
 | 8.1 PostgREST cap audit | DONE | 5300c53 | | | **No money figure is truncated.** One real gap found, on the public menu |
 | 8.2 IndexedDB read strategy | NOT STARTED | | | | |
 | 8.3 pagination gaps | NOT STARTED | | | | |
-| 9.1 promote permanent gates | DONE | | 2 gates | **3 gates, 7 checks** | `verify:invariants`. All 7 mutation-checked. Found 2 real violations |
+| 9.1 promote permanent gates | DONE | 2569e42 | 2 gates | **3 gates, 7 checks** | `verify:invariants`. All 7 mutation-checked. Found 2 real violations |
 | 9.2 final numbers | NOT STARTED | | | | Per platform |
 | 9.3 keep-or-delete decision | NOT STARTED | | | | Branch A expected; tag first either way |
 | 9.4 update CLAUDE.md §8 + audit | NOT STARTED | | | | §8 becomes false if kept |
