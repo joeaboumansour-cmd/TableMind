@@ -843,13 +843,13 @@ these three it is achievable only in a real shop, on one store, watched.
 | 3.3 migrate /pos/products | DONE | fb28138 | 9 menu requests per walk | **3** | Legacy loaders deleted. Also fixed a pre-existing race in the queued-sale test |
 | 3.4 migrate /transactions | DONE | deb9c71 | 2 fetches per mount | **1** | **Migration assessed and deliberately NOT done** — see the note. Fixed the real defect instead, which also fixed /kitchen |
 | 3.4b feature flags onto the data layer | DONE | bdcd675 | 3 flag fetches per walk | **1** | Found and fixed audit **P1-13** — the cash page bounced on a cold device |
-| 3.5 migrate /pos/cash + /kitchen | DONE | | 0 duplicates | **0** | **Measured: nothing left to remove.** Migration assessed and deliberately not done — see the note |
+| 3.5 migrate /pos/cash + /kitchen | DONE | 51020da | 0 duplicates | **0** | **Measured: nothing left to remove.** Migration assessed and deliberately not done — see the note |
 | 4.1 memo boundaries | NOT STARTED | | | | |
 | 4.2 History virtualization | NOT STARTED | | | | |
 | 4.3 component split | NOT STARTED | | | | |
 | 5.1 wait register | NOT STARTED | | | | Table lives in this file |
 | 5.2 optimistic + spinner rules | NOT STARTED | | | | |
-| 5.3 iOS launch screens | DONE | | blank white boot | **branded splash** | 15 devices, 0 bytes of precache. Brought forward — it was the biggest unclaimed win |
+| 5.3 iOS launch screens | DONE | 51020da | blank white boot | **branded splash** | 15 devices, 0 bytes of precache. Brought forward — it was the biggest unclaimed win |
 | 5.4 view transitions + scroll restore | NOT STARTED | | | | |
 | 6.1 storage grant, per platform | NOT STARTED | | | | Install = durability on iOS |
 | 6.2 quota & eviction order | NOT STARTED | | | | Queued sales never shed |
