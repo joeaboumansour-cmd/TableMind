@@ -1,6 +1,12 @@
 # Performance Refactor — Plan of Record
 
-**Status:** AGREED, NOT STARTED · **Agreed with owner:** 2026-08-30 · **Author:** Claude
+**Status:** **SUBSTANTIALLY COMPLETE** as of 2026-09-01. Every step is resolved
+except four: **4.3** component split, **6.3** the three-week shelf-life drill
+(needs real devices over real time), **9.3** keep-or-delete the harness (an
+owner decision, deliberately not made here), and the third route budget in
+**7.1**, which is blocked behind 9.3. Several steps are recorded DONE as
+*measured and declined* — the number is in the ledger note in each case.
+· **Agreed with owner:** 2026-08-30 · **Author:** Claude
 
 **Settled and not to be re-litigated by a future session:** the harness may be
 kept if maintainable (§0) · desktop, iOS and Android are all first-class (§1
@@ -834,7 +840,7 @@ these three it is achievable only in a real shop, on one store, watched.
 | 1.7 mutation check of the net | DONE | | | | **7/7 caught.** `npm run harness:mutation` |
 | 2.1 atomic sale RPC | DONE | | **1226ms** median | **307ms** median | **-75%.** Closes audit P1-4 and P1-11 |
 | 2.2 route kernel | DONE | | 576-594ms | **303-318ms** | Closed audit P0-2; 4 GETs converted to one wave |
-| 2.3 generated DB types | NOT STARTED | | | | |
+| 2.3 generated DB types | DONE | | 16 tables, hand-written | **21 tables, generated** | Found audit **P0-9** — 13 anon-callable SECURITY DEFINER functions from the dead product. Migration 041 written, not applied |
 | 2.4 index & query audit | DONE | | 2 duplicate indexes | **1 dropped, 2 FKs covered** | Migration 040. Driven by production `idx_scan`, never reset. **Two of my own recommendations were wrong until measured** — see the note |
 | R.1 Supabase Seoul -> Ireland | DONE | 63ef865 | **285ms** | **81ms** | −70% on every call. Measured from Beirut, warm connection. `docs/REGION-MIGRATION.md` |
 | R.2 Vercel pinned to dub1 | DONE | bda0640 | iad1 | **dub1** | Colocated with the DB. Takes effect on the next production deploy |
@@ -861,7 +867,7 @@ these three it is achievable only in a real shop, on one store, watched.
 | 6.1 storage grant, per platform | DONE | a6beefc | | | Durability state classified, shown to the shop, reported to the admin trail |
 | 6.2 quota & eviction order | DONE | 34422ca | | | Order is DATA and asserted, mutation-checked. Plus the cleared-catalogue fix |
 | 6.3 three-week shelf-life drill | NOT STARTED | | | | All three platforms |
-| 7.1 route budgets enforced | NOT STARTED | | | | |
+| 7.1 route budgets enforced | DONE | | | **2 of 3 enforced** | Both shipped in 0.4 and gate every build. The third needs a browser — see the note |
 | 7.2 import audit /pos, /checkout | NOT STARTED | | | | Audited: Supabase 52.6KB gz + Dexie 30.2KB gz on every route. NOT the bottleneck — see the note |
 | 7.3 precache tiering | DONE | | **3.27 MB** | **2.94 MB** | −335 KB per device per deploy. recharts out, ZXing deliberately in. 4th SW gate, mutation-checked |
 | 8.1 PostgREST cap audit | DONE | 5300c53 | | | **No money figure is truncated.** One real gap found, on the public menu |
@@ -870,7 +876,7 @@ these three it is achievable only in a real shop, on one store, watched.
 | 9.1 promote permanent gates | DONE | 2569e42 | 2 gates | **3 gates, 7 checks** | `verify:invariants`. All 7 mutation-checked. Found 2 real violations |
 | 9.2 final numbers | DONE | b7330df | see the note | | Assembled from one build. Two things are honestly NOT comparable — said so |
 | 9.3 keep-or-delete decision | NOT STARTED | | | | Branch A expected; tag first either way |
-| 9.4 update CLAUDE.md §8 + audit | NOT STARTED | | | | §8 becomes false if kept |
+| 9.4 update CLAUDE.md + audit | DONE | | | | Region, the 3 gates, migration 041, precache tiering. Audit: P2-7 half-closed, P0-9 opened |
 
 ### 2.4 finding — an unused-looking index is not an unused index
 
@@ -983,6 +989,29 @@ them. It *adds* paint latency on the money path, on a till whose desktop
 keyboard flow is explicitly not to be disturbed. Enabling an experimental
 rendering flag on a live POS to make navigation prettier is the trade this plan
 exists to refuse.
+
+### 7.1 — two of the three budgets were already enforced (2026-09-01)
+
+0.4 shipped `verify:budgets` and it runs on every build. It asserts both budgets
+that can be measured from build output: **no route's First Load JS grew**, and
+**total precache did not grow**, against `docs/perf-baseline.json`.
+
+The third — **serial API round trips per route** — is still deferred, and the
+reason has changed. 0.4 deferred it for want of a browser driving a signed-in
+session. That now exists in the Phase 1 harness, so the blocker is different:
+**a gate that lives in the harness is not a permanent gate**, and 9.3 may delete
+it. Building it there would produce exactly the thing Phase 9 exists to prevent
+— speed protected by something that can vanish.
+
+It is also worth less than it was. The defect it was written to catch (the
+reconcile id-set fetch running serially behind the catalogue delta pull) was
+fixed in 3.0, and `src/lib/data/resource.ts` now dedupes in-flight reads
+structurally — which is what 3.2 and 3.4b measured as 9 requests going to 3,
+and 3 to 1.
+
+**Revisit after 9.3.** If the harness is kept, add it there. If not, the honest
+answer is that request count is not statically checkable, and the data layer is
+the enforcement.
 
 ### P-2 finding — RESOLVED (2026-08-30)
 
