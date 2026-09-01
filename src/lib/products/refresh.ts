@@ -151,6 +151,32 @@ export function getLastSyncKey(storeId: string): string {
   return `products_last_sync_${storeId}`;
 }
 
+/**
+ * Has this device EVER successfully pulled this store's catalogue?
+ *
+ * The watermark's existence is the proof, and it is written only after a pull
+ * has actually returned rows — the same "the cache KEY is the signal" rule as
+ * `hasCachedRecipes()`.
+ *
+ * The distinction it draws is the one that keeps costing this codebase money:
+ * an empty `products_cache` means either "this shop sells nothing" or "this
+ * device has not been told yet", and those are opposite instructions to a
+ * cashier holding a barcode. A device whose storage iOS cleared after seven
+ * idle days looks exactly like a brand-new one, which is why this asks about
+ * knowledge rather than trying to detect the clear.
+ */
+export function hasEverSyncedProducts(storeId: string): boolean {
+  if (typeof window === "undefined" || !storeId) return false;
+  try {
+    return (
+      localStorage.getItem(getLastSyncKey(storeId)) !== null ||
+      localStorage.getItem("products_last_sync") !== null
+    );
+  } catch {
+    return false;
+  }
+}
+
 function readLastSync(storeId: string): number | null {
   if (typeof window === "undefined") return null;
   try {

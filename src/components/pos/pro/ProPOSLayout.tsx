@@ -81,6 +81,14 @@ interface ProPOSLayoutProps {
   menuDataReady: boolean;
   /** Wait — briefly, and capped — for the menu data. See `lib/pos/menuData`. */
   awaitMenuData: () => Promise<{ recipes: RecipeMap; combos: ComboMap }>;
+  /**
+   * Does this device know what the shop sells?
+   *
+   * False means the catalogue has never reached this device — a new till, or
+   * one whose storage was cleared — NOT that the shop sells nothing. The
+   * unknown-barcode prompt below reads very differently in the two cases.
+   */
+  catalogueKnown: boolean;
   /** Ingredient names for the modifier sheet, by product id. */
   ingredientNames: Map<string, string>;
   /** Every ingredient in inventory — anything can be added to anything. */
@@ -106,6 +114,7 @@ export default function ProPOSLayout({
   combos,
   menuDataReady,
   awaitMenuData,
+  catalogueKnown,
   ingredientNames,
   ingredients,
   ingredientPrices,
@@ -661,7 +670,37 @@ export default function ProPOSLayout({
             )}
 
             {unknownBarcode &&
-              (canEditInventory ? (
+              (!catalogueKnown ? (
+                /* The catalogue has never reached this device, so "not in the
+                   catalogue" is not something we know — it is something we have
+                   not been told. Offering the create-a-product fields here is
+                   how a till ends up with a duplicate of something the shop
+                   already sells, priced by guess, on a device that is about to
+                   download the real one.
+
+                   An absent answer is not a negative answer — the same rule as
+                   evaluateReconcile(), P1-12 and P1-13. */
+                <div className="mt-2 flex items-center gap-3 rounded-2xl border border-amber-500/30 bg-amber-500/10 p-3">
+                  <ScanBarcode className="h-4 w-4 flex-none text-primary" aria-hidden />
+                  <p className="min-w-0 flex-1 text-xs text-muted-foreground">
+                    <span className="font-bold text-foreground tnum">{unknownBarcode}</span>{" "}
+                    could not be checked — this device has not downloaded the
+                    product list yet. Connect to the internet and try again
+                    before adding it as a new product.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setUnknownBarcode(null);
+                      searchInputRef.current?.focus();
+                    }}
+                    aria-label="Dismiss"
+                    className="tap flex h-8 w-8 flex-none items-center justify-center rounded-lg text-muted-foreground hover:text-foreground"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+              ) : canEditInventory ? (
                 <UnknownBarcodePrompt
                   // Remounts on a new code, which is what clears the half-typed
                   // name and price from the previous one.

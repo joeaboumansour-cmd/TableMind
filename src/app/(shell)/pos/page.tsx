@@ -52,6 +52,7 @@ import { categoriesResource } from "@/lib/categories/load";
 import { recipesResource } from "@/lib/recipes/load";
 import { combosResource } from "@/lib/combos/load";
 import { useResource } from "@/lib/data/useResource";
+import { hasEverSyncedProducts } from "@/lib/products/refresh";
 import { awaitMenuData, FLAG_POLL_MS, MENU_HOLD_MS, type MenuData } from "@/lib/pos/menuData";
 import ProPOSLayout from "@/components/pos/pro/ProPOSLayout";
 import MenuBrowser from "@/components/pos/pro/MenuBrowser";
@@ -143,6 +144,22 @@ export default function POSPage() {
    */
   const menuDataReady =
     flagsResolved && (!menuEnabled || (recipesKnown && combosKnown));
+
+  /**
+   * Does this device KNOW what the shop sells?
+   *
+   * An empty catalogue means one of two opposite things — "this shop sells
+   * nothing" or "this device has not been told yet" — and the till gives the
+   * cashier opposite instructions for each. Getting it wrong invites them to
+   * create a product the store already has.
+   *
+   * `products.length > 0` settles it outright; otherwise the sync watermark
+   * does. A device whose storage iOS cleared after seven idle days looks
+   * exactly like a brand-new one, so this asks about knowledge rather than
+   * trying to detect the clear.
+   */
+  const catalogueKnown =
+    products.length > 0 || hasEverSyncedProducts(user?.storeId ?? "");
 
   /**
    * The latest of everything the hold below reads.
@@ -1264,6 +1281,7 @@ export default function POSPage() {
         combos={combos}
         menuDataReady={menuDataReady}
         awaitMenuData={holdForMenuData}
+        catalogueKnown={catalogueKnown}
         ingredientNames={ingredientNames}
         ingredients={ingredientProducts}
         ingredientPrices={ingredientPrices}

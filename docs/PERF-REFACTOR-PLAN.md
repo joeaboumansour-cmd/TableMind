@@ -856,8 +856,8 @@ these three it is achievable only in a real shop, on one store, watched.
 | 5.2 optimistic + spinner rules | NOT STARTED | | | | |
 | 5.3 iOS launch screens | DONE | 51020da | blank white boot | **branded splash** | 15 devices, 0 bytes of precache. Brought forward — it was the biggest unclaimed win |
 | 5.4 view transitions + scroll restore | NOT STARTED | | | | |
-| 6.1 storage grant, per platform | NOT STARTED | | | | Install = durability on iOS |
-| 6.2 quota & eviction order | NOT STARTED | | | | Queued sales never shed |
+| 6.1 storage grant, per platform | NOT STARTED | | | | Install = durability on iOS. Grant is asked for; the visible durability state is still to build |
+| 6.2 quota & eviction order | DONE | | | | Order is DATA and asserted, mutation-checked. Plus the cleared-catalogue fix |
 | 6.3 three-week shelf-life drill | NOT STARTED | | | | All three platforms |
 | 7.1 route budgets enforced | NOT STARTED | | | | |
 | 7.2 import audit /pos, /checkout | NOT STARTED | | | | Audited: Supabase 52.6KB gz + Dexie 30.2KB gz on every route. NOT the bottleneck — see the note |
@@ -1052,6 +1052,71 @@ be tracked down.
 **iOS is unblocked** (WebKit installed 2026-08-31), so invariant #24 is
 satisfied for the flows written so far. The row stays PARTIAL because flows
 5-8 — cash shift, inventory, CSV import, kitchen — are still to write.
+
+### 6.2 eviction discipline, and an empty catalogue that lied (2026-09-01)
+
+#### The order is data now, and asserted
+
+`freeExpendableSpace()` walks `EVICTION_ORDER`, an exported constant, instead of
+three hand-written blocks. Phase 6.2 asks for "queued sales are never shed" to
+be **asserted**, and a comment beside the code is exactly what a future edit does
+not have to read.
+
+`harness/unit/eviction-order.test.ts` — 5 tests — pins that `offline_queue` and
+`products_cache` are absent from the order, that the order itself is
+`activity_buffer → transactions_cache → pending_writes`, and that the
+`pending_writes` step touches **only** `favorite_add`/`favorite_remove` — never
+`cash_shift_open`, `cash_adjustment`, `product_upsert` or the other queued money
+writes that share that table.
+
+**Mutation-checked**: adding `offline_queue` to the order turns 2 of the 5 red.
+A full disk is not hypothetical — every till writes completed sales to IndexedDB
+before the network sees them, and `withQuotaRetry` calls this the moment a write
+hits `QuotaExceededError`.
+
+> **The plan's suggested order is declined, on purpose.** §6.2 says "activity
+> buffer → transaction history cache → **product cache**". The existing code
+> deliberately omitted the third with a better argument than the plan's, and it
+> is kept: `products_cache` would free the most, which is exactly the trap — it
+> is also the only thing letting the till sell while offline, so dropping it to
+> save one row takes the whole shop down instead of one write. Now recorded in
+> `NEVER_EVICTED` rather than left as a comment to be overruled by someone
+> reading the plan.
+
+#### "Detect a cleared origin and re-seed rather than presenting an empty catalogue as truth"
+
+The interesting half of that sentence turns out not to be the detection. **A
+device whose storage iOS cleared after seven idle days is indistinguishable from
+a brand-new one** — both have nothing, and nothing is left to compare against.
+So the question was never "was this cleared", it is "does this device *know* what
+the shop sells".
+
+An empty `products_cache` means one of two opposite things — *this shop sells
+nothing*, or *this device has not been told yet* — and the till gave the cashier
+opposite instructions for each while treating both as the first:
+
+> A real product scanned on a cleared or brand-new till, offline, produced the
+> **name-and-price fields** — inviting the cashier to create a **duplicate** of
+> something the shop already sells, priced by guess, on a device that was about
+> to download the real one.
+
+`hasEverSyncedProducts()` answers it the same way the rest of this refactor
+does: the sync watermark's existence is the proof, exactly like
+`hasCachedRecipes()`. When the catalogue is unknown the prompt says the product
+list has not been downloaded and to reconnect first — no fields, nothing added.
+
+**A fourth instance of one root cause**, now: `evaluateReconcile()`, P1-12,
+P1-13, and this. An absent answer is not a negative answer.
+
+`harness/e2e/durability.spec.ts` guards both directions, which is what stops the
+fix degenerating into "never offer to add a product": with the catalogue
+provably unknown the fields must NOT appear and nothing may reach the cart; once
+the watermark exists an unknown barcode prompts as it always did. Making
+`catalogueKnown` constant in either direction fails one of the two.
+
+**Verified:** 25/25 E2E desktop (two new), 15 passed / 34 skipped on
+android+ios with only the pre-existing iOS WebKit failure, 166/166 harness unit
+(five new), typecheck clean, lint unchanged at 208, build green.
 
 ### 2.7 register-requests — the write stopped being a prerequisite (2026-09-01)
 
