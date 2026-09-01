@@ -837,7 +837,7 @@ these three it is achievable only in a real shop, on one store, watched.
 | 2.3 generated DB types | NOT STARTED | | | | |
 | 2.4 index & query audit | NOT STARTED | | | | |
 | 2.2b finish the serial-GET conversion | DONE | e73d864 | 543ms each | **325 / 275ms** | `features` and `kitchen/tickets`. Found by measuring, not by the survey |
-| 2.6 cash overview RPC (migration 039) | DONE | | **849ms** | **291ms** | −66%. Fallback proven by pointing at a missing RPC |
+| 2.6 cash overview RPC (migration 039) | DONE | 9d66ba4 | **849ms** | **291ms** | −66%. Fallback proven by pointing at a missing RPC |
 | 2.5 edge runtime pass | NOT STARTED | | | | |
 | 3.1 data primitive | DONE | a36e978 | | | `src/lib/data/`. 27 harness tests. No screen migrated yet — that is 3.2 |
 | 3.0 parallelise the boot delta+count | DONE | | ~600ms serial | **~300ms parallel** | Brought forward from 0.3's finding |
