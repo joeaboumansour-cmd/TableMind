@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { createClient } from "@/lib/supabase/client";
+import { useState, useEffect, useCallback } from "react";
+import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -22,8 +22,27 @@ type TransactionHealth = {
   status: string;
 };
 
+/**
+ * Transaction retention, per store, from the admin console.
+ *
+ * Two things were wrong here and they compound:
+ *
+ * 1. Every read and write went through a browser Supabase client, including
+ *    the `cleanup_old_transactions_for_store` RPC — a DELETE over a store's
+ *    sales history, callable by anyone holding the public key. All of it is
+ *    now behind /api/admin/stores*, which is `requireAdmin()`-gated.
+ *
+ * 2. It took its store from `goldensquirrel_auth` — the TILL's login — while
+ *    /admin links here as `/admin/transactions?store=<id>`. The query
+ *    parameter was ignored, so an admin who clicked "Transactions" on store B
+ *    was shown, and could clean up, whichever store happened to be logged in
+ *    on that browser. It reads the parameter now, and refuses to guess.
+ */
 export default function AdminTransactionsPage() {
+  const router = useRouter();
+  const [isAdmin, setIsAdmin] = useState(false);
   const [storeId, setStoreId] = useState<string | null>(null);
+  const [storeName, setStoreName] = useState<string>("");
   const [settings, setSettings] = useState<TransactionSettings>({
     transaction_retention_days: 90,
     max_transactions: 5000,
@@ -34,79 +53,84 @@ export default function AdminTransactionsPage() {
   const [cleaningUp, setCleaningUp] = useState(false);
   const [cleanupResult, setCleanupResult] = useState<{ deleted: number; reason: string } | null>(null);
 
-  useEffect(() => {
-    const init = async () => {
-      const authData = JSON.parse(localStorage.getItem("goldensquirrel_auth") || "{}");
-      if (!authData.store_id) {
-        toast.error("No store found");
-        return;
+  /** Same contract as the console's helper: a 401 means sign in again. */
+  const adminFetch = useCallback(
+    async (input: string, init?: RequestInit) => {
+      const response = await fetch(input, init);
+      if (response.status === 401) {
+        localStorage.removeItem("goldensquirrel_admin");
+        router.push("/admin/login");
+        throw new Error("Admin session expired — sign in again");
       }
-      setStoreId(authData.store_id);
-      await fetchData(authData.store_id);
-    };
-    init();
-  }, []);
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body.error || "Request failed");
+      }
+      return response.json();
+    },
+    [router]
+  );
 
-  const fetchData = async (storeId: string) => {
-    try {
-      const supabase = createClient();
-      
-      // Fetch store settings
-      const { data: store, error: storeError } = await supabase
-        .from("stores")
-        .select("transaction_retention_days, max_transactions")
-        .eq("id", storeId)
-        .single();
-
-      if (storeError) throw storeError;
-
-      setSettings({
-        transaction_retention_days: store.transaction_retention_days ?? 90,
-        max_transactions: store.max_transactions ?? 5000,
-      });
-
-      // Fetch health stats
-      const { data: healthData, error: healthError } = await supabase
-        .from("store_transaction_health")
-        .select("*")
-        .eq("store_id", storeId)
-        .single();
-
-      if (!healthError && healthData) {
-        setHealth({
-          current_transaction_count: healthData.current_transaction_count,
-          oldest_transaction: healthData.oldest_transaction,
-          newest_transaction: healthData.newest_transaction,
-          estimated_size: healthData.estimated_size,
-          status: healthData.status,
+  const fetchData = useCallback(
+    async (id: string) => {
+      try {
+        const data = await adminFetch(
+          `/api/admin/stores/transactions?store_id=${encodeURIComponent(id)}`
+        );
+        setStoreName(data.store?.username ?? "");
+        setSettings({
+          transaction_retention_days: data.settings?.transaction_retention_days ?? 90,
+          max_transactions: data.settings?.max_transactions ?? 5000,
         });
+        setHealth(data.health ?? null);
+      } catch (error) {
+        console.error("Failed to fetch transaction data:", error);
+        toast.error(
+          error instanceof Error ? error.message : "Failed to load transaction settings"
+        );
+      } finally {
+        setLoading(false);
       }
-    } catch (error) {
-      console.error("Failed to fetch transaction data:", error);
-      toast.error("Failed to load transaction settings");
-    } finally {
-      setLoading(false);
+    },
+    [adminFetch]
+  );
+
+  useEffect(() => {
+    if (!localStorage.getItem("goldensquirrel_admin")) {
+      router.push("/admin/login");
+      return;
     }
-  };
+    setIsAdmin(true);
+
+    // Read from location rather than useSearchParams: no route in this app uses
+    // that hook, and it would need a Suspense boundary the other admin pages
+    // do not have.
+    const store = new URLSearchParams(window.location.search).get("store");
+    if (!store) {
+      setLoading(false);
+      return;
+    }
+    setStoreId(store);
+    fetchData(store);
+  }, [router, fetchData]);
 
   const handleSaveSettings = async () => {
     if (!storeId) return;
     setSaving(true);
     try {
-      const supabase = createClient();
-      const { error } = await supabase
-        .from("stores")
-        .update({
+      await adminFetch("/api/admin/stores", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          store_id: storeId,
           transaction_retention_days: settings.transaction_retention_days,
           max_transactions: settings.max_transactions,
-        })
-        .eq("id", storeId);
-
-      if (error) throw error;
+        }),
+      });
       toast.success("Settings saved");
     } catch (error) {
       console.error("Failed to save settings:", error);
-      toast.error("Failed to save settings");
+      toast.error(error instanceof Error ? error.message : "Failed to save settings");
     } finally {
       setSaving(false);
     }
@@ -117,39 +141,57 @@ export default function AdminTransactionsPage() {
     setCleaningUp(true);
     setCleanupResult(null);
     try {
-      const supabase = createClient();
-      const { data, error } = await supabase.rpc("cleanup_old_transactions_for_store", {
-        p_store_id: storeId,
+      const result = await adminFetch("/api/admin/stores/transactions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ store_id: storeId }),
       });
 
-      if (error) throw error;
-
-      const result = data as any;
       setCleanupResult({
-        deleted: result?.deleted_count || 0,
-        reason: result?.reason || "completed",
+        deleted: result.deleted ?? 0,
+        reason: result.reason ?? "completed",
       });
-      toast.success(`Cleaned up ${result?.deleted_count || 0} transactions`);
-      
+      toast.success(`Cleaned up ${result.deleted ?? 0} transactions`);
+
       // Refresh health stats
       await fetchData(storeId);
     } catch (error) {
       console.error("Cleanup failed:", error);
-      toast.error("Cleanup failed");
+      toast.error(error instanceof Error ? error.message : "Cleanup failed");
     } finally {
       setCleaningUp(false);
     }
   };
 
+  if (!isAdmin) return null;
+
   if (loading) {
     return <div className="p-4">Loading...</div>;
+  }
+
+  // No ?store= means this page was opened directly. Guessing a store would mean
+  // pointing a delete button at whichever one it guessed.
+  if (!storeId) {
+    return (
+      <div className="min-h-dvh bg-background p-6">
+        <p className="text-muted-foreground">
+          No store selected. Open this page from the Transactions button on a store row in the{" "}
+          <button className="underline" onClick={() => router.push("/admin")}>
+            admin panel
+          </button>
+          .
+        </p>
+      </div>
+    );
   }
 
   return (
     <div className="min-h-dvh bg-background">
       <header className="sticky top-0 z-50 bg-background border-b">
         <div className="container mx-auto px-4 py-3">
-          <h1 className="font-bold text-lg">Transaction Settings</h1>
+          <h1 className="font-bold text-lg">
+            Transaction Settings{storeName ? ` — ${storeName}` : ""}
+          </h1>
           <p className="text-sm text-muted-foreground">
             Manage retention and cleanup policies
           </p>
