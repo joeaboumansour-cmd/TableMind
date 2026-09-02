@@ -160,19 +160,25 @@ export default function AdminActivityPage() {
   // --- stores ----------------------------------------------------------------
   useEffect(() => {
     if (!isAdmin) return;
-    // The stores list is not sensitive and the admin console already reads it
-    // this way; no new endpoint is needed for a picker.
+    // Was a browser Supabase client, constructed through a DYNAMIC import so it
+    // did not appear in this file's import block. It queried `stores` with the
+    // NEXT_PUBLIC key — which currently holds a service_role JWT — for what is
+    // just a picker. It goes through the gated route like the two fetches
+    // below; nothing on this page constructs a Supabase client any more.
     let active = true;
-    (async () => {
-      const { createClient } = await import("@/lib/supabase/client");
-      const result = await createClient()
-        .from("stores")
-        .select("id, username")
-        .order("username");
-      if (active) setStores((result.data as StoreOption[] | null) ?? []);
-    })().catch(() => {
-      if (active) setStores([]);
-    });
+    fetch("/api/admin/stores")
+      .then((r) => (r.ok ? r.json() : { stores: [] }))
+      .then((data: { stores?: StoreOption[] }) => {
+        // The route orders newest-first for the console's table; a picker reads
+        // better alphabetically, as this one always has.
+        const sorted = [...(data.stores ?? [])].sort((a, b) =>
+          a.username.localeCompare(b.username)
+        );
+        if (active) setStores(sorted);
+      })
+      .catch(() => {
+        if (active) setStores([]);
+      });
     return () => {
       active = false;
     };

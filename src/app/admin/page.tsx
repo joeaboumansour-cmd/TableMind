@@ -1,8 +1,7 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -53,13 +52,30 @@ import { formatDateTime } from "@/lib/utils/format";
 import { SECTIONS, SectionKey, getDefaultPermissions } from "@/lib/auth/permissions";
 import { FEATURES, FEATURE_PRESETS, FeatureKey, getDefaultFeaturesForPreset, mergeFeaturesWithDefaults } from "@/lib/features";
 
-const supabase = createClient();
-
+/**
+ * This page talks to /api/admin/* and NEVER to Supabase directly.
+ *
+ * It used to hold a browser Supabase client and run every store read and write
+ * through it — including INSERTing `password_hash` when creating a store, and
+ * `select("*")` on `stores`, which pulled every tenant's password hash into the
+ * page. Both are gone: the credential is written server-side by
+ * POST /api/admin/stores, and no response here carries a hash.
+ *
+ * Every route below is gated on the signed admin cookie (`requireAdmin`). The
+ * localStorage check in the guard effect only decides whether to redirect — it
+ * is not the gate, and a tampered entry gets 401s rather than data.
+ */
 interface Store {
   id: string;
   username: string;
   license_expires_at: string;
   created_at: string;
+}
+
+interface StoreStats {
+  total: number;
+  active: number;
+  expired: number;
 }
 
 interface Employee {
@@ -95,6 +111,8 @@ export default function AdminPage() {
   // goes through this — a confirm dialog with a five-second cooldown.
   const { confirm, confirmDialog } = useConfirm();
   const [stores, setStores] = useState<Store[]>([]);
+  // Counted in Postgres, not by filtering the rows above — see the route.
+  const [stats, setStats] = useState<StoreStats>({ total: 0, active: 0, expired: 0 });
   const [isLoading, setIsLoading] = useState(true);
   const [isAdmin, setIsAdmin] = useState(false);
 
@@ -142,7 +160,44 @@ export default function AdminPage() {
   const [empPermissions, setEmpPermissions] = useState<Record<string, boolean>>({});
   const [isSavingEmployee, setIsSavingEmployee] = useState(false);
 
-  // Check admin auth
+  /**
+   * One place that talks to the admin API.
+   *
+   * A 401 means the signed cookie expired or was never valid, and the only
+   * useful response is to sign in again — the localStorage flag says nothing
+   * about whether the server will answer.
+   */
+  const adminFetch = useCallback(
+    async (input: string, init?: RequestInit) => {
+      const response = await fetch(input, init);
+      if (response.status === 401) {
+        localStorage.removeItem("goldensquirrel_admin");
+        router.push("/admin/login");
+        throw new Error("Admin session expired — sign in again");
+      }
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body.error || "Request failed");
+      }
+      return response.json();
+    },
+    [router]
+  );
+
+  const fetchStores = useCallback(async () => {
+    try {
+      const data = await adminFetch("/api/admin/stores");
+      setStores(data.stores || []);
+      setStats(data.stats ?? { total: 0, active: 0, expired: 0 });
+    } catch (error) {
+      console.error("Error fetching stores:", error);
+      toast.error(error instanceof Error ? error.message : "Failed to load stores");
+    } finally {
+      setIsLoading(false);
+    }
+  }, [adminFetch]);
+
+  // Check admin auth. The redirect only; the server gate is the cookie.
   useEffect(() => {
     const adminAuth = localStorage.getItem("goldensquirrel_admin");
     if (!adminAuth) {
@@ -151,24 +206,7 @@ export default function AdminPage() {
     }
     setIsAdmin(true);
     fetchStores();
-  }, [router]);
-
-  const fetchStores = async () => {
-    try {
-      const { data, error } = await supabase
-        .from("stores")
-        .select("*")
-        .order("created_at", { ascending: false });
-
-      if (error) throw error;
-      setStores(data || []);
-    } catch (error) {
-      console.error("Error fetching stores:", error);
-      toast.error("Failed to load stores");
-    } finally {
-      setIsLoading(false);
-    }
-  };
+  }, [router, fetchStores]);
 
   // ------ Store CRUD ------
   const handleCreateStore = async (e: React.FormEvent) => {
@@ -176,20 +214,20 @@ export default function AdminPage() {
     setIsSubmitting(true);
 
     try {
-      const features = getDefaultFeaturesForPreset(storeType);
-      const { data, error } = await supabase
-        .from("stores")
-        .insert({
+      // The password goes to the server and is written there. It is never put
+      // into a Supabase call from this page, and nothing in the response
+      // carries it back. The feature preset is applied server-side from
+      // store_type, so this body does not send a flags object either.
+      await adminFetch("/api/admin/stores", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
           username: storeUsername,
-          password_hash: storePassword,
+          password: storePassword,
           license_expires_at: new Date(licenseDate).toISOString(),
           store_type: storeType,
-          features: features,
-        })
-        .select()
-        .single();
-
-      if (error) throw error;
+        }),
+      });
 
       toast.success(`Store "${storeUsername}" created successfully!`);
       setIsStoreDialogOpen(false);
@@ -198,13 +236,9 @@ export default function AdminPage() {
       setLicenseDate("");
       setStoreType("general");
       fetchStores();
-    } catch (error: any) {
+    } catch (error) {
       console.error("Error creating store:", error);
-      if (error.code === "23505") {
-        toast.error("Username already exists");
-      } else {
-        toast.error("Failed to create store");
-      }
+      toast.error(error instanceof Error ? error.message : "Failed to create store");
     } finally {
       setIsSubmitting(false);
     }
@@ -214,21 +248,20 @@ export default function AdminPage() {
     const newDate = prompt(`Enter new license expiry date for "${username}" (YYYY-MM-DD):`);
     if (!newDate) return;
 
+    // Sent as typed; the route rejects anything that is not a real date rather
+    // than storing an "Invalid Date".
     try {
-      const { error } = await supabase
-        .from("stores")
-        .update({
-          license_expires_at: new Date(newDate).toISOString()
-        })
-        .eq("id", storeId);
-
-      if (error) throw error;
+      await adminFetch("/api/admin/stores", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ store_id: storeId, license_expires_at: newDate }),
+      });
 
       toast.success("License renewed successfully!");
       fetchStores();
     } catch (error) {
       console.error("Error renewing license:", error);
-      toast.error("Failed to renew license");
+      toast.error(error instanceof Error ? error.message : "Failed to renew license");
     }
   };
 
@@ -250,18 +283,15 @@ export default function AdminPage() {
     if (!confirmed) return;
 
     try {
-      const { error } = await supabase
-        .from("stores")
-        .delete()
-        .eq("id", storeId);
-
-      if (error) throw error;
+      await adminFetch(`/api/admin/stores?store_id=${encodeURIComponent(storeId)}`, {
+        method: "DELETE",
+      });
 
       toast.success(`Store "${username}" deleted`);
       fetchStores();
     } catch (error) {
       console.error("Error deleting store:", error);
-      toast.error("Failed to delete store");
+      toast.error(error instanceof Error ? error.message : "Failed to delete store");
     }
   };
 
@@ -511,18 +541,12 @@ export default function AdminPage() {
     setSettingsAddress("");
 
     try {
-      const { data, error } = await supabase
-        .from("stores")
-        .select("phone_whatsapp, address")
-        .eq("id", storeId)
-        .single();
-
-      if (error) throw error;
-      setSettingsPhoneWhatsapp(data.phone_whatsapp || "");
-      setSettingsAddress(data.address || "");
+      const data = await adminFetch(`/api/admin/stores?store_id=${encodeURIComponent(storeId)}`);
+      setSettingsPhoneWhatsapp(data.store?.phone_whatsapp || "");
+      setSettingsAddress(data.store?.address || "");
     } catch (error) {
       console.error("Error fetching store settings:", error);
-      toast.error("Failed to load store settings");
+      toast.error(error instanceof Error ? error.message : "Failed to load store settings");
     } finally {
       setIsLoadingSettings(false);
     }
@@ -533,21 +557,21 @@ export default function AdminPage() {
     setIsSavingSettings(true);
 
     try {
-      const { error } = await supabase
-        .from("stores")
-        .update({
-          phone_whatsapp: settingsPhoneWhatsapp.trim() || null,
-          address: settingsAddress.trim() || null,
-        })
-        .eq("id", settingsStoreId);
-
-      if (error) throw error;
+      await adminFetch("/api/admin/stores", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          store_id: settingsStoreId,
+          phone_whatsapp: settingsPhoneWhatsapp,
+          address: settingsAddress,
+        }),
+      });
 
       toast.success("Store settings saved successfully!");
       setIsSettingsDialogOpen(false);
     } catch (error) {
       console.error("Error saving store settings:", error);
-      toast.error("Failed to save store settings");
+      toast.error(error instanceof Error ? error.message : "Failed to save store settings");
     } finally {
       setIsSavingSettings(false);
     }
@@ -644,7 +668,7 @@ export default function AdminPage() {
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-sm text-muted-foreground">Total Stores</p>
-                  <p className="text-2xl font-bold">{stores.length}</p>
+                  <p className="text-2xl font-bold">{stats.total}</p>
                 </div>
                 <Store className="h-8 w-8 text-amber-500" />
               </div>
@@ -655,9 +679,7 @@ export default function AdminPage() {
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-sm text-muted-foreground">Active Licenses</p>
-                  <p className="text-2xl font-bold text-green-500">
-                    {stores.filter(s => new Date(s.license_expires_at) > new Date()).length}
-                  </p>
+                  <p className="text-2xl font-bold text-green-500">{stats.active}</p>
                 </div>
                 <Check className="h-8 w-8 text-green-500" />
               </div>
@@ -668,9 +690,7 @@ export default function AdminPage() {
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-sm text-muted-foreground">Expired Licenses</p>
-                  <p className="text-2xl font-bold text-red-500">
-                    {stores.filter(s => new Date(s.license_expires_at) <= new Date()).length}
-                  </p>
+                  <p className="text-2xl font-bold text-red-500">{stats.expired}</p>
                 </div>
                 <X className="h-8 w-8 text-red-500" />
               </div>
