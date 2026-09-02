@@ -47,6 +47,7 @@ import {
   SELL_RATE,
   RETURN_RATE,
   convertUsdToLlForReturn,
+  convertLlToUsdForReturn,
 } from "@/lib/utils/format";
 import { vibrate, playCompleteSound } from "@/lib/feedback";
 import { usePrimedReceipt } from "@/lib/pos/usePrimedReceipt";
@@ -988,7 +989,19 @@ function CheckoutContent() {
            no room for it beside the keypad. A desktop till has a whole empty
            column next to the entry panel, and a cashier taking cash while the
            customer watches should not have to open a dialog to answer "what am
-           I paying for?". Same data as the summary dialog. */}
+           I paying for?". Same data as the summary dialog.
+
+           The per-line USD comes from the line's LL at RETURN_RATE — the same
+           basis as AMOUNT DUE — and NOT from item.total_price_usd, which for a
+           USD-priced product holds its native SELL_RATE price ($5.00 for a
+           450,000 LL line). That mixed the two rates on one screen and the
+           lines stopped summing to their own total: $5.00 + $0.22 beside an
+           AMOUNT DUE of $5.28.
+
+           This screen takes USD tender at RETURN_RATE and says so, so every
+           dollar figure on it means "dollars the customer hands over". The
+           per-line USD is kept rather than dropped for that reason: it is the
+           breakdown of a total the customer may actually pay in dollars. */}
       <div className="hidden md:mt-4 md:block">
         <div className="rounded-2xl border bg-card/40 p-4">
           <div className="mb-3 flex items-baseline justify-between">
@@ -1009,7 +1022,7 @@ function CheckoutContent() {
                 <span className="flex-shrink-0 text-right">
                   <span className="block font-semibold tnum">{formatLL(item.total_price)}</span>
                   <span className="block text-xs text-muted-foreground tnum">
-                    {formatUSD(item.total_price_usd)}
+                    {formatUSD(convertLlToUsdForReturn(item.total_price))}
                   </span>
                 </span>
               </div>
@@ -1117,7 +1130,7 @@ function CheckoutContent() {
                 <span className="flex-shrink-0 text-right">
                   <span className="block font-semibold tnum">{formatLL(item.total_price)}</span>
                   <span className="block text-xs text-muted-foreground tnum">
-                    {formatUSD(item.total_price_usd)}
+                    {formatUSD(convertLlToUsdForReturn(item.total_price))}
                   </span>
                 </span>
               </div>
