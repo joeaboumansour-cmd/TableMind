@@ -46,6 +46,17 @@ export interface ProductWriteInput {
   kind?: string | null;
   stock_unit?: string | null;
   serving_qty?: number | null;
+  /**
+   * Variant identity, for the LOCAL CACHE only.
+   *
+   * `POST /api/products` neither reads nor writes these two — its upsert only
+   * touches the columns it validates, so the server keeps whatever the row
+   * already had. They exist here so that editing a variant through this path
+   * does not blank its parentage in `products_cache` until the next refresh
+   * pulls the row back. Ordinary products leave them undefined.
+   */
+  parent_id?: string | null;
+  variant_name?: string | null;
 }
 
 export interface ProductWriteResult {
@@ -84,8 +95,8 @@ function toCachedProduct(id: string, input: ProductWriteInput): CachedProduct {
     kind: input.kind || "sellable",
     stock_unit: input.stock_unit || "unit",
     serving_qty: input.serving_qty ?? 1,
-    parent_id: null,
-    variant_name: null,
+    parent_id: input.parent_id ?? null,
+    variant_name: input.variant_name ?? null,
     updated_at: new Date().toISOString(),
   };
 }

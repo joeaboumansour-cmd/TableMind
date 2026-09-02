@@ -62,6 +62,7 @@ import { getFrequentlyUsedProductIds, addFrequentlyUsedProduct, removeFrequently
 import { downloadCSV, productsToCSV } from "@/lib/csv/utils";
 import { FeatureFlagGuard, useFeatureFlag } from "@/lib/auth/featureGuard";
 import { refreshProductsIntoCache } from "@/lib/products/refresh";
+import { createProduct, updateProduct } from "@/lib/products/write";
 import { getCachedProductsSortedByName } from "@/lib/db/localDB";
 import type { CachedProduct } from "@/lib/db/localDB";
 import { connectivity } from "@/lib/connectivity";
@@ -125,6 +126,34 @@ const BarcodeScanner = dynamic(() => import("@/components/BarcodeScanner"), {
     </div>
   ),
 });
+
+/**
+ * Say what actually happened to a save, once the server push settles.
+ *
+ * The product is durable and on screen before this resolves — that is the
+ * point of products/write.ts — so the toast above it is already correct. This
+ * only adds the part the cashier cannot see: whether the row reached the
+ * server, or is sitting in `pending_writes` waiting for a connection.
+ *
+ * A rejection is the one case that must be shouted about: it means the write
+ * could neither be pushed nor queued, so this device is the only place the
+ * product exists.
+ */
+function reportSave(pushed: Promise<boolean>, productName: string) {
+  pushed
+    .then((syncedNow) => {
+      if (!syncedNow) {
+        toast.warning(
+          `"${productName}" is saved on this device and will sync when the connection returns`
+        );
+      }
+    })
+    .catch(() => {
+      toast.error(
+        `"${productName}" is saved on this device only — it could not be sent or queued`
+      );
+    });
+}
 
 export default function StoreProductsPage() {
   return (
@@ -557,112 +586,89 @@ function StoreProductsPageContent() {
       const stockQty = parseInt(stockQuantity) || 0;
       const minStock = parseInt(minStockThreshold) || 0;
 
-      if (editingProduct) {
-        // Update existing product
-        const { data, error } = await supabase
-          .from("products")
-          .update({
-            name: name,
-            barcode: barcode || null,
-            cost_price: cost,
-            selling_price: selling,
-            currency: currency,
-            profit_percentage: profit,
-            discount_percentage: discount,
-            stock_quantity: stockQty,
-            min_stock_threshold: minStock,
-            category_id: categoryId || null,
-            kind: productKind,
-            stock_unit: stockUnit || "unit",
-            serving_qty: parseFloat(servingQty) > 0 ? parseFloat(servingQty) : 1,
-          })
-          .eq("id", editingProduct.id)
-          .select()
-          .single();
+      // This form no longer writes to Supabase from the browser. It goes
+      // through products/write.ts — the same path the till's unknown-barcode
+      // flow uses — which generates the id here, writes products_cache FIRST
+      // and awaits it, then pushes to POST /api/products or queues a
+      // `product_upsert` for the sync engine. Two consequences worth knowing:
+      // the page no longer needs a database key, and a save now SUCCEEDS with
+      // no internet instead of failing. `reportSave` is what says which
+      // happened.
+      //
+      // The activity events are emitted from inside write.ts (with
+      // `synced_now`, which is only knowable once the push settles), so they
+      // are deliberately not repeated here.
+      const writeInput = {
+        store_id: storeId,
+        name: name,
+        barcode: barcode || null,
+        cost_price: cost,
+        selling_price: selling,
+        currency: currency,
+        profit_percentage: profit,
+        discount_percentage: discount,
+        stock_quantity: stockQty,
+        min_stock_threshold: minStock,
+        category_id: categoryId || null,
+        kind: productKind,
+        stock_unit: stockUnit || "unit",
+        serving_qty: parseFloat(servingQty) > 0 ? parseFloat(servingQty) : 1,
+      } as const;
 
-        if (error) throw error;
-        parentProductId = data.id;
-        // NOTE: this form still writes straight to Supabase rather than going
-        // through products/write.ts, so it is online-only and there is no
-        // syncedNow to report. Moving it across is an open task.
-        logActivity("catalog.product_update", {
-          target: name,
-          details: {
-            product_id: data.id,
-            barcode: barcode || null,
-            selling_price: selling,
-            cost_price: cost,
-            currency,
-            discount_percentage: discount,
-            stock_quantity: stockQty,
-            source: "inventory_form",
-          },
+      if (editingProduct) {
+        const result = await updateProduct(editingProduct.id, {
+          ...writeInput,
+          // Editing a VARIANT must not blank its parentage in the local cache.
+          // The server keeps its own copy either way — the upsert only touches
+          // the columns it validates — but the cache is what the till reads.
+          parent_id: editingProduct.parent_id ?? null,
+          variant_name: editingProduct.variant_name ?? null,
         });
+        parentProductId = result.product.id;
+        reportSave(result.pushed, name);
         toast.success(`Product "${name}" updated successfully!`);
       } else {
-        // Create new product
-        const { data, error } = await supabase
-          .from("products")
-          .insert({
-            store_id: storeId,
-            name: name,
-            barcode: barcode || null,
-            cost_price: cost,
-            selling_price: selling,
-            currency: currency,
-            profit_percentage: profit,
-            discount_percentage: discount,
-            stock_quantity: stockQty,
-            min_stock_threshold: minStock,
-            category_id: categoryId || null,
-            kind: productKind,
-            stock_unit: stockUnit || "unit",
-            serving_qty: parseFloat(servingQty) > 0 ? parseFloat(servingQty) : 1,
-          })
-          .select()
-          .single();
-
-        if (error) throw error;
-        parentProductId = data.id;
-        logActivity("catalog.product_create", {
-          target: name,
-          details: {
-            product_id: data.id,
-            barcode: barcode || null,
-            selling_price: selling,
-            cost_price: cost,
-            currency,
-            discount_percentage: discount,
-            stock_quantity: stockQty,
-            variants: variants.filter((v) => v.barcode.trim()).length,
-            source: "inventory_form",
-          },
-        });
+        const result = await createProduct(writeInput);
+        parentProductId = result.product.id;
+        reportSave(result.pushed, name);
         toast.success(`Product "${name}" created successfully!`);
       }
 
-      // Create all product variants
-      if (variants.length > 0) {
-        const variantRows = variants.filter(v => v.barcode.trim()).map(variant => ({
-          store_id: storeId,
-          name: name,
-          parent_id: parentProductId,
-          barcode: variant.barcode.trim() || null,
-          variant_name: variant.variantName.trim() || null,
-          cost_price: 0,
-          selling_price: 0,
-          currency: currency,
-          profit_percentage: 0,
-          stock_quantity: 0,
-          min_stock_threshold: parseInt(minStockThreshold),
-        }));
+      // Create all product variants.
+      //
+      // ONLINE-ONLY, as it was before: a variant is a second barcode on the
+      // same item, not something a sale waits for, and there is no queue for
+      // it. Note the consequence when the parent itself was only queued — the
+      // route cannot find a parent the server has never seen, and says so via
+      // the warning below rather than inventing one.
+      if (variants.length > 0 && parentProductId) {
+        const variantRows = variants
+          .filter((v) => v.barcode.trim())
+          .map((variant) => ({
+            // Client-generated, so the route's upsert is idempotent under a
+            // retried submit — the same rule as the product id above.
+            id: crypto.randomUUID(),
+            barcode: variant.barcode.trim(),
+            variant_name: variant.variantName.trim() || null,
+          }));
 
         if (variantRows.length > 0) {
-          const { error: variantError } = await supabase
-            .from("products")
-            .insert(variantRows);
-
-          if (variantError) {
+          try {
+            const response = await fetch("/api/products/variants", {
+              method: "POST",
+              headers: buildAuthHeaders(user),
+              body: JSON.stringify({
+                parent_id: parentProductId,
+                name: name,
+                currency: currency,
+                // `minStock` rather than a second parseInt of the raw field,
+                // which produced NaN for an empty threshold.
+                min_stock_threshold: minStock,
+                variants: variantRows,
+              }),
+            });
+            if (!response.ok) throw new Error(`API error ${response.status}`);
+          } catch (variantError) {
             console.error("Variant save error:", variantError);
             toast.warning("Product saved but some variants may have failed");
           }
@@ -715,39 +721,15 @@ function StoreProductsPageContent() {
       setIsDialogOpen(false);
       resetForm();
 
-      // CRITICAL FIX: Upsert the saved product directly into the local cache
-      // instead of relying only on a full refetch. This keeps the cache
-      // consistent even if the subsequent fetch fails or is interrupted.
-      try {
-        const { upsertSingleProduct } = await import("@/lib/db/localDB");
-        await upsertSingleProduct({
-          id: parentProductId,
-          store_id: storeId,
-          name: name,
-          barcode: barcode || null,
-          cost_price: cost,
-          selling_price: selling,
-          currency: currency,
-          profit_percentage: profit,
-          discount_percentage: discount,
-          stock_quantity: stockQty,
-          min_stock_threshold: minStock,
-          parent_id: null,
-          variant_name: null,
-          updated_at: new Date().toISOString(),
-        } as any);
-      } catch (cacheError) {
-        console.warn("[Products] Failed to update local cache after save:", cacheError);
-      }
+      // The local cache write that used to sit here is gone: createProduct /
+      // updateProduct already write products_cache FIRST and await it, with
+      // the full row — category, kind, stock unit and serving size included,
+      // which this copy silently dropped.
 
       fetchProducts(storeId);
     } catch (error: any) {
       console.error("Error saving product:", error);
-      if (error.code === "23505") {
-        toast.error("Product with this barcode already exists in your store");
-      } else {
-        toast.error("Failed to save product");
-      }
+      toast.error("Failed to save product");
     } finally {
       setIsSubmitting(false);
     }

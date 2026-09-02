@@ -21,7 +21,7 @@ import {
 import { toast } from "@/lib/toast";
 import JsBarcode from "jsbarcode";
 import { useAuth } from "@/lib/auth/AuthContext";
-import { createClient } from "@/lib/supabase/client";
+import { buildAuthHeaders } from "@/lib/auth/apiHeaders";
 import { CATEGORIES, COLORS, SIZES, getNameByCode } from "@/lib/barcode/codes";
 import {
   generateEAN13,
@@ -36,11 +36,39 @@ import { useConfirm } from "@/components/ConfirmDialog";
 const STORAGE_KEY = "barcodegen_store_id";
 const TABLE_KEY = "barcodegen_table";
 
+/**
+ * Barcodes this store has already issued under `prefix`.
+ *
+ * This used to be a `products` select run in the browser with the public
+ * Supabase client, which is one of the reads that keeps a `service_role` key
+ * in the bundle. `GET /api/products/barcodes` does the same read server-side,
+ * scoped to the caller's own store.
+ *
+ * Returns null when the answer is unknown — the callers must not read that as
+ * "no barcodes exist", which would hand out a colliding label.
+ */
+async function fetchIssuedBarcodes(prefix: string): Promise<string[] | null> {
+  const response = await fetch(
+    `/api/products/barcodes?prefix=${encodeURIComponent(prefix)}`,
+    { headers: buildAuthHeaders() }
+  );
+  if (!response.ok) return null;
+  const payload = (await response.json()) as { barcodes?: string[] };
+  return Array.isArray(payload?.barcodes) ? payload.barcodes : null;
+}
+
+/** The 2-digit sequence out of every 13-digit barcode carrying `prefix`. */
+function sequencesUnderPrefix(barcodes: string[], prefix: string): number[] {
+  return barcodes
+    .filter((b) => b.startsWith(prefix) && b.length === 13)
+    .map((b) => parseInt(b.slice(8, 10)))
+    .filter((n) => !isNaN(n));
+}
+
 export default function BarcodeGeneratorPage() {
   const router = useRouter();
   const { confirm, confirmDialog } = useConfirm();
   const { user } = useAuth();
-  const [supabase] = useState(() => createClient());
 
   // ── Form state ──────────────────────────────────────────────
   const [storeId, setStoreId] = useState("");
@@ -95,22 +123,14 @@ export default function BarcodeGeneratorPage() {
       setIsCheckingPOS(true);
       try {
         const prefix = `${storeId}${categoryCode}${colorCode}${sizeCode}`;
-        const { data, error } = await supabase
-          .from("products")
-          .select("barcode")
-          .eq("store_id", user.storeId)
-          .like("barcode", `${prefix}%`);
+        const issued = await fetchIssuedBarcodes(prefix);
 
-        if (error || !data) {
+        if (!issued) {
           setPosInfo(null);
           return;
         }
 
-        const sequences = data
-          .map((p: { barcode: string | null }) => p.barcode)
-          .filter((b: string | null): b is string => !!b && b.startsWith(prefix) && b.length === 13)
-          .map((b: string) => parseInt(b.slice(8, 10)))
-          .filter((n: number) => !isNaN(n));
+        const sequences = sequencesUnderPrefix(issued, prefix);
 
         const maxSeq = sequences.length > 0 ? Math.max(...sequences) : 0;
         const localMax = getNextSequence(rows, storeId, categoryCode, colorCode, sizeCode) - 1;
@@ -125,7 +145,7 @@ export default function BarcodeGeneratorPage() {
     }, 500);
 
     return () => clearTimeout(timer);
-  }, [user, storeId, categoryCode, colorCode, sizeCode, rows, supabase]);
+  }, [user, storeId, categoryCode, colorCode, sizeCode, rows]);
 
   // ── Store ID input: 4 digits only ───────────────────────────
   const handleStoreIdChange = (value: string) => {
@@ -165,19 +185,15 @@ export default function BarcodeGeneratorPage() {
       if (user?.storeId) {
         try {
           const prefix = `${storeId}${categoryCode}${colorCode}${sizeCode}`;
-          const { data } = await supabase
-            .from("products")
-            .select("barcode")
-            .eq("store_id", user.storeId)
-            .like("barcode", `${prefix}%`);
+          const issued = await fetchIssuedBarcodes(prefix);
 
-          if (data) {
-            const sequences = data
-              .map((p: { barcode: string | null }) => p.barcode)
-              .filter((b: string | null): b is string => !!b && b.startsWith(prefix) && b.length === 13)
-              .map((b: string) => parseInt(b.slice(8, 10)))
-              .filter((n: number) => !isNaN(n));
+          if (issued) {
+            const sequences = sequencesUnderPrefix(issued, prefix);
             posMaxSeq = sequences.length > 0 ? Math.max(...sequences) : 0;
+          } else {
+            // Unknown is not zero — say so rather than silently numbering from
+            // the local table and printing a label that is already on a shelf.
+            toast.warning("Could not check POS for existing barcodes — using session data only");
           }
         } catch {
           toast.warning("Could not check POS for existing barcodes — using session data only");
