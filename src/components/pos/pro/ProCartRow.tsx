@@ -12,7 +12,7 @@
 
 import { Minus, Plus, X, Tag, SlidersHorizontal } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { formatLL, formatUSD } from "@/lib/utils/format";
+import { formatLL, formatUSD, convertLlToUsdForReturn } from "@/lib/utils/format";
 import CartQuantityInput from "@/components/pos/CartQuantityInput";
 import type { CartItem } from "@/lib/types/cart";
 import { lineKey } from "@/lib/pos/lineKey";
@@ -233,13 +233,28 @@ export default function ProCartRow({
                     {formatLL(item.catalog_unit_price)}{" "}
                   </span>
                 )}
-                {formatLL(item.unit_price)} · {formatUSD(item.unit_price_usd)} each
+                {formatLL(item.unit_price)} ·{" "}
+                {formatUSD(convertLlToUsdForReturn(item.unit_price))} each
               </>
             )}
           </span>
         </Field>
 
-        {/* ---- Line total ---- */}
+        {/* ---- Line total ----
+
+           The USD under both the "each" price and the line total comes from the
+           line's LL at RETURN_RATE — the same basis as the TOTAL panel beside
+           it, which is getTotalUsd() — and NOT from item.total_price_usd /
+           item.unit_price_usd, which for a USD-priced product hold its native
+           SELL_RATE price ($5.00 on a 450,000 LL line). That put two rates in
+           one cart and the rows stopped summing to their own total: $5.00 +
+           $2.13 against a TOTAL of $7.19.
+
+           The LL beside it is already the tender figure — discounted, price
+           overridden, times quantity — so the dollars next to it mean the same
+           thing: what this line contributes to what the customer will pay. The
+           catalogue price in its own currency is still quoted where the cashier
+           is browsing rather than building, in QuickGrid and SmartScanInput. */}
         <Field
           canEdit={canEdit}
           onClick={() => onOpenEditor(lineKey(item))}
@@ -249,7 +264,7 @@ export default function ProCartRow({
             {formatLL(item.total_price)}
           </span>
           <span className="mt-0.5 block text-xs text-muted-foreground tnum">
-            {formatUSD(item.total_price_usd)}
+            {formatUSD(convertLlToUsdForReturn(item.total_price))}
           </span>
         </Field>
 
