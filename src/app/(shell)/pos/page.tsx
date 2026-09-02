@@ -9,7 +9,6 @@ import {
   startTransition,
 } from "react";
 import { useRouter } from "next/navigation";
-import { createClient } from "@/lib/supabase/client";
 import { LogOut, ScanLine, Squirrel } from "lucide-react";
 import { cn } from "@/lib/utils";
 import CartSheet from "@/components/pos/CartSheet";
@@ -47,6 +46,8 @@ import {
   markPersistNoticeShown,
 } from "@/lib/pwa/persistentStorage";
 import { mapToCachedProduct, cachedToProduct } from "@/lib/products/refresh";
+import type { ProductRow } from "@/lib/products/refresh";
+import { buildAuthHeaders } from "@/lib/auth/apiHeaders";
 import { isSellable, isIngredient } from "@/lib/products/kind";
 import { categoriesResource } from "@/lib/categories/load";
 import { recipesResource } from "@/lib/recipes/load";
@@ -688,16 +689,18 @@ export default function POSPage() {
       if (!storeId) return null;
 
       try {
-        // A fresh client so the lookup carries the current store header.
-        const liveClient = createClient();
-        const { data, error } = await liveClient
-          .from("products")
-          .select("*")
-          .eq("barcode", trimmed)
-          .eq("store_id", storeId)
-          .single();
+        // Through the server, not the browser's Supabase client: the route
+        // resolves the caller and scopes the lookup to THEIR store, so the
+        // till no longer needs a key that can read the products table.
+        const res = await fetch(
+          `/api/products?barcode=${encodeURIComponent(trimmed)}`,
+          { headers: buildAuthHeaders(), cache: "no-store" },
+        );
+        if (!res.ok) return null;
 
-        if (error || !data) return null;
+        const body = (await res.json()) as { products?: ProductRow[] };
+        const data = body.products?.[0];
+        if (!data) return null;
 
         markScanSource("server");
         const cached = mapToCachedProduct(data);

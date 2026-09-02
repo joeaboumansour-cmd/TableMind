@@ -1,5 +1,5 @@
 // =============================================
-// Product refresh — Supabase → IndexedDB
+// Product refresh — GET /api/products → IndexedDB
 //
 // One home for "bring this store's products up to date locally".
 //
@@ -14,9 +14,19 @@
 // mapToCachedProduct below. A column missing from that list does not fail — it
 // caches as `undefined` and shows up as a broken price at the till. Treat the
 // two as a single unit when editing either.
+//
+// ## The reads go through the SERVER now
+//
+// Every query in here used to be issued from the browser with the public
+// Supabase key — which is why that key had to be able to read the whole
+// `products` table. They now go to `GET /api/products`, which resolves the
+// caller server-side and scopes the read to the store it looks up. The paging
+// loops are unchanged in shape and in meaning: the route pages with the same
+// .range() the browser used, and a SHORT page still means "last page".
 // =============================================
 
 import type { createBrowserClient } from "@supabase/ssr";
+import { buildAuthHeaders } from "@/lib/auth/apiHeaders";
 import {
   cacheProducts,
   getCachedProductsCount,
@@ -50,13 +60,12 @@ const PAGE_SIZE = 1000;
 const WATERMARK_SAFETY_MS = 5 * 60 * 1000;
 
 /**
- * The columns a cached product is built from — exactly the fields of
- * CachedProduct. Replaces `select("*")`: the table also carries columns nothing
- * reads (product_group_id), and on a ~2,300-row catalogue those ride along on
- * every page of every sync.
+ * The columns a cached product is built from. Defined in products/columns.ts so
+ * `GET /api/products` can issue the same select without importing this module
+ * (and with it, Dexie) into a serverless function. Re-exported because existing
+ * import sites — including src/lib/supabase/client.ts — read it from here.
  */
-export const PRODUCT_COLUMNS =
-  "id, store_id, name, barcode, cost_price, selling_price, currency, profit_percentage, discount_percentage, stock_quantity, min_stock_threshold, category_id, kind, stock_unit, serving_qty, parent_id, variant_name, updated_at";
+export { PRODUCT_COLUMNS } from "@/lib/products/columns";
 
 /**
  * A row as PRODUCT_COLUMNS returns it. Deliberately looser than CachedProduct:
@@ -263,11 +272,41 @@ export function evaluateReconcile(params: {
 }
 
 // ---- Network reads ----
+//
+// All four go to `GET /api/products`. The `supabase` parameter on the exported
+// ones is kept so callers (and src/lib/supabase/client.ts's re-exports) are
+// unaffected; it is no longer used to read products.
+
+/** One page of `GET /api/products`. Throws on a non-2xx so callers can decide. */
+async function getProducts(params: Record<string, string>): Promise<ProductRow[]> {
+  const query = new URLSearchParams(params).toString();
+  const res = await fetch(`/api/products?${query}`, {
+    headers: buildAuthHeaders(),
+    // The catalogue read must never be answered from the HTTP cache: a stale
+    // page would look like a real short page and end the paging loop early.
+    cache: "no-store",
+  });
+
+  if (!res.ok) {
+    throw new Error(`GET /api/products failed (${res.status})`);
+  }
+
+  const body = (await res.json()) as { products?: ProductRow[] };
+
+  // A body without a `products` ARRAY is not "no products" — it is an answer we
+  // did not understand. Returning [] here would end the paging loop early and,
+  // on a full pull, hand reconcileProductsCache() an empty "complete" ID set
+  // that wipes the catalogue. Same rule as evaluateReconcile: no proof, no act.
+  if (!Array.isArray(body.products)) {
+    throw new Error("GET /api/products returned an unexpected body");
+  }
+  return body.products;
+}
 
 /**
  * Fetch ALL products for a store using pagination.
- * Supabase/PostgREST enforces a server-side max-rows limit (default 1000),
- * so we must paginate through all pages using .range().
+ * PostgREST enforces a server-side max-rows limit (1000), so the route pages
+ * with .range() and this loop asks for one page at a time until a short one.
  * After fetch, writes products to IndexedDB cache for instant subsequent reads.
  * Also reconciles the cache — removes any cached products that no longer
  * exist in Supabase (deleted products).
@@ -281,20 +320,16 @@ export async function fetchAllProducts(
   let from = 0;
 
   while (true) {
-    const to = from + PAGE_SIZE - 1;
-    const { data, error } = await supabase
-      .from("products")
-      .select(PRODUCT_COLUMNS)
-      .eq("store_id", storeId)
-      // Stable pagination: order by name THEN id. Without a unique tiebreaker
-      // (id), pagination across page boundaries can skip/duplicate rows when
-      // many products share the same name (e.g. "Coffee" variants).
-      .order("name")
-      .order("id")
-      .range(from, to);
+    // The route applies the stable order (name THEN id). Without a unique
+    // tiebreaker, pagination across page boundaries can skip/duplicate rows
+    // when many products share the same name (e.g. "Coffee" variants).
+    const data = await getProducts({
+      fields: "full",
+      offset: String(from),
+      limit: String(PAGE_SIZE),
+    });
 
-    if (error) throw error;
-    if (!data || data.length === 0) break;
+    if (data.length === 0) break;
 
     allProducts = allProducts.concat(data);
     if (data.length < PAGE_SIZE) break; // Last page
@@ -354,23 +389,33 @@ export async function fetchAllProductIds(
   let from = 0;
 
   while (true) {
-    const to = from + PAGE_SIZE - 1;
-    const { data, error } = await supabase
-      .from("products")
-      .select("id")
-      // Order by the primary key — unique, so pages can't skip or duplicate.
-      .order("id")
-      .eq("store_id", storeId)
-      .range(from, to);
-
-    if (error) {
+    // `fields=id`, ordered by the primary key — unique, so pages can't skip or
+    // duplicate. A failed page returns null: the caller must then SKIP the
+    // reconcile rather than delete on a partial ID set.
+    let page: string[];
+    try {
+      const query = new URLSearchParams({
+        fields: "id",
+        offset: String(from),
+        limit: String(PAGE_SIZE),
+      }).toString();
+      const res = await fetch(`/api/products?${query}`, {
+        headers: buildAuthHeaders(),
+        cache: "no-store",
+      });
+      if (!res.ok) throw new Error(`GET /api/products failed (${res.status})`);
+      const body = (await res.json()) as { ids?: string[] };
+      if (!Array.isArray(body.ids)) throw new Error("unexpected body");
+      page = body.ids;
+    } catch (error) {
       console.warn("[Products] Product ID pagination failed:", error);
       return null;
     }
-    if (!data || data.length === 0) break;
 
-    for (const row of data) ids.push((row as { id: string }).id);
-    if (data.length < PAGE_SIZE) break; // Last page
+    if (page.length === 0) break;
+
+    for (const id of page) ids.push(id);
+    if (page.length < PAGE_SIZE) break; // Last page
 
     from += PAGE_SIZE;
   }
@@ -400,18 +445,14 @@ async function fetchProductsUpdatedSince(
   let from = 0;
 
   while (true) {
-    const to = from + PAGE_SIZE - 1;
-    const { data, error } = await supabase
-      .from("products")
-      .select(PRODUCT_COLUMNS)
-      .eq("store_id", storeId)
-      .gte("updated_at", sinceIso)
-      .order("updated_at")
-      .order("id")
-      .range(from, to);
+    const data = await getProducts({
+      fields: "full",
+      since: sinceIso,
+      offset: String(from),
+      limit: String(PAGE_SIZE),
+    });
 
-    if (error) throw error;
-    if (!data || data.length === 0) break;
+    if (data.length === 0) break;
 
     rows.push(...data);
     if (data.length < PAGE_SIZE) break;
@@ -422,18 +463,27 @@ async function fetchProductsUpdatedSince(
   return rows;
 }
 
-/** Server-side exact product count, or null if it could not be determined. */
+/**
+ * Server-side exact product count, or null if it could not be determined.
+ *
+ * Null is not a detail: evaluateReconcile() treats "live product count
+ * unavailable" as a refusal to delete anything. Never substitute a guess.
+ */
 async function fetchLiveProductCount(
   supabase: SupabaseBrowserClient,
   storeId: string
 ): Promise<number | null> {
-  const { count, error } = await supabase
-    .from("products")
-    .select("id", { count: "exact", head: true })
-    .eq("store_id", storeId);
-
-  if (error || count === null || count === undefined) return null;
-  return count;
+  try {
+    const res = await fetch("/api/products?fields=count", {
+      headers: buildAuthHeaders(),
+      cache: "no-store",
+    });
+    if (!res.ok) return null;
+    const body = (await res.json()) as { count?: number };
+    return typeof body.count === "number" ? body.count : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -522,7 +572,7 @@ interface InFlightRun {
 const inFlight = new Map<string, InFlightRun>();
 
 /**
- * Bring the local product cache up to date with Supabase.
+ * Bring the local product cache up to date from `GET /api/products`.
  *
  * Incremental where possible (an `updated_at` watermark, backed by
  * idx_products_store_updated), full pull on first sync or whenever the cache is

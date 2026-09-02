@@ -288,3 +288,160 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Failed to save product" }, { status: 500 });
   }
 }
+
+// =============================================================================
+// GET /api/products — read this store's catalogue
+//
+// The browser used to read `products` STRAIGHT from Supabase with the public
+// key, which is why every till had to hold a key that could read the whole
+// database. This is that read, moved behind the server so the public key can
+// be swapped for a real anon key.
+//
+// ONE endpoint with a `fields` mode rather than three routes: the full pull,
+// the reconcile's ID sweep and the exact count are the same query with a
+// different column list, and the reconcile guard is only sound when all three
+// are scoped to the SAME tenant by the SAME code. Splitting them would
+// duplicate the auth and the store scoping, which is exactly where a scoping
+// bug hides.
+//
+//   ?fields=full  (default)  -> { products: ProductRow[] }   PRODUCT_COLUMNS
+//   ?fields=id               -> { ids: string[] }            for reconcile
+//   ?fields=count            -> { count: number }            exact, head-only
+//   ?barcode=<code>          -> { products: ProductRow[] }   0 or 1 row
+//
+//   &limit=<1..1000>  &offset=<n>   paging (full and id modes)
+//   &since=<iso>                    delta watermark (full mode)
+//
+// ⚠️ PAGING IS LOAD-BEARING. PostgREST caps ANY read at 1,000 rows, so the
+// client pages with .range() and stops on a SHORT page. That means this route
+// must never return fewer rows than asked for while more exist in the window —
+// a silently trimmed page reads to the client as "end of catalogue", and an
+// ID list truncated that way tells reconcileProductsCache() that everything
+// past row 1,000 was deleted. `limit` above the ceiling is therefore REJECTED
+// rather than clamped: a clamped limit is the `.limit(5000)` bug that shipped
+// in /api/recipes.
+//
+// ⚠️ AUTH: `resolveCaller()`, so tenancy is looked up server-side and the
+// caller cannot name a store. There is deliberately NO section-permission gate:
+// the catalogue feeds both /pos and /pos/products, and a caller whose
+// permissions blob failed to parse would get an empty till rather than a denied
+// screen. Authentication + store scoping is what closes the hole here; the
+// section gates stay where they already are, on the screens.
+// =============================================================================
+
+import { readAuthHeader, resolveCaller } from "@/lib/auth/apiCaller";
+import { PRODUCT_COLUMNS } from "@/lib/products/columns";
+
+/** PostgREST's hard ceiling. A page larger than this is silently trimmed. */
+const MAX_PAGE = 1000;
+
+/** A positive integer query param, or a message describing why it is not. */
+function intParam(raw: string | null, field: string, fallback: number, max: number): number | string {
+  if (raw === null || raw === "") return fallback;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 0) return `${field} must be a non-negative integer`;
+  if (n > max) return `${field} must not exceed ${max}`;
+  return n;
+}
+
+export async function GET(request: Request) {
+  try {
+    if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+      return NextResponse.json({ error: "Supabase is not configured" }, { status: 500 });
+    }
+
+    const { searchParams } = new URL(request.url);
+
+    const fields = searchParams.get("fields") || "full";
+    if (fields !== "full" && fields !== "id" && fields !== "count") {
+      return NextResponse.json({ error: "fields must be full, id or count" }, { status: 400 });
+    }
+
+    // Rejected, never clamped — see the paging note above.
+    const limit = intParam(searchParams.get("limit"), "limit", MAX_PAGE, MAX_PAGE);
+    if (typeof limit === "string") return NextResponse.json({ error: limit }, { status: 400 });
+    if (limit === 0) return NextResponse.json({ error: "limit must be at least 1" }, { status: 400 });
+
+    const offset = intParam(searchParams.get("offset"), "offset", 0, 10_000_000);
+    if (typeof offset === "string") return NextResponse.json({ error: offset }, { status: 400 });
+
+    const since = searchParams.get("since");
+    if (since !== null && Number.isNaN(Date.parse(since))) {
+      return NextResponse.json({ error: "since must be an ISO timestamp" }, { status: 400 });
+    }
+
+    const barcode = searchParams.get("barcode");
+    if (barcode !== null && (barcode.length === 0 || barcode.length > 64)) {
+      return NextResponse.json({ error: "barcode is out of range" }, { status: 400 });
+    }
+
+    const supabase = await createServiceRoleClient();
+
+    const { storeId, userId } = readAuthHeader(request);
+    const caller = await resolveCaller(supabase, storeId, userId);
+    if (!caller) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    // ── Exact count ───────────────────────────────────────────────────────
+    // head-only, so no rows cross the wire. This is the "positive proof" half
+    // of evaluateReconcile(): the client compares it against the number of IDs
+    // it managed to fetch and refuses to delete anything if they disagree.
+    if (fields === "count") {
+      const { count, error } = await supabase
+        .from("products")
+        .select("id", { count: "exact", head: true })
+        .eq("store_id", storeId);
+
+      if (error || count === null || count === undefined) {
+        return NextResponse.json({ error: "Failed to count products" }, { status: 500 });
+      }
+      return NextResponse.json({ count });
+    }
+
+    let query = supabase
+      .from("products")
+      .select(fields === "id" ? "id" : PRODUCT_COLUMNS)
+      // Tenancy from the RESOLVED caller's store, never from the query string.
+      .eq("store_id", storeId);
+
+    if (barcode !== null) {
+      // A single exact lookup — the till's fallback for a code that has not
+      // reached this device's cache yet. Paging is irrelevant to it.
+      const { data, error } = await query.eq("barcode", barcode).limit(1);
+      if (error) {
+        console.error("[API] Product barcode lookup failed:", error.message);
+        return NextResponse.json({ error: "Failed to load products" }, { status: 500 });
+      }
+      return NextResponse.json({ products: data ?? [] });
+    }
+
+    if (fields === "id") {
+      // Ordered by the primary key — unique, so pages cannot skip or repeat.
+      query = query.order("id");
+    } else if (since !== null) {
+      // updated_at alone is not unique: a bulk reprice stamps hundreds of rows
+      // at the same NOW(). Tiebreak on id or pages skip rows.
+      query = query.gte("updated_at", since).order("updated_at").order("id");
+    } else {
+      query = query.order("name").order("id");
+    }
+
+    const { data, error } = await query.range(offset, offset + limit - 1);
+
+    if (error) {
+      console.error("[API] Product read failed:", error.message);
+      return NextResponse.json({ error: "Failed to load products" }, { status: 500 });
+    }
+
+    const rows = data ?? [];
+
+    if (fields === "id") {
+      return NextResponse.json({ ids: rows.map((r) => (r as unknown as { id: string }).id) });
+    }
+    return NextResponse.json({ products: rows });
+  } catch (error: unknown) {
+    console.error("[API] GET /api/products error:", errorMessage(error));
+    return NextResponse.json({ error: "Failed to load products" }, { status: 500 });
+  }
+}
