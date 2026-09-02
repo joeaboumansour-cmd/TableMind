@@ -2,7 +2,6 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { createClient } from "@/lib/supabase/client";
 import { useAuth } from "@/lib/auth/AuthContext";
 import { hasCachedCredentials, getMostRecentCachedEntry, getCachedUsernamesForStore } from "@/lib/auth/offlineAuth";
 import { connectivity } from "@/lib/connectivity";
@@ -13,11 +12,9 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Loader2, Eye, EyeOff, AlertTriangle, Store, User, WifiOff, Wifi } from "lucide-react";
 import { toast } from "@/lib/toast";
 
-const supabase = createClient();
-
 export default function LoginPage() {
   const router = useRouter();
-  const { user, login, loginEmployee, loginOffline, isLoading } = useAuth();
+  const { user, login, loginOffline, isLoading } = useAuth();
   const [showPassword, setShowPassword] = useState(false);
 
   // Form fields
@@ -88,65 +85,17 @@ export default function LoginPage() {
       return;
     }
 
-    // Online: proceed with normal Supabase login
-    // Find store by store username
-    const { data: store, error: storeError } = await supabase
-      .from("stores")
-      .select("id, username, password_hash, license_expires_at")
-      .eq("username", storeUsername.trim())
-      .maybeSingle();
-
-    if (storeError || !store) {
-      toast.error("Invalid store credentials");
-      return;
-    }
-
-    // Check license
-    if (new Date(store.license_expires_at) < new Date()) {
-      toast.error("Your license has expired. Please contact support to renew.");
-      return;
-    }
-
-    // Case 1: Owner login — username matches store username
-    if (username.trim() === store.username) {
-      if (store.password_hash !== password) {
-        toast.error("Invalid store credentials");
-        return;
-      }
-
-      // Backward compatibility — also set the legacy goldensquirrel_auth
-      localStorage.setItem("goldensquirrel_auth", JSON.stringify({
-        store_id: store.id,
-        username: store.username,
-        license_expires_at: store.license_expires_at,
-        timestamp: Date.now(),
-      }));
-
-      const result = await login(store.username, password);
-      if (result.success) {
-        toast.success("Welcome back!");
-        setTimeout(() => {
-          window.location.href = "/pos";
-        }, 100);
-      } else {
-        toast.error(result.error || "Invalid credentials");
-      }
-      return;
-    }
-
-    // Case 2: Employee login
-    // Use loginEmployee from AuthContext which handles caching for offline access
-    const result = await loginEmployee(store.id, storeUsername.trim(), username.trim(), password);
+    // Online: the server does every lookup and the password comparison.
+    //
+    // This page used to select the store row itself — `password_hash` and all
+    // — compare the password in the browser, and decide owner-vs-employee from
+    // the result. That is bug-0006: it put the store's credential in every
+    // till's memory and needed a Supabase key that bypasses RLS to work at all.
+    // `POST /api/auth/login` answers both cases now, and `login()` writes the
+    // legacy `goldensquirrel_auth` blob (the x-auth-data tenancy header) as
+    // part of establishing the session, so it cannot be forgotten here.
+    const result = await login(storeUsername.trim(), username.trim(), password);
     if (result.success) {
-      // Backward compatibility — also set legacy goldensquirrel_auth so existing
-      // pages that read it for store_id still work
-      localStorage.setItem("goldensquirrel_auth", JSON.stringify({
-        store_id: store.id,
-        username: username.trim(),
-        license_expires_at: store.license_expires_at,
-        timestamp: Date.now(),
-      }));
-
       toast.success("Welcome back!");
       setTimeout(() => {
         window.location.href = "/pos";
