@@ -1,28 +1,27 @@
 {
   "alive": true,
-  "tick": 1,
+  "tick": 6,
   "agent": {
-    "enabled": true,
-    "ran": false,
-    "locked": [],
-    "dispatched": null
+    "enabled": false,
+    "ran": false
   },
-  "startedAt": "2026-09-02T10:51:47.158Z",
-  "finishedAt": "2026-09-02T10:52:53.203Z",
-  "nextRunAt": "2026-09-02T10:55:53.203Z",
-  "intervalSeconds": 180,
+  "startedAt": "2026-09-02T13:43:09.316Z",
+  "finishedAt": "2026-09-02T13:47:23.321Z",
+  "nextRunAt": "2026-09-02T13:51:23.321Z",
+  "intervalSeconds": 240,
   "base": "http://localhost:3000",
   "unit": {
     "ok": true,
-    "tests": "?"
+    "tests": "181"
   },
   "corpus": {
     "ok": false,
-    "passed": 0,
-    "failed": 3,
+    "passed": 1,
+    "failed": 6,
     "failingLocks": [
-      "bug-0004",
-      "bug-0002"
+      "bug-0006",
+      "bug-0002",
+      "bug-0004"
     ]
   }
 }

@@ -4,7 +4,6 @@
 // and flushes queued transactions to Supabase
 // =============================================
 
-import { createClient } from "@/lib/supabase/client";
 import { refreshProductsIntoCache } from "@/lib/products/refresh";
 import {
   getQueuedTransactions,
@@ -309,7 +308,7 @@ class SyncEngine {
     }
 
     try {
-      const result = await refreshProductsIntoCache(createClient(), this.storeId);
+      const result = await refreshProductsIntoCache(this.storeId);
       console.log(
         `[Sync] ${result.mode} pull: ${result.count} written, ${result.removed} removed`
       );
@@ -763,10 +762,7 @@ class SyncEngine {
           });
         } catch {}
       }
-    }
-
-    const supabase = createClient();
-
+    }
     // Process cash operations first (order matters).
     //
     // Within them, a register_create must be pushed BEFORE the cash_shift_open
@@ -816,66 +812,33 @@ class SyncEngine {
       }
     }
 
+    // Legacy `stock_decrement` pending writes are DROPPED, never applied.
+    //
+    // Nothing creates them any more — `queueStockDecrement` exists in
+    // localDB.ts but has no callers. Only rows written by older app versions
+    // can still exist, and stock is decremented SERVER-SIDE now: every sale
+    // goes through POST /api/transactions, which applies decrement_stock_batch
+    // (migration 037). `pushTransactions` already deletes rows matching a
+    // queued transaction for exactly that reason — its comment says they
+    // "would cause double-decrementing now that the API handles stock
+    // server-side".
+    //
+    // This loop used to APPLY the same rows via the decrement_stock RPC, so
+    // any legacy row whose sale had already left the offline queue — synced,
+    // or dead-lettered — was a SECOND decrement for a sale the server had
+    // already accounted for (bug-0007).
+    //
+    // Applying them is also impossible now: this was the last thing in the
+    // browser holding a Supabase client, and the client no longer has a key
+    // that can reach the database. Dropping them explicitly beats retrying
+    // five times and giving up silently.
     for (const write of stockDecrements) {
-      // CRITICAL FIX: Drop writes that have exceeded the retry limit
-      if (write.retry_count >= MAX_PENDING_WRITE_RETRIES) {
-        console.error(`[Sync] Dropping pending write ${write.id} after ${write.retry_count} retries: ${write.last_error}`);
-        await removePendingWrite(write.id);
-        result.failed++;
-        result.errors.push(`Stock decrement ${write.id}: dropped after ${write.retry_count} retries (${write.last_error})`);
-        logActivity("sync.write_dropped", {
-          target: write.type,
-          details: { id: write.id, attempts: write.retry_count, error: write.last_error, kept: false },
-        });
-        continue;
-      }
-
-      try {
-        const payload = write.payload as {
-          product_id: string;
-          quantity: number;
-          store_id: string;
-        };
-
-        const { error: stockError } = await supabase.rpc("decrement_stock", {
-          product_id: payload.product_id,
-          quantity: payload.quantity,
-          p_store_id: payload.store_id || null,
-        });
-
-        if (stockError) {
-          throw new Error(stockError.message || "Stock decrement failed");
-        }
-
-        // Success — remove from pending writes
-        await removePendingWrite(write.id);
-        result.processed++;
-        console.log(`[Sync] Processed stock decrement for product ${payload.product_id}`);
-      } catch (error: any) {
-        console.error(
-          `[Sync] Failed to process stock decrement ${write.id}:`,
-          error
-        );
-        result.failed++;
-        result.errors.push(
-          `Stock decrement ${write.id}: ${error.message}`
-        );
-
-        // Update retry count and last error
-        // Use direct DB modification since updatePendingWriteRetry may not be available
-        try {
-          const { localDB } = await import("@/lib/db/localDB");
-          await localDB.pending_writes
-            .where("id")
-            .equals(write.id)
-            .modify((w) => {
-              w.retry_count += 1;
-              w.last_error = error.message;
-            });
-        } catch (e) {
-          console.warn("[Sync] Failed to update pending write retry count:", e);
-        }
-      }
+      await removePendingWrite(write.id);
+      result.processed++;
+      logActivity("sync.write_dropped", {
+        target: write.type,
+        details: { id: write.id, reason: "legacy stock decrement; stock is applied server-side", kept: false },
+      });
     }
 
     return result;

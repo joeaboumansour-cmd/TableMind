@@ -3,7 +3,6 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -172,7 +171,6 @@ function StoreProductsPageContent() {
   // Destructive confirms (delete, wipe-and-replace import) go through this.
   const { confirm, confirmDialog } = useConfirm();
   // Lazy init supabase client inside component to avoid SSR issues on hard refresh
-  const [supabase] = useState(() => createClient());
   const [storeId, setStoreId] = useState<string>("");
   const [products, setProducts] = useState<Product[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -524,7 +522,7 @@ function StoreProductsPageContent() {
       }
 
       setIsRefreshing(true);
-      const result = await refreshProductsIntoCache(supabase, storeId);
+      const result = await refreshProductsIntoCache(storeId);
       if (isStale()) return;
 
       // Nothing moved on the server: leave products alone. Replacing the array
@@ -797,10 +795,17 @@ function StoreProductsPageContent() {
     if (!confirmed) return;
 
     try {
-      const { error } = await supabase
-        .from("products")
-        .delete()
-        .eq("id", productId);
+      // Server-side, and scoped by store THERE. This used to filter on `id`
+      // alone and lean on RLS, which this app does not have — an id from
+      // another tenant would have been deleted.
+      const res = await fetch(`/api/products?product_id=${encodeURIComponent(productId)}`, {
+        method: "DELETE",
+        headers: buildAuthHeaders(),
+      });
+      const body = res.ok ? null : await res.json().catch(() => ({}));
+      const error = res.ok
+        ? null
+        : { code: res.status === 409 ? "23503" : String(res.status), message: body?.error ?? "Delete failed" };
 
       if (error) {
         // 23503 means a foreign key still blocks the delete. After migration
@@ -1404,17 +1409,17 @@ function StoreProductsPageContent() {
     try {
       for (const batch of plan.batches) {
         for (const chunk of chunkIds(batch.ids)) {
-          const { data, error } = await supabase
-            .from("products")
-            .update(batch.patch)
-            .in("id", chunk)
-            // The single-product edit path filters on id alone and leans
-            // entirely on RLS. Scoping the bulk write by store as well is a
-            // strengthening — do not drop it to make something work.
-            .eq("store_id", storeId)
-            .select(
-              "id, cost_price, selling_price, currency, profit_percentage, discount_percentage"
-            );
+          // The store scoping that used to be written here now lives in the
+          // route, applied from the RESOLVED caller rather than from a value
+          // the browser supplies — a strengthening, not a relocation.
+          const res = await fetch("/api/products", {
+            method: "PATCH",
+            headers: { ...buildAuthHeaders(), "Content-Type": "application/json" },
+            body: JSON.stringify({ ids: chunk, patch: batch.patch }),
+          });
+          const payload = await res.json().catch(() => ({}));
+          const data = res.ok ? (payload.products as AppliedRow[]) : null;
+          const error = res.ok ? null : new Error(payload.error ?? "Bulk update failed");
 
           if (error) throw error;
           if (data) applied.push(...(data as AppliedRow[]));

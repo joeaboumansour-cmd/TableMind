@@ -329,7 +329,7 @@ export async function POST(request: Request) {
 // section gates stay where they already are, on the screens.
 // =============================================================================
 
-import { readAuthHeader, resolveCaller } from "@/lib/auth/apiCaller";
+import { readAuthHeader, resolveCaller, canAccessSection } from "@/lib/auth/apiCaller";
 import { PRODUCT_COLUMNS } from "@/lib/products/columns";
 
 /** PostgREST's hard ceiling. A page larger than this is silently trimmed. */
@@ -443,5 +443,144 @@ export async function GET(request: Request) {
   } catch (error: unknown) {
     console.error("[API] GET /api/products error:", errorMessage(error));
     return NextResponse.json({ error: "Failed to load products" }, { status: 500 });
+  }
+}
+
+// =============================================
+// DELETE and PATCH — the inventory screen's writes.
+//
+// ⚠️ AUTH: `resolveCaller()` plus the `inventory` section. That is the pricing
+// permission (CLAUDE.md §5): everything deciding what a customer is charged is
+// gated on it, so a bulk reprice belongs behind it too.
+//
+// ⚠️ SCOPING: both verbs filter on `store_id` from the RESOLVED caller as well
+// as the row id. The client code these replace did not. The single-product
+// delete filtered on `id` alone and leaned on RLS — which this app does not
+// have, because auth is hand-rolled and Postgres cannot identify the caller.
+// An id from another tenant would have been deleted. Do not drop the store
+// filter to make something work.
+// =============================================
+
+/** Chunked by the caller; this is the ceiling per request. */
+const MAX_PATCH_IDS = 200;
+
+const uuidList = (value: unknown, field: string): string[] | string => {
+  if (!Array.isArray(value) || value.length === 0) return `${field} must be a non-empty array`;
+  if (value.length > MAX_PATCH_IDS) return `${field} may not exceed ${MAX_PATCH_IDS} ids`;
+  for (const id of value) {
+    if (typeof id !== "string" || !UUID_RE.test(id)) return `${field} contains a non-uuid`;
+  }
+  return value as string[];
+};
+
+async function authorizeInventory(request: Request) {
+  const supabase = await createServiceRoleClient();
+  const { storeId, userId } = readAuthHeader(request);
+  const caller = await resolveCaller(supabase, storeId, userId);
+  if (!caller) return { error: NextResponse.json({ error: "Unauthorized" }, { status: 401 }) };
+  if (!canAccessSection(caller, "inventory")) {
+    return { error: NextResponse.json({ error: "Forbidden" }, { status: 403 }) };
+  }
+  return { supabase, storeId: storeId as string };
+}
+
+export async function DELETE(request: Request) {
+  try {
+    const productId = new URL(request.url).searchParams.get("product_id");
+    if (!productId || !UUID_RE.test(productId)) {
+      return NextResponse.json({ error: "product_id must be a uuid" }, { status: 400 });
+    }
+
+    const auth = await authorizeInventory(request);
+    if ("error" in auth) return auth.error;
+
+    const { error } = await auth.supabase
+      .from("products")
+      .delete()
+      .eq("id", productId)
+      .eq("store_id", auth.storeId);
+
+    if (error) {
+      // 23503: a foreign key still blocks the delete. After migration 028 the
+      // transaction_items FK is ON DELETE SET NULL, so this should not fire
+      // for sales history — if it does, 028 is not applied to this database.
+      if (error.code === "23503") {
+        return NextResponse.json(
+          { error: "This product is still referenced and cannot be deleted", code: "23503" },
+          { status: 409 }
+        );
+      }
+      console.error("[Products] delete failed:", error.message);
+      return NextResponse.json({ error: "Failed to delete the product" }, { status: 500 });
+    }
+
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    console.error("[Products] delete threw:", errorMessage(error));
+    return NextResponse.json({ error: "Failed to delete the product" }, { status: 500 });
+  }
+}
+
+export async function PATCH(request: Request) {
+  try {
+    const body = (await request.json().catch(() => null)) as
+      | { ids?: unknown; patch?: unknown }
+      | null;
+    if (!body || typeof body !== "object") {
+      return NextResponse.json({ error: "A JSON body is required" }, { status: 400 });
+    }
+
+    const ids = uuidList(body.ids, "ids");
+    if (typeof ids === "string") return NextResponse.json({ error: ids }, { status: 400 });
+
+    // An allowlist, not a body spread: a spread would let a caller set
+    // `store_id` and move a row between tenants, or write `profit_percentage`,
+    // which is computed by a database trigger (CLAUDE.md §9).
+    const ALLOWED = ["cost_price", "selling_price", "currency", "discount_percentage"] as const;
+    const raw = (body.patch ?? {}) as Record<string, unknown>;
+    const patch: Record<string, unknown> = {};
+    for (const key of ALLOWED) if (key in raw) patch[key] = raw[key];
+    if (Object.keys(patch).length === 0) {
+      return NextResponse.json(
+        { error: `patch must set at least one of: ${ALLOWED.join(", ")}` },
+        { status: 400 }
+      );
+    }
+
+    for (const key of ["cost_price", "selling_price"] as const) {
+      if (key in patch) {
+        const v = money(patch[key], key);
+        if (typeof v === "string") return NextResponse.json({ error: v }, { status: 400 });
+        patch[key] = v;
+      }
+    }
+    if ("discount_percentage" in patch) {
+      const v = boundedPercentage(patch.discount_percentage, "discount_percentage");
+      if (typeof v === "string") return NextResponse.json({ error: v }, { status: 400 });
+      patch.discount_percentage = v;
+    }
+    if ("currency" in patch && patch.currency !== "LL" && patch.currency !== "USD") {
+      return NextResponse.json({ error: "currency must be LL or USD" }, { status: 400 });
+    }
+
+    const auth = await authorizeInventory(request);
+    if ("error" in auth) return auth.error;
+
+    const { data, error } = await auth.supabase
+      .from("products")
+      .update(patch)
+      .in("id", ids)
+      .eq("store_id", auth.storeId)
+      .select("id, cost_price, selling_price, currency, profit_percentage, discount_percentage");
+
+    if (error) {
+      console.error("[Products] bulk update failed:", error.message);
+      return NextResponse.json({ error: "Failed to update the products" }, { status: 500 });
+    }
+
+    return NextResponse.json({ products: data ?? [] });
+  } catch (error) {
+    console.error("[Products] bulk update threw:", errorMessage(error));
+    return NextResponse.json({ error: "Failed to update the products" }, { status: 500 });
   }
 }

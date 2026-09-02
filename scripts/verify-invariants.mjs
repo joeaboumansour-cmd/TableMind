@@ -200,6 +200,53 @@ const CHECKS = [
       "@/lib/feedback. BarcodeScanner itself is loaded via next/dynamic.",
     ],
   },
+  {
+    name: "security — nothing outside src/app/api/ constructs a Supabase client",
+    run: () => {
+      // Server-side by construction, or the client factories themselves.
+      const SERVER = [
+        /^src\/app\/api\//,
+        /^src\/lib\/supabase\//,
+        /^src\/lib\/types\//,
+        /^src\/middleware\.ts$/,
+      ];
+      // Value imports only. `import type` and `typeof` are erased at compile
+      // time and ship nothing, so flagging them would make this cry wolf on a
+      // file that is already correct. The dynamic form is listed because a real
+      // offender used it INSIDE a function body, where no scan of the import
+      // block would ever have found it.
+      const BAD = [
+        /(^|[^a-zA-Z])import\s+(?!type\b)[^;]*from\s+["']@\/lib\/supabase\/client["']/,
+        /(^|[^a-zA-Z])import\s*\(\s*["']@\/lib\/supabase\/client["']\s*\)/,
+        /createBrowserClient\s*\(/,
+      ];
+      const found = [];
+      for (const f of files) {
+        if (SERVER.some((re) => re.test(f.path))) continue;
+        f.code.split("\n").forEach((line, i) => {
+          if (BAD.some((re) => re.test(line))) found.push(`${f.path}:${i + 1}`);
+        });
+      }
+      return found;
+    },
+    why: [
+      "Anything prefixed NEXT_PUBLIC_ is compiled into the client bundle, so a",
+      "browser Supabase client means shipping a database key to every till. For",
+      "a long time that key was the SERVICE_ROLE one, which bypasses RLS: any",
+      "visitor to the site could read and write every tenant's data, and the key",
+      "was recoverable from the deployed JavaScript in under a minute.",
+      "",
+      "It could not simply be swapped for an anon key, because the browser was",
+      "doing the authentication itself — login pulled password_hash down to the",
+      "page and compared it there — so a properly-scoped key made login fail.",
+      "That is why this rule is structural rather than a config note.",
+      "",
+      "RLS cannot rescue it either: auth is hand-rolled in localStorage, so",
+      "Postgres has no identity to write a policy against. The browser talks to",
+      "/api/*, which resolves the caller and scopes every query server-side.",
+      "Keep it that way.",
+    ],
+  },
 ];
 
 let failed = 0;

@@ -312,7 +312,7 @@ async function getProducts(params: Record<string, string>): Promise<ProductRow[]
  * exist in Supabase (deleted products).
  */
 export async function fetchAllProducts(
-  supabase: SupabaseBrowserClient,
+  supabase: SupabaseBrowserClient | undefined,
   storeId: string
 ): Promise<ProductRow[]> {
   const startedAt = Date.now();
@@ -382,7 +382,7 @@ export async function fetchAllProducts(
  * skip reconciliation rather than delete on incomplete information.
  */
 export async function fetchAllProductIds(
-  supabase: SupabaseBrowserClient,
+  supabase: SupabaseBrowserClient | undefined,
   storeId: string
 ): Promise<string[] | null> {
   const ids: string[] = [];
@@ -437,7 +437,7 @@ export async function fetchAllProductIds(
  * without a unique tiebreaker pages can skip or repeat rows.
  */
 async function fetchProductsUpdatedSince(
-  supabase: SupabaseBrowserClient,
+  supabase: SupabaseBrowserClient | undefined,
   storeId: string,
   sinceIso: string
 ): Promise<ProductRow[]> {
@@ -470,7 +470,7 @@ async function fetchProductsUpdatedSince(
  * unavailable" as a refusal to delete anything. Never substitute a guess.
  */
 async function fetchLiveProductCount(
-  supabase: SupabaseBrowserClient,
+  supabase: SupabaseBrowserClient | undefined,
   storeId: string
 ): Promise<number | null> {
   try {
@@ -492,7 +492,7 @@ async function fetchLiveProductCount(
  * Returns how many rows were removed.
  */
 async function reconcileIfSafe(
-  supabase: SupabaseBrowserClient,
+  supabase: SupabaseBrowserClient | undefined,
   storeId: string,
   liveCount: number | null
 ): Promise<number> {
@@ -517,7 +517,7 @@ async function reconcileIfSafe(
       return 0;
     }
 
-    const liveIds = await fetchAllProductIds(supabase, storeId);
+    const liveIds = await fetchAllProductIds(undefined, storeId);
     const decision = evaluateReconcile({
       cachedCount,
       liveCount,
@@ -588,10 +588,7 @@ const inFlight = new Map<string, InFlightRun>();
  *
  * Throws on network failure; callers decide whether that is fatal.
  */
-export function refreshProductsIntoCache(
-  supabase: SupabaseBrowserClient,
-  storeId: string
-): Promise<RefreshResult> {
+export function refreshProductsIntoCache(storeId: string): Promise<RefreshResult> {
   const current = inFlight.get(storeId);
 
   if (current && Date.now() - current.startedAt < JOIN_WINDOW_MS) {
@@ -599,7 +596,7 @@ export function refreshProductsIntoCache(
   }
 
   const promise = (current ? current.promise.catch(() => undefined) : Promise.resolve()).then(
-    () => runRefresh(supabase, storeId)
+    () => runRefresh(storeId)
   );
 
   const entry: InFlightRun = { startedAt: Date.now(), promise };
@@ -611,16 +608,13 @@ export function refreshProductsIntoCache(
   });
 }
 
-async function runRefresh(
-  supabase: SupabaseBrowserClient,
-  storeId: string
-): Promise<RefreshResult> {
+async function runRefresh(storeId: string): Promise<RefreshResult> {
   const startedAt = Date.now();
   const lastSync = readLastSync(storeId);
 
   // No watermark — nothing to be incremental about.
   if (lastSync === null) {
-    const all = await fetchAllProducts(supabase, storeId);
+    const all = await fetchAllProducts(undefined, storeId);
     return { mode: "full", changed: true, count: all.length, removed: 0 };
   }
 
@@ -642,8 +636,8 @@ async function runRefresh(
   // IndexedDB read, so it costs no network, and starting it early would only
   // add main-thread work while the two network calls are in flight.
   const [changedRows, liveCount] = await Promise.all([
-    fetchProductsUpdatedSince(supabase, storeId, sinceIso),
-    fetchLiveProductCount(supabase, storeId),
+    fetchProductsUpdatedSince(undefined, storeId, sinceIso),
+    fetchLiveProductCount(undefined, storeId),
   ]);
 
   // The delta only carries rows that changed. If the cache is missing products
@@ -655,7 +649,7 @@ async function runRefresh(
       console.log(
         `[Products] Cache has ${cachedCount} of ${liveCount} products — doing full pull`
       );
-      const all = await fetchAllProducts(supabase, storeId);
+      const all = await fetchAllProducts(undefined, storeId);
       return { mode: "full", changed: true, count: all.length, removed: 0 };
     }
   }
@@ -668,7 +662,7 @@ async function runRefresh(
     console.log(`[Products] Delta pull applied ${changedRows.length} changed products`);
   }
 
-  const removed = await reconcileIfSafe(supabase, storeId, liveCount);
+  const removed = await reconcileIfSafe(undefined, storeId, liveCount);
 
   writeLastSync(storeId, startedAt);
 

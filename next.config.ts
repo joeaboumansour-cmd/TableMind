@@ -114,6 +114,33 @@ const withPWA = withPWAInit({
         handler: "NetworkOnly" as const,
         method: "GET",
       },
+      // CRITICAL: never cache the catalogue reads.
+      //
+      // The browser no longer talks to Supabase at all — the catalogue now
+      // comes from `GET /api/products`, which resolves the caller and scopes
+      // every query server-side. That moved these reads under next-pwa's
+      // default `apis` rule (NetworkFirst, 24h), and a cached catalogue is
+      // dangerous in a way a cached page is not.
+      //
+      // `refreshProductsIntoCache()` feeds `reconcileProductsCache()`, which
+      // DELETES local products that the server's ID set no longer contains.
+      // A day-old cached full pull is internally consistent — its ids and its
+      // count agree — so `evaluateReconcile()`'s "positive proof" test passes
+      // on it, and every product added since is deleted from the till. The
+      // next sync re-pulls them, and the loop repeats: exactly the permanent
+      // delete/refetch cycle CLAUDE.md §4 warns about, reached through the
+      // service worker instead of through an unpaginated query.
+      //
+      // NetworkOnly is safe for offline use. Offline the till reads its Dexie
+      // cache, not this endpoint; the fetch throws, `runRefresh` bails BEFORE
+      // reconciling and before advancing the watermark, and nothing is
+      // deleted. A failed refresh is always recoverable — a wrong reconcile
+      // is not.
+      {
+        urlPattern: ({ url }: { url: URL }) => url.pathname.startsWith("/api/products"),
+        handler: "NetworkOnly" as const,
+        method: "GET",
+      },
       // CRITICAL: never cache the credential reads.
       //
       // Login is hand-rolled: the browser SELECTs the row and compares the
