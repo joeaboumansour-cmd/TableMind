@@ -125,6 +125,57 @@ describe("getTotalUsd", () => {
   });
 });
 
+// =============================================
+// Regression lock — bug-0005.
+//
+// `getSubtotalUsd()` used to be the plain sum of `item.total_price_usd`, which
+// `addItem` stamps on a CURRENCY-DEPENDENT basis: an LL-priced line holds a
+// RETURN_RATE figure, a USD-priced line holds its native price, which is a
+// SELL_RATE one.
+//
+// Unlike the display-side siblings (bug-0002 on /checkout, bug-0004 on the
+// till), that mixture REACHED THE DATABASE — `checkout/page.tsx` persists this
+// as `transactions.usd_subtotal` on every sale and the sync engine forwards it
+// on offline replay — where it could never reconcile with `usd_total_amount`.
+//
+// Verified end to end before locking: a real sale of these two products
+// recorded `usd_subtotal 7.19` against `usd_total_amount 7.19`, where the
+// pre-fix code recorded 7.13 against 7.19.
+// =============================================
+describe("getSubtotalUsd — bug-0005: one basis, all the way to the database", () => {
+  /** 450,000 LL, but priced natively in USD — the line that exposed the bug. */
+  const usdPriced = product({ id: "usd", selling_price: 5, currency: "USD" });
+
+  it("is the exact LL subtotal at RETURN_RATE, even with a USD-priced line", () => {
+    store().addItem(product({ id: "ll", selling_price: 190_000 }));
+    store().addItem(usdPriced);
+
+    expect(store().getSubtotalUsd()).toBe(convertLlToUsdForReturn(store().getSubtotal()));
+  });
+
+  it("does NOT sum the per-line USD stamps, which mix two rates", () => {
+    store().addItem(product({ id: "ll", selling_price: 190_000 }));
+    store().addItem(usdPriced);
+
+    const perLineSum = store().items.reduce((s, i) => s + i.total_price_usd, 0);
+    // The gap is the SELL/RETURN spread on the USD-priced share of the basket,
+    // so it is only visible when the basket is mixed — an all-LL cart
+    // reconciles either way, which is what made this survive so long.
+    expect(store().getSubtotalUsd()).not.toBeCloseTo(perLineSum, 2);
+  });
+
+  it("agrees with getTotalUsd when no rounding adjustment applies", () => {
+    // 190,000 + 450,000 = 640,000, already a multiple of 5,000, so the
+    // subtotal and the rounded total are the same LL quantity and the two
+    // persisted USD figures must match exactly.
+    store().addItem(product({ id: "ll", selling_price: 190_000 }));
+    store().addItem(usdPriced);
+
+    expect(store().getTotal()).toBe(store().getSubtotal());
+    expect(store().getSubtotalUsd()).toBe(store().getTotalUsd());
+  });
+});
+
 describe("updateLine — invariant #5: an overridden price IS the price", () => {
   it("retypes the unit price and re-derives the line total", () => {
     store().addItem(product({ selling_price: 30_000 }), 2);
