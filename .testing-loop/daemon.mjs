@@ -13,15 +13,24 @@
 // A plain OS process has no such dependency. It ticks whether Claude is
 // thinking, idle, or closed.
 //
-// WHAT IT CANNOT DO, stated plainly so nobody mistakes it for the whole loop:
-// it cannot run exploratory charters (those drive the Browser pane, which
-// lives in the Claude session) and it cannot dispatch a coder. It does the
-// deterministic half — replay the locks, notice regressions, prove it is
-// alive — and that half needs no tokens at all.
+// TWO MODES:
 //
-//   node .testing-loop/daemon.mjs [--interval 300] [--base http://localhost:3000]
+//   default   deterministic only — replay the locks, run the unit suite,
+//             notice failures, prove it is alive. Zero tokens, forever.
+//
+//   --agent   additionally shells out to `claude -p` when, and ONLY when,
+//             there is a bug sitting in "delegated". That is what closes the
+//             gap above: a bug you drag into "Fix it" gets a coder within one
+//             interval instead of waiting for someone to talk to Claude.
+//             No delegated work, no call, no tokens.
+//
+// WHAT NEITHER MODE CAN DO: run an exploratory charter, or hand re-test a fix.
+// Both drive the Browser pane, which only exists inside an interactive Claude
+// session. Those still need you at the keyboard.
+//
+//   node .testing-loop/daemon.mjs [--interval 300] [--base URL] [--agent]
 import { execSync } from "node:child_process";
-import { writeFileSync, existsSync, renameSync, appendFileSync } from "node:fs";
+import { writeFileSync, existsSync, renameSync, appendFileSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { getBug } from "./lib/store.mjs";
 
@@ -37,6 +46,8 @@ const arg = (n, d) => {
 };
 const INTERVAL = Number(arg("interval", 300)) * 1000;
 const BASE = arg("base", "http://localhost:3000");
+// Opt-in. Without it the watchdog is purely deterministic and costs nothing.
+const AGENT = argv.includes("--agent");
 
 const now = () => new Date().toISOString();
 function log(line) {
@@ -79,6 +90,84 @@ async function serverUp(base) {
   } catch {
     return false;
   }
+}
+
+/**
+ * Where the Claude CLI lives.
+ *
+ * Resolved explicitly rather than trusting PATH: the first thing on PATH here
+ * was a broken `claude.exe` stub inside an unrelated npm package, which fails
+ * with "not a valid application for this OS platform" and would have looked
+ * like an auth problem.
+ */
+const CLAUDE =
+  process.env.TESTING_LOOP_CLAUDE ??
+  resolve(process.env.APPDATA ?? "", "npm", "claude.cmd");
+
+const digest = () => JSON.parse(execSync("node .testing-loop/cli.mjs state", { cwd: ROOT, encoding: "utf8" }));
+
+/** How many fixes are already in flight. */
+const openCoders = () =>
+  JSON.parse(execSync("node .testing-loop/worktree.mjs list", { cwd: ROOT, encoding: "utf8" })).length;
+
+async function agentTick() {
+  const state = digest();
+  const out = { ran: false, locked: [], dispatched: null };
+
+  // Deterministic: a verified bug with a lock already written just needs the
+  // ratchet run. No judgement, so no model.
+  for (const line of state.known) {
+    const id = line.split(" ")[0];
+    const bug = JSON.parse(execSync(`node .testing-loop/cli.mjs show --id ${id}`, { cwd: ROOT, encoding: "utf8" }));
+    if (bug?.status !== "verified") continue;
+    try {
+      execSync(`node .testing-loop/ratchet.mjs lock --bug ${id}`, { cwd: ROOT, stdio: "pipe" });
+      out.locked.push(id);
+      log(`tick ${tick}  locked ${id}`);
+    } catch {
+      log(`tick ${tick}  ${id} is verified but its lock does not pass here — left alone`);
+    }
+  }
+
+  const cfg = JSON.parse(readFileSync(resolve(ROOT, ".testing-loop/config.json"), "utf8"));
+  const max = cfg.budget?.maxCoderConcurrency ?? 1;
+  const target = state.delegated[0];
+  if (!target) return out;
+  if (openCoders() >= max) {
+    log(`tick ${tick}  ${state.delegated.length} delegated, but ${openCoders()}/${max} coders busy`);
+    return out;
+  }
+
+  log(`tick ${tick}  dispatching coder for ${target.id} via claude -p`);
+  execSync(`node .testing-loop/cli.mjs move --id ${target.id} --to fixing --note "dispatched by watchdog"`, { cwd: ROOT, stdio: "pipe" });
+  execSync(`node .testing-loop/worktree.mjs create --bug ${target.id}`, { cwd: ROOT, stdio: "pipe" });
+
+  const prompt = [
+    `Invoke the \`bug-coder\` skill and follow it exactly. Fix ${target.id}.`,
+    `Your worktree is .worktrees/${target.id} (branch fix/${target.id}). Read the bug with:`,
+    `node .testing-loop/cli.mjs show --id ${target.id}`,
+    `Run .testing-loop commands from the repo root; make every source edit inside the worktree.`,
+    `Prove it with: node .testing-loop/gate.mjs --dir .worktrees/${target.id} --full  (must exit 0)`,
+    `Then commit inside the worktree only, and hand back with:`,
+    `node .testing-loop/cli.mjs move --id ${target.id} --to needs-verify --note "<one line>"`,
+    `If the gate fails, leave it at fixing, do not commit, and say what failed.`,
+  ].join(" ");
+
+  // --permission-mode acceptEdits, NOT --dangerously-skip-permissions: file
+  // edits go through unattended (that is the point), but the confinement that
+  // matters is elsewhere anyway — the coder works in a throwaway worktree, the
+  // gate refuses the deny-list, and nothing here can merge or push.
+  execSync(`"${CLAUDE}" -p "${prompt.replace(/"/g, '\\"')}" --permission-mode acceptEdits`, {
+    cwd: ROOT,
+    stdio: "pipe",
+    encoding: "utf8",
+    timeout: 15 * 60 * 1000,
+  });
+
+  out.ran = true;
+  out.dispatched = target.id;
+  log(`tick ${tick}  coder finished for ${target.id}`);
+  return out;
 }
 
 let tick = 0;
@@ -133,9 +222,38 @@ async function once() {
     log(`tick ${tick}  corpus skipped — nothing serving ${BASE}`);
   }
 
+  // 3. The autonomous half, and it is OPT-IN (`--agent`).
+  //
+  // Two things happen here, and only one of them costs anything:
+  //
+  //   - Locking a `verified` bug is deterministic, so the daemon just runs the
+  //     ratchet. No model involved.
+  //   - Dispatching a coder to a `delegated` bug needs judgement, so it shells
+  //     out to `claude -p`. THIS is what closes the gap that made the loop
+  //     feel broken: a bug dragged into "Fix it" sat untouched for eighteen
+  //     minutes because the only thing that could act on it was a Claude
+  //     session nobody was talking to.
+  //
+  // The agent is invoked ONLY when there is delegated work. No work, no call,
+  // no tokens — which is the whole reason a loop that never stops is
+  // affordable.
+  //
+  // It cannot explore and it cannot hand re-test a fix: both drive the Browser
+  // pane, which lives in an interactive session. Those still need you.
+  let agent = { enabled: AGENT, ran: false };
+  if (AGENT) {
+    try {
+      agent = { ...agent, ...(await agentTick()) };
+    } catch (e) {
+      log(`tick ${tick}  agent errored: ${e.message}`);
+      agent.error = e.message;
+    }
+  }
+
   writeHeartbeat({
     alive: true,
     tick,
+    agent,
     startedAt: started,
     finishedAt: now(),
     nextRunAt: new Date(Date.now() + INTERVAL).toISOString(),
