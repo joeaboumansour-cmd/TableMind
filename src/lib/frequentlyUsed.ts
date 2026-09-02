@@ -6,15 +6,33 @@
 //
 // Storage strategy:
 //   1. localStorage is the instant-read cache (works offline, O(1) reads)
-//   2. Supabase `product_favorites` table is the source of truth
-//   3. On toggle: write localStorage immediately, then attempt Supabase write
-//   4. If offline / Supabase fails: queue as a pending write for later sync
+//   2. The `product_favorites` table is the source of truth, reached through
+//      `/api/favorites` — see below
+//   3. On toggle: write localStorage immediately, then attempt the server write
+//   4. If offline / the write fails: queue as a pending write for later sync
+//
+// ## Why this no longer talks to Supabase directly
+//
+// All three calls here used to run in the BROWSER with the public Supabase
+// client. That only works because `NEXT_PUBLIC_SUPABASE_ANON_KEY` currently
+// holds a `service_role` JWT, which every visitor can read out of the bundle;
+// a real anon key with RLS on returns nothing. This is step 2 of the same work
+// that moved login server-side — the key cannot be swapped and the leaked one
+// cannot be rotated while any of these reads remain client-side.
+//
+// The offline behaviour is deliberately unchanged: localStorage is still
+// written first, and any failure — offline, 4xx, 5xx, a dropped connection —
+// still queues a `favorite_add` / `favorite_remove` pending write. Both routes
+// are idempotent so a replay converges.
 // =============================================
 
-import { createClient } from "@/lib/supabase/client";
 import { addPendingWrite, removePendingWrite, getPendingWrites } from "@/lib/db/localDB";
 import type { PendingWrite } from "@/lib/db/localDB";
 import { connectivity } from "@/lib/connectivity";
+// `@/lib/auth/apiHeaders`, not `@/lib/auth/requestHeaders`: /api/favorites is
+// resolveCaller()-gated and rejects a header with no `user_id`, which
+// requestHeaders omits for the owner.
+import { buildAuthHeaders, getStoreId } from "@/lib/auth/apiHeaders";
 
 const STORAGE_KEY_PREFIX = "tm_frequently_used_";
 
@@ -103,11 +121,42 @@ export function isFrequentlyUsed(storeId: string, productId: string): boolean {
 }
 
 // =============================================
-// Supabase Persistence
+// Server Persistence (/api/favorites)
 // =============================================
 
 /**
- * Add a favorite to Supabase. If offline or the write fails, queue it
+ * Push one favourite change to the server.
+ *
+ * Throws on anything that is not a 2xx, so both callers below fall into the
+ * same "queue it" branch they already had. The route is idempotent on both
+ * verbs, so a queued write replayed twice is not a problem.
+ *
+ * `store_id` is NOT sent: the route takes it from the resolved caller, so a
+ * favourite can only ever be written into the caller's own store.
+ */
+async function pushFavorite(
+  type: "favorite_add" | "favorite_remove",
+  productId: string
+): Promise<void> {
+  const response =
+    type === "favorite_add"
+      ? await fetch("/api/favorites", {
+          method: "POST",
+          headers: buildAuthHeaders(),
+          body: JSON.stringify({ product_id: productId }),
+        })
+      : await fetch(`/api/favorites?product_id=${encodeURIComponent(productId)}`, {
+          method: "DELETE",
+          headers: buildAuthHeaders(),
+        });
+
+  if (!response.ok) {
+    throw new Error(`API error ${response.status}`);
+  }
+}
+
+/**
+ * Add a favorite on the server. If offline or the write fails, queue it
  * as a pending write for later sync.
  */
 async function persistFavoriteAdd(storeId: string, productId: string): Promise<void> {
@@ -117,17 +166,7 @@ async function persistFavoriteAdd(storeId: string, productId: string): Promise<v
   }
 
   try {
-    const supabase = createClient();
-    const { error } = await supabase
-      .from("product_favorites")
-      .insert({ store_id: storeId, product_id: productId });
-
-    if (error) {
-      // Ignore duplicate errors (23505 = unique_violation) — already favorited
-      if (error.code !== "23505") {
-        throw error;
-      }
-    }
+    await pushFavorite("favorite_add", productId);
   } catch (err) {
     console.warn("[Favorites] Failed to persist add, queuing:", err);
     await queueFavoriteWrite("favorite_add", storeId, productId);
@@ -135,7 +174,7 @@ async function persistFavoriteAdd(storeId: string, productId: string): Promise<v
 }
 
 /**
- * Remove a favorite from Supabase. If offline or the write fails, queue it
+ * Remove a favorite on the server. If offline or the write fails, queue it
  * as a pending write for later sync.
  */
 async function persistFavoriteRemove(storeId: string, productId: string): Promise<void> {
@@ -145,14 +184,7 @@ async function persistFavoriteRemove(storeId: string, productId: string): Promis
   }
 
   try {
-    const supabase = createClient();
-    const { error } = await supabase
-      .from("product_favorites")
-      .delete()
-      .eq("store_id", storeId)
-      .eq("product_id", productId);
-
-    if (error) throw error;
+    await pushFavorite("favorite_remove", productId);
   } catch (err) {
     console.warn("[Favorites] Failed to persist remove, queuing:", err);
     await queueFavoriteWrite("favorite_remove", storeId, productId);
@@ -184,27 +216,38 @@ async function queueFavoriteWrite(
 }
 
 /**
- * Pull favorites from Supabase and merge into localStorage.
+ * Pull favorites from the server and merge into localStorage.
  * Called on app startup / login to sync favorites across devices.
  *
- * Merge strategy: union of Supabase favorites and existing localStorage,
- * preserving localStorage order (Supabase items appended if not present).
+ * Merge strategy: union of the server's favorites and existing localStorage,
+ * preserving localStorage order (server items appended if not present).
  * This avoids losing locally-cached favorites if the pull fails partially.
+ *
+ * The name is kept (the sync engine imports it) even though the read now goes
+ * through `/api/favorites` rather than the browser's Supabase client.
  */
 export async function syncFavoritesFromSupabase(storeId: string): Promise<void> {
   if (typeof window === "undefined" || !connectivity.isOnline) return;
 
+  // The route answers for the SIGNED-IN store, not for a store id passed in,
+  // so merging its answer into another store's key would be wrong. Every
+  // caller passes the current session's store; this only guards a device that
+  // has served two stores.
+  if (getStoreId() !== storeId) return;
+
   try {
-    const supabase = createClient();
-    const { data, error } = await supabase
-      .from("product_favorites")
-      .select("product_id, created_at")
-      .eq("store_id", storeId)
-      .order("created_at", { ascending: false });
+    const response = await fetch("/api/favorites", { headers: buildAuthHeaders() });
+    if (!response.ok) throw new Error(`API error ${response.status}`);
+    const payload = (await response.json()) as { product_ids?: string[] };
 
-    if (error) throw error;
+    // A malformed answer must not read as "the store has no favourites" —
+    // that would wipe the local list below. Same rule as evaluateReconcile():
+    // deletion needs positive proof.
+    if (!Array.isArray(payload?.product_ids)) {
+      throw new Error("Malformed favourites response");
+    }
 
-    const remoteIds = (data || []).map((row: { product_id: string }) => row.product_id);
+    const remoteIds = payload.product_ids;
     const localIds = getFrequentlyUsedProductIds(storeId);
 
     // CRITICAL FIX: Remove local IDs that no longer exist remotely.
@@ -245,7 +288,8 @@ export async function processPendingFavoriteWrites(): Promise<{
 
   const allPending = await getPendingWrites();
   const favoriteWrites = allPending.filter(
-    (w) => w.type === "favorite_add" || w.type === "favorite_remove"
+    (w): w is PendingWrite & { type: "favorite_add" | "favorite_remove" } =>
+      w.type === "favorite_add" || w.type === "favorite_remove"
   );
 
   if (favoriteWrites.length === 0) {
@@ -254,7 +298,12 @@ export async function processPendingFavoriteWrites(): Promise<{
 
   console.log(`[Favorites] Processing ${favoriteWrites.length} pending favorite writes...`);
 
-  const supabase = createClient();
+  // `/api/favorites` writes into the SIGNED-IN store. A write queued under a
+  // different store — a till that has served two — can no longer be told apart
+  // from one for this store once it reaches the route, so it is dropped rather
+  // than applied to the wrong tenant. A star is cosmetic; a favourite written
+  // into someone else's catalogue is not.
+  const sessionStoreId = getStoreId();
 
   for (const write of favoriteWrites) {
     // Favorite writes incremented retry_count but never checked it, so a
@@ -272,26 +321,24 @@ export async function processPendingFavoriteWrites(): Promise<{
       continue;
     }
 
+    const payload = write.payload as { store_id: string; product_id: string };
+
+    // No session at all is not proof of anything — leave the write queued and
+    // try again once someone is signed in.
+    if (!sessionStoreId) continue;
+
+    if (payload.store_id !== sessionStoreId) {
+      console.warn(
+        `[Favorites] Dropping ${write.type} ${write.id}: queued for store ${payload.store_id}, session is ${sessionStoreId}`
+      );
+      await removePendingWrite(write.id);
+      result.failed++;
+      result.errors.push(`Favorite ${write.type} ${write.id}: queued for a different store`);
+      continue;
+    }
+
     try {
-      const payload = write.payload as { store_id: string; product_id: string };
-
-      if (write.type === "favorite_add") {
-        const { error } = await supabase
-          .from("product_favorites")
-          .insert({ store_id: payload.store_id, product_id: payload.product_id });
-
-        if (error && error.code !== "23505") {
-          throw new Error(error.message || "Favorite add failed");
-        }
-      } else if (write.type === "favorite_remove") {
-        const { error } = await supabase
-          .from("product_favorites")
-          .delete()
-          .eq("store_id", payload.store_id)
-          .eq("product_id", payload.product_id);
-
-        if (error) throw new Error(error.message || "Favorite remove failed");
-      }
+      await pushFavorite(write.type, payload.product_id);
 
       await removePendingWrite(write.id);
       result.processed++;

@@ -1,15 +1,13 @@
 "use client";
 
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from "react";
-import { createClient } from "@/lib/supabase/client";
 import { StoreUser, canAccess, getFullPermissions, parsePermissions, SectionKey, UserPermissions } from "./permissions";
+import { buildAuthHeaders } from "./apiHeaders";
 import { cacheCredentials, clearCachedCredentials, validateCachedCredentials } from "./offlineAuth";
 import { purgeCredentialCache } from "@/lib/pwa/purgeCredentialCache";
 import { logActivity, invalidateActivityIdentity, flushActivity } from "@/lib/activity/logger";
 import { connectivity } from "@/lib/connectivity";
 import { clearResourceCache } from "@/lib/data/resource";
-
-const supabase = createClient();
 
 interface AuthContextValue {
   user: StoreUser | null;
@@ -412,6 +410,18 @@ export function AuthProvider({ children }: AuthProviderProps) {
    *
    * Same rule as evaluateReconcile() and the feature-flag guard: never act
    * destructively on unknown.
+   *
+   * ## The read moved to the server, the silence did not
+   *
+   * This used to select `store_users(is_active, permissions)` from the BROWSER
+   * with the public Supabase client — one of the reads keeping a `service_role`
+   * key in the bundle (step 2 of bug-0006), and one that filtered on `id`
+   * alone, with no store scope. `GET /api/auth/permissions` does the same read
+   * server-side, scoped by store as well as id, and carries the three cases in
+   * its status code: a 200 is an ANSWER (`active` says which), and anything
+   * else — 401, 403, 500, a thrown fetch, a captive portal — is not one and
+   * keeps the session. Nothing here throws, and nothing here clears a session
+   * except on a confirmed `active: false`.
    */
   const refresh = useCallback(async () => {
     if (!user) return;
@@ -421,40 +431,57 @@ export function AuthProvider({ children }: AuthProviderProps) {
       if (!connectivity.isOnline) return;
 
       try {
-        const { data: employee, error } = await supabase
-          .from("store_users")
-          .select("is_active, permissions")
-          .eq("id", user.id)
-          .maybeSingle();
+        const response = await fetch("/api/auth/permissions", {
+          headers: buildAuthHeaders(user),
+        });
 
-        if (error) {
+        if (!response.ok) {
           // Could not ask. Keep the session exactly as it is and try again
           // next time — the server still enforces permissions on every call.
           console.warn(
-            "[Auth] Permission refresh failed; keeping current session:",
-            error.message
+            `[Auth] Permission refresh failed (${response.status}); keeping current session`
           );
           return;
         }
 
-        // Now these ARE answers: the row is gone, or it is switched off.
-        if (!employee || !employee.is_active) {
+        const payload = (await response.json()) as {
+          active?: boolean;
+          permissions?: unknown;
+        } | null;
+
+        // A 200 that does not carry a boolean `active` is not an answer
+        // either — treat a malformed body the same as a failed request.
+        if (typeof payload?.active !== "boolean") {
+          console.warn("[Auth] Permission refresh returned no answer; keeping current session");
+          return;
+        }
+
+        // Now this IS an answer: the row is gone, or it is switched off.
+        if (!payload.active) {
           logout();
           return;
         }
 
-        const rawPerms = typeof employee.permissions === "string"
-          ? JSON.parse(employee.permissions)
-          : employee.permissions;
+        // A missing `permissions` object is another non-answer, and a
+        // destructive one: parsePermissions() would read it as every section
+        // denied and lock a cashier out of the till. Keep what we have.
+        if (!payload.permissions || typeof payload.permissions !== "object") {
+          console.warn("[Auth] Permission refresh carried no permissions; keeping current session");
+          return;
+        }
 
+        // parsePermissions() again on this side: the route already ran it, and
+        // running it here too means a body that somehow arrives with a section
+        // missing still becomes an explicit false rather than `undefined`.
         const updatedUser: StoreUser = {
           ...user,
-          permissions: parsePermissions(rawPerms),
+          permissions: parsePermissions(payload.permissions),
         };
         setUser(updatedUser);
         saveUserToStorage(updatedUser);
       } catch {
-        // Ignore refresh errors
+        // Ignore refresh errors — a thrown fetch is the "we learned nothing"
+        // case, and must never sign a cashier out mid-shift.
       }
     }
   }, [user, logout]);
