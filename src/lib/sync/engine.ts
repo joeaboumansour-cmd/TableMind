@@ -285,13 +285,19 @@ class SyncEngine {
   }
 
   /**
-   * Refresh the local product cache from Supabase.
+   * Refresh the local product cache.
    *
    * The algorithm — incremental delta against the updated_at watermark, a
    * completeness check against the server's row count, then a guarded
    * reconcile for deletions — lives in @/lib/products/refresh. It used to live
    * here AND in a second, subtly different copy behind the inventory screen's
    * fetch; the two could run at once and only one of them paginated.
+   *
+   * The reads themselves now go to `GET /api/products`, not to Supabase from
+   * the browser. The client passed below is VESTIGIAL — the parameter is kept
+   * only so the exported signature (and src/lib/supabase/client.ts's
+   * re-export of it) is unchanged while the other catalogue call sites are
+   * moved across. Drop the parameter once they are.
    */
   async pullProducts(): Promise<{
     success: boolean;
