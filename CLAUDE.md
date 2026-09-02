@@ -86,8 +86,16 @@ This is the most dangerous area of the codebase and the easiest to get wrong. **
 2. **Every LL amount the customer sees or pays must be a multiple of 5,000** — Lebanon has no smaller bill. Use `roundToNearest5k()`.
 3. **Rounding happens at the cart total only — never per line item.** Per-item rounding compounds and drifts. `cartStore.getTotal()` is the only place it is applied.
 4. **Two exchange rates, and they are not interchangeable:**
-   - `SELL_RATE` (90,000) — the store is *giving out dollars*: pricing an LL amount in USD, and valuing change handed back against an LL payment.
-   - `RETURN_RATE` (89,000) — the store is *taking dollars in*: a USD payment being valued in LL, and change against a payment the customer already made in USD.
+   - `SELL_RATE` (90,000) — the store is *giving out dollars*: turning a USD **price** into the LL a customer owes (`convertUsdToLl`), and valuing change handed back against an **LL** payment.
+   - `RETURN_RATE` (89,000) — the store is *taking dollars in*: **quoting an LL amount in USD** for the customer to pay (`convertLlToUsdForReturn`), valuing a **USD payment** in LL (`convertUsdToLlForReturn`), and change against a payment already made in USD.
+
+   > An earlier revision of this rule put "pricing an LL amount in USD" under
+   > `SELL_RATE`. That is wrong, and it contradicts every screen in the app —
+   > the till grid, the scan box, the cart rows, the modifier sheet, checkout
+   > and the totals panel all quote LL in USD at `RETURN_RATE`. The quote is a
+   > payment the store is about to *take in*, so it settles at the buying rate.
+   > `convertLlToUsdForSale` exists but is called by nothing except the
+   > deprecated `convertLlToUsd`; if you reach for it, be sure you can say why.
 
    The spread is the store's margin on currency, and the rule that generates
    both lines is **the direction the dollars move, not the direction the

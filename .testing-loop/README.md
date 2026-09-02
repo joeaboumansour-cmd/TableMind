@@ -36,6 +36,27 @@ flight and up to 1800s when idle.
 file, so it stops even if nobody is at the keyboard. Delete it before starting
 again.
 
+### What actually drives a tick — read this before believing the loop is running
+
+Ticks are driven by a **session-only cron job** (`CronCreate`, currently every
+10 minutes at :04/:14/:24/…). Three properties matter, and the first two were
+learned by getting them wrong:
+
+1. **`ScheduleWakeup` did not fire in this environment.** It registered the job
+   and reported success, twice, and neither wakeup arrived — a delegated bug
+   sat untouched for eighteen minutes while the loop was believed to be
+   running. A recurring cron gives repeated chances to fire instead of one
+   missed shot; a one-shot that misses is simply lost.
+2. **Jobs only fire while the REPL is idle.** A tick cannot start mid-turn, so
+   a long turn pushes ticks back.
+3. **The job dies with the session** and auto-expires after 7 days. It is not
+   written to disk. Restarting Claude means re-arming it.
+
+The one trigger that is always reliable is **you sending any message** — the
+next turn runs a tick. So: never report that the loop is running on the
+strength of having scheduled something. Check `CronList`, and check whether the
+board actually moved.
+
 ## Under a fix
 
 ```bash

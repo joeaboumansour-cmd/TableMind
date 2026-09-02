@@ -115,6 +115,16 @@ was not.
 - **An uncaught `SyntaxError: Unexpected end of input` in the console is
   usually your own multi-line `javascript_tool` eval.** Confirm it reproduces
   without your injection before filing it.
+- **Text you can read on screen may not exist in the DOM.** The till's totals
+  panel reads `TOTAL · 2 UNITS`; the document says `Total · 2 units`, and the
+  capitals are `text-transform` in CSS. `innerText` is uppercased, `textContent`
+  is not. A case-sensitive locator therefore matches what a human sees and
+  nothing in the page, then times out saying nothing useful. **Match text
+  case-insensitively** unless you have checked the source casing.
+- **When a locator times out, inspect the real structure before guessing
+  again.** Walking up from the text node with `javascript_tool` and printing
+  each ancestor's tag and contents costs one call and ends the guessing; three
+  speculative selector edits cost more and teach you nothing.
 
 **And the important one: grep the source before you file an oracle violation.**
 This codebase makes deliberate, commented exceptions, and **the oracle is not
