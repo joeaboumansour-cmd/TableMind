@@ -1,0 +1,31 @@
+{
+  "id": "001",
+  "title": "Dual-currency sale, end to end",
+  "hotPath": "pos -> cart -> checkout -> receipt",
+  "risk": 10,
+  "role": "owner",
+  "url": "http://localhost:3000/pos",
+  "intent": "Ring a real sale with both a LL-priced and a USD-priced product, pay with an overpayment so change is calculated, and check every money figure on every screen it appears on.",
+  "focus": ["money", "tenancy", "console", "network"],
+  "steps": [
+    "Reset storage, sign in as owner, load /pos",
+    "Scan/enter barcode 2000000000001 (LL-priced product)",
+    "Scan/enter barcode 2900000000011 (USD-priced product)",
+    "Set a quantity above 1 on one line",
+    "Note the per-line prices and the cart total, in BOTH currencies",
+    "Go to /checkout",
+    "Compare the checkout totals against the cart totals",
+    "Pay with more than the total so change is produced",
+    "Complete the sale and read the receipt/summary",
+    "Open /transactions and compare the recorded sale to what was charged"
+  ],
+  "checks": [
+    "Cart total is a multiple of 5000",
+    "Cart total is NOT the sum of individually rounded lines",
+    "USD shown for the charge uses SELL_RATE 90000",
+    "Change given uses RETURN_RATE 89000",
+    "The same product shows the same USD value on POS, checkout, receipt and history",
+    "Every request carries a store_id filter and no foreign store_id comes back",
+    "No uncaught console errors across the whole flow"
+  ]
+}

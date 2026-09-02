@@ -49,3 +49,9 @@ next-env.d.ts
 # Playwright run artifacts (traces, failure screenshots)
 /.playwright-artifacts/
 /playwright-report/
+
+# Testing loop: findings and evidence are local run state, not source.
+/.testing-loop/bugs/
+/.testing-loop/evidence/
+/.testing-loop/*.log
+/.worktrees/

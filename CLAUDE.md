@@ -86,9 +86,32 @@ This is the most dangerous area of the codebase and the easiest to get wrong. **
 2. **Every LL amount the customer sees or pays must be a multiple of 5,000** — Lebanon has no smaller bill. Use `roundToNearest5k()`.
 3. **Rounding happens at the cart total only — never per line item.** Per-item rounding compounds and drifts. `cartStore.getTotal()` is the only place it is applied.
 4. **Two exchange rates, and they are not interchangeable:**
-   - `SELL_RATE` (90,000) — customer is *paying*. Converting a price into what they owe.
-   - `RETURN_RATE` (89,000) — money is going *back* to the customer (change), or a USD payment is being valued in LL.
-   The spread is the store's margin on currency. Using the wrong one silently loses money on every transaction.
+   - `SELL_RATE` (90,000) — the store is *giving out dollars*: pricing an LL amount in USD, and valuing change handed back against an LL payment.
+   - `RETURN_RATE` (89,000) — the store is *taking dollars in*: a USD payment being valued in LL, and change against a payment the customer already made in USD.
+
+   The spread is the store's margin on currency, and the rule that generates
+   both lines is **the direction the dollars move, not the direction the
+   money moves.** The store buys dollars at 89,000 and sells them at 90,000.
+
+   > This used to read "RETURN_RATE — money going *back* to the customer
+   > (change)", which is wrong and was reported as a money bug before being
+   > reproduced and traced to the document. Change is not one case. **Change is
+   > rated by what the customer tendered**, because that is what decides
+   > whether the drawer is handing dollars out or giving back dollars it just
+   > took in.
+
+   `getChangeRate()` in `src/app/checkout/page.tsx` is the implementation, and it is the reference for this rule:
+
+   | Customer paid | Change valued at | Why |
+   |---|---|---|
+   | LL only | `SELL_RATE` (90,000) | the drawer is selling dollars back |
+   | USD only | `RETURN_RATE` (89,000) | returning dollars it just took at 89,000 |
+   | both | weighted blend by each currency's contribution | neither rate alone is honest |
+
+   The checkout panel labels which rate it used (`$1 = 90,000 LL`, or
+   `blended $1 ≈ …`), so the figure on screen is always attributable. Using the
+   wrong rate silently moves money on every transaction, in whichever direction
+   the mistake happens to fall.
 5. **Use the named helpers, not raw arithmetic:** `convertUsdToLl`, `convertUsdToLlForReturn`, `convertLlToUsdForSale`, `convertLlToUsdForReturn`. Raw `* SELL_RATE` bypasses the 5k rounding that `convertUsdToLl` exists to apply.
 6. `convertLlToUsd` is **deprecated** — do not use it in new code.
 

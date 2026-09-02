@@ -1,0 +1,75 @@
+{
+  "note": "Charter selection is arithmetic, not judgement: score = risk * log2(2 + hoursSinceTested) * (1 + recentFailures). Risk is seeded from CLAUDE.md's own danger ranking.",
+  "paths": [
+    {
+      "id": "001",
+      "path": "pos->checkout money",
+      "risk": 10,
+      "lastTested": "2026-09-02T08:42:07.124Z",
+      "failures": 0
+    },
+    {
+      "id": "002",
+      "path": "offline sale + sync",
+      "risk": 10,
+      "lastTested": null,
+      "failures": 0
+    },
+    {
+      "id": "003",
+      "path": "cash shift open/close",
+      "risk": 8,
+      "lastTested": null,
+      "failures": 0
+    },
+    {
+      "id": "004",
+      "path": "cashier permission gates",
+      "risk": 8,
+      "lastTested": null,
+      "failures": 0
+    },
+    {
+      "id": "005",
+      "path": "product create/reprice",
+      "risk": 7,
+      "lastTested": null,
+      "failures": 0
+    },
+    {
+      "id": "006",
+      "path": "lanes + one-off lines",
+      "risk": 6,
+      "lastTested": null,
+      "failures": 0
+    },
+    {
+      "id": "007",
+      "path": "menu item + modifiers",
+      "risk": 6,
+      "lastTested": null,
+      "failures": 0
+    },
+    {
+      "id": "008",
+      "path": "inventory list + search",
+      "risk": 4,
+      "lastTested": null,
+      "failures": 0
+    },
+    {
+      "id": "009",
+      "path": "transaction analytics",
+      "risk": 4,
+      "lastTested": null,
+      "failures": 0
+    },
+    {
+      "id": "010",
+      "path": "kitchen display board",
+      "risk": 2,
+      "lastTested": null,
+      "failures": 0
+    }
+  ]
+}

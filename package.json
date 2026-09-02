@@ -30,7 +30,14 @@
     "harness:bench": "node harness/bench/sale-latency.mjs",
     "harness:bench:till": "playwright test --config harness/bench/playwright.config.ts",
     "verify:invariants": "node scripts/verify-invariants.mjs",
-    "verify:migration": "node scripts/verify-migration.mjs"
+    "verify:migration": "node scripts/verify-migration.mjs",
+    "loop:dashboard": "node .testing-loop/dashboard/server.mjs",
+    "loop:state": "node .testing-loop/cli.mjs state",
+    "loop:bugs": "node .testing-loop/cli.mjs list",
+    "loop:next": "node .testing-loop/next-charter.mjs",
+    "loop:gate": "node .testing-loop/gate.mjs",
+    "loop:worktree": "node .testing-loop/worktree.mjs",
+    "loop:ratchet": "node .testing-loop/ratchet.mjs"
   },
   "dependencies": {
     "@ducanh2912/next-pwa": "^10.2.9",

@@ -1,0 +1,28 @@
+{
+  "appUrl": "http://localhost:3000",
+  "verifyUrl": "http://localhost:3001",
+  "dashboardPort": 4000,
+  "budget": {
+    "chartersPerHour": 6,
+    "maxInteractionsPerCharter": 25,
+    "maxScreenshotsPerCharter": 3,
+    "maxCoderConcurrency": 1
+  },
+  "safety": {
+    "requireStoreId": "00000000-0000-4000-8000-000000000001",
+    "forbiddenRoutes": ["/admin"],
+    "coderDenyPaths": [
+      "harness/guard/**",
+      "supabase/migrations/**",
+      ".env*",
+      "scripts/verify-*.mjs",
+      ".testing-loop/**"
+    ],
+    "alwaysHumanReview": [
+      "src/lib/utils/format.ts",
+      "src/lib/stores/cartStore.ts",
+      "src/lib/sync/engine.ts",
+      "src/lib/auth/**"
+    ]
+  }
+}
