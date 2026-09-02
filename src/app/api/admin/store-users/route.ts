@@ -26,14 +26,15 @@
 // =============================================
 
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { createServiceRoleClient } from "@/lib/supabase/server";
 import { getDefaultPermissions } from "@/lib/auth/permissions";
 import { verifyAdminSession } from "@/lib/auth/adminSession";
 
-const supabaseAdmin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-);
+// This route needs the service-role key: it reads and writes `store_users`
+// across every tenant. It used to build its client from
+// NEXT_PUBLIC_SUPABASE_ANON_KEY and worked only because that public var
+// currently holds a service_role JWT (bug-0006). Resolved per request from
+// SUPABASE_SERVICE_ROLE_KEY, like every other route.
 
 // GET /api/admin/store-users?store_id=xxx — list employees for a store
 export async function GET(request: Request) {
@@ -42,6 +43,8 @@ export async function GET(request: Request) {
     if (!admin) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+
+    const supabaseAdmin = await createServiceRoleClient();
 
     const { searchParams } = new URL(request.url);
     const storeId = searchParams.get("store_id");
@@ -84,6 +87,8 @@ export async function POST(request: Request) {
     if (!admin) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+
+    const supabaseAdmin = await createServiceRoleClient();
 
     const body = await request.json();
     const { store_id, username, password, display_name, permissions } = body;
@@ -144,6 +149,8 @@ export async function PATCH(request: Request) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
+    const supabaseAdmin = await createServiceRoleClient();
+
     const body = await request.json();
     const { id, username, password, display_name, is_active, permissions } = body;
 
@@ -199,6 +206,8 @@ export async function DELETE(request: Request) {
     if (!admin) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
+
+    const supabaseAdmin = await createServiceRoleClient();
 
     const { searchParams } = new URL(request.url);
     const id = searchParams.get("id");

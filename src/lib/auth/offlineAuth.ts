@@ -34,10 +34,16 @@ const STORE_KEY = "goldensquirrel_offline_credentials_v2";
 /** Keep the list bounded; a till serves a handful of people, not hundreds. */
 const MAX_ENTRIES = 25;
 
+// NOTE ON `password_hash`: it used to be copied in here alongside the entry's
+// plaintext `password`, back when the browser did the comparison and therefore
+// had the column. Nothing ever READ it — offline validation matches on
+// `entry.password` below — so now that login is server-side and the column
+// never leaves the database, it is simply not written. Optional rather than
+// removed so an entry cached by an older build still parses.
 export interface CachedStoreData {
   id: string;
   username: string;
-  password_hash: string;
+  password_hash?: string;
   license_expires_at: string;
 }
 
@@ -45,7 +51,7 @@ export interface CachedEmployeeData {
   id: string;
   store_id: string;
   username: string;
-  password_hash: string;
+  password_hash?: string;
   display_name: string | null;
   is_active: boolean;
   permissions: unknown;

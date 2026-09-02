@@ -14,8 +14,17 @@ const supabase = createClient();
 interface AuthContextValue {
   user: StoreUser | null;
   isLoading: boolean;
-  login: (storeUsername: string, password: string) => Promise<{ success: boolean; error?: string }>;
-  loginEmployee: (storeId: string, storeUsername: string, username: string, password: string) => Promise<{ success: boolean; error?: string }>;
+  /**
+   * Online sign-in for BOTH an owner and an employee.
+   *
+   * This used to be two functions — `login(storeUsername, password)` for the
+   * owner and `loginEmployee(storeId, …)` for staff — with the login PAGE
+   * deciding which to call, because the page had read the `stores` row itself
+   * and could compare usernames. It no longer reads that row (it no longer
+   * can, without a key that bypasses RLS), so the decision moved to
+   * `POST /api/auth/login`, which is the only thing that knows the answer.
+   */
+  login: (storeUsername: string, username: string, password: string) => Promise<{ success: boolean; error?: string }>;
   loginOffline: (storeUsername: string, password: string, username?: string) => Promise<{ success: boolean; error?: string }>;
   logout: () => void;
   canAccess: (section: SectionKey) => boolean;
@@ -86,8 +95,9 @@ function saveUserToStorage(user: StoreUser) {
  * `x-auth-data`, and many components still read `store_id` out of it directly
  * rather than going through useAuth().
  *
- * Both ONLINE login paths write it from inside the login page. The OFFLINE
- * path did not — so an offline login produced a session where
+ * Every login path writes it from in here now — the ONLINE paths used to write
+ * it from inside the login page, which is where the OFFLINE
+ * path's omission came from: an offline login produced a session where
  * `goldensquirrel_user` was set but this key was absent, the sync engine sent
  * `x-auth-data: {}`, and the API answered
  * `401 Unauthorized - No store_id in auth data` for every queued sale.
@@ -161,146 +171,111 @@ export function AuthProvider({ children }: AuthProviderProps) {
     }
   }, []);
 
-  const login = useCallback(async (storeUsername: string, password: string): Promise<{ success: boolean; error?: string }> => {
+  /**
+   * Online sign-in, for an owner and an employee alike.
+   *
+   * ## Nothing here reads `stores` or `store_users` any more
+   *
+   * It used to: this function selected the whole store row — `password_hash`
+   * included — into the browser and compared the password on the device, and
+   * `loginEmployee` did the same against `store_users`. Two defects in one
+   * (bug-0006): the store's password was shipped to every till, and the reads
+   * only worked because the client held a key that bypasses RLS.
+   *
+   * `POST /api/auth/login` does the lookup and the comparison server-side and
+   * returns only what a session needs. The comparison itself is unchanged and
+   * still plaintext — that is audit P0-4, and a separate decision.
+   */
+  const login = useCallback(async (storeUsername: string, username: string, password: string): Promise<{ success: boolean; error?: string }> => {
     setIsLoading(true);
     try {
-      // Fetch store by username
-      const { data: store, error } = await supabase
-        .from("stores")
-        .select("*")
-        .eq("username", storeUsername)
-        .single();
-
-      if (error || !store) {
-        return { success: false, error: "Invalid username or password" };
+      let response: Response;
+      try {
+        response = await fetch("/api/auth/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ storeUsername, username, password }),
+        });
+      } catch {
+        // The caller only reaches this function when the heartbeat says we are
+        // online, so a transport failure is worth naming rather than reporting
+        // as bad credentials.
+        return { success: false, error: "Could not reach the server. Please check your connection and try again." };
       }
 
-      // Check license expiration
-      const licenseExpires = new Date(store.license_expires_at);
-      const now = new Date();
-      if (licenseExpires < now) {
-        return { success: false, error: "Your license has expired. Please contact support to renew." };
+      const payload = await response.json().catch(() => null) as
+        | { store: { id: string; username: string; license_expires_at: string }; user: StoreUser }
+        | { error?: string }
+        | null;
+
+      if (!response.ok || !payload || !("user" in payload)) {
+        const message = (payload as { error?: string } | null)?.error;
+        return { success: false, error: message || "Invalid username or password" };
       }
 
-      // Verify password
-      if (store.password_hash !== password) {
-        return { success: false, error: "Invalid username or password" };
-      }
+      const { store, user: authUser } = payload;
 
-      // Store owner = full permissions
-      const ownerUser: StoreUser = {
-        id: store.id,
-        storeId: store.id,
-        username: store.username,
-        displayName: store.username,
-        isOwner: true,
-        permissions: getFullPermissions(),
-      };
+      setUser(authUser);
+      saveUserToStorage(authUser);
+      // Without this the session cannot sync — see saveLegacyAuthToStorage.
+      // The login page used to write it for the two online paths; doing it here
+      // means no caller can forget it, exactly as for loginOffline.
+      saveLegacyAuthToStorage(authUser.storeId, authUser.username, store.license_expires_at);
 
-      setUser(ownerUser);
-      saveUserToStorage(ownerUser);
-
-      // Attribution is passed explicitly: the login page writes
-      // goldensquirrel_auth only AFTER this resolves, so reading storage here
-      // would find no tenant and the event would be dropped.
+      // Attribution is still passed explicitly rather than looked up, so the
+      // event does not depend on the write above having landed first.
       invalidateActivityIdentity();
-      logActivity("auth.login", {
-        target: store.username,
-        identity: { store_id: store.id, user_name: store.username },
-        details: { role: "owner", mode: "online" },
-      });
+      logActivity("auth.login", authUser.isOwner
+        ? {
+            target: authUser.username,
+            identity: { store_id: authUser.storeId, user_name: authUser.username },
+            details: { role: "owner", mode: "online" },
+          }
+        : {
+            target: authUser.displayName,
+            identity: {
+              store_id: authUser.storeId,
+              user_id: authUser.id,
+              user_name: authUser.displayName,
+            },
+            details: { role: "employee", mode: "online", permissions: authUser.permissions },
+          });
 
       // Cache credentials for offline login fallback.
-      // Owner login: the person's username IS the store username.
-      cacheCredentials(storeUsername, store.username, password, {
-        id: store.id,
-        username: store.username,
-        password_hash: store.password_hash,
-        license_expires_at: store.license_expires_at,
-      });
+      //
+      // The first argument MUST be the STORE's username, not the employee's —
+      // the login form asks for the store username, so an entry keyed by the
+      // employee could never be matched (audit P1-10). It is taken from the
+      // server's answer rather than the typed field so the two paths cannot
+      // disagree about the canonical spelling.
+      //
+      // No `password_hash` is passed any more. Nothing ever read it back, and
+      // the column no longer leaves the database.
+      cacheCredentials(
+        store.username,
+        authUser.username,
+        password,
+        {
+          id: store.id,
+          username: store.username,
+          license_expires_at: store.license_expires_at,
+        },
+        authUser.isOwner
+          ? null
+          : {
+              id: authUser.id,
+              store_id: authUser.storeId,
+              username: authUser.username,
+              display_name: authUser.displayName,
+              // Reaching here means the server confirmed both.
+              is_active: true,
+              permissions: authUser.permissions,
+            }
+      );
 
       return { success: true };
     } catch (err) {
       console.error("Login error:", err);
-      return { success: false, error: "An error occurred during login" };
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
-
-  const loginEmployee = useCallback(async (storeId: string, storeUsername: string, username: string, password: string): Promise<{ success: boolean; error?: string }> => {
-    setIsLoading(true);
-    try {
-      const { data: employee, error } = await supabase
-        .from("store_users")
-        .select("*")
-        .eq("store_id", storeId)
-        .eq("username", username)
-        .single();
-
-      if (error || !employee) {
-        return { success: false, error: "Invalid username or password" };
-      }
-
-      if (!employee.is_active) {
-        return { success: false, error: "This account has been deactivated. Contact your store owner." };
-      }
-
-      // Verify password
-      if (employee.password_hash !== password) {
-        return { success: false, error: "Invalid username or password" };
-      }
-
-      // Parse permissions
-      const perms: UserPermissions = parsePermissions(employee.permissions);
-
-      const employeeUser: StoreUser = {
-        id: employee.id,
-        storeId: employee.store_id,
-        username: employee.username,
-        displayName: employee.display_name || employee.username,
-        isOwner: false,
-        permissions: perms,
-      };
-
-      setUser(employeeUser);
-      saveUserToStorage(employeeUser);
-
-      invalidateActivityIdentity();
-      logActivity("auth.login", {
-        target: employeeUser.displayName,
-        identity: {
-          store_id: employeeUser.storeId,
-          user_id: employeeUser.id,
-          user_name: employeeUser.displayName,
-        },
-        details: { role: "employee", mode: "online", permissions: perms },
-      });
-
-      // Cache credentials for offline login fallback.
-      //
-      // The first argument MUST be the STORE's username, not the employee's.
-      // It used to pass `username` (the employee), so the entry could never be
-      // matched by the login form — which asks for the store username — and
-      // employee offline login simply did not work. (audit P1-10)
-      cacheCredentials(storeUsername, username, password, {
-        id: employee.store_id,
-        username: storeUsername,
-        password_hash: employee.password_hash,
-        license_expires_at: "", // Will be filled from store data if available
-      }, {
-        id: employee.id,
-        store_id: employee.store_id,
-        username: employee.username,
-        password_hash: employee.password_hash,
-        display_name: employee.display_name,
-        is_active: employee.is_active,
-        permissions: employee.permissions,
-      });
-
-      return { success: true };
-    } catch (err) {
-      console.error("Employee login error:", err);
       return { success: false, error: "An error occurred during login" };
     } finally {
       setIsLoading(false);
@@ -493,7 +468,6 @@ export function AuthProvider({ children }: AuthProviderProps) {
       user,
       isLoading,
       login,
-      loginEmployee,
       loginOffline,
       logout,
       canAccess: checkAccess,

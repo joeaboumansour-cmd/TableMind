@@ -1,16 +1,17 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { createServiceRoleClient } from "@/lib/supabase/server";
 import {
   isAdminSessionConfigured,
   signAdminSession,
   setAdminSessionCookie,
 } from "@/lib/auth/adminSession";
 
-// Create a Supabase client with service_role key to bypass RLS
-const supabaseAdmin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-);
+// The comment here used to say "service_role key to bypass RLS" while the
+// client was actually built from NEXT_PUBLIC_SUPABASE_ANON_KEY. It worked only
+// because that public var currently holds a service_role JWT (bug-0006) — the
+// moment it holds a real anon key, RLS hides `admin_users` and no admin can
+// sign in. `createServiceRoleClient()` reads SUPABASE_SERVICE_ROLE_KEY, which
+// is what every other route already uses.
 
 export async function POST(request: Request) {
   try {
@@ -33,6 +34,8 @@ export async function POST(request: Request) {
         { status: 500 }
       );
     }
+
+    const supabaseAdmin = await createServiceRoleClient();
 
     // Fetch admin user by username
     const { data: admin, error: fetchError } = await supabaseAdmin
