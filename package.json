@@ -37,7 +37,8 @@
     "loop:next": "node .testing-loop/next-charter.mjs",
     "loop:gate": "node .testing-loop/gate.mjs",
     "loop:worktree": "node .testing-loop/worktree.mjs",
-    "loop:ratchet": "node .testing-loop/ratchet.mjs"
+    "loop:ratchet": "node .testing-loop/ratchet.mjs",
+    "loop:watch": "node .testing-loop/daemon.mjs"
   },
   "dependencies": {
     "@ducanh2912/next-pwa": "^10.2.9",

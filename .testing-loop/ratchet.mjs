@@ -8,7 +8,7 @@
 //   node .testing-loop/ratchet.mjs run  [--base http://localhost:3000]
 //   node .testing-loop/ratchet.mjs corpus
 import { execSync } from "node:child_process";
-import { existsSync, readdirSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { getBug, move } from "./lib/store.mjs";
 
@@ -85,11 +85,33 @@ function lock(bug, base) {
 
   let lock;
   if (unitSpec) {
-    // No server, no base URL, nothing to point at.
-    execSync("npx vitest run --config harness/vitest.config.mts " + rel(unitSpec), {
-      cwd: ROOT,
-      stdio: "inherit",
-    });
+    const dir = arg("dir");
+    if (dir) {
+      // Run the lock against the BRANCH's source, mirroring what --base does
+      // for an e2e lock. A unit test resolves `@/` to its own tree's src, so
+      // pointing at the fix means running IN the worktree — but the lock
+      // itself lives in main, where it is authored and kept. So: copy it in,
+      // run, and put the worktree's own copy back, whatever happens.
+      const target = resolve(ROOT, dir);
+      const relPath = rel(unitSpec);
+      const dest = resolve(target, relPath);
+      const original = existsSync(dest) ? readFileSync(dest, "utf8") : null;
+      writeFileSync(dest, readFileSync(unitSpec, "utf8"));
+      try {
+        execSync("npx vitest run --config harness/vitest.config.mts " + relPath, {
+          cwd: target,
+          stdio: "inherit",
+        });
+      } finally {
+        if (original !== null) writeFileSync(dest, original);
+      }
+    } else {
+      // No server, no base URL, nothing to point at.
+      execSync("npx vitest run --config harness/vitest.config.mts " + rel(unitSpec), {
+        cwd: ROOT,
+        stdio: "inherit",
+      });
+    }
     lock = rel(unitSpec);
   } else {
     // Against the fix's own server (:3001) while it is still a branch, so a

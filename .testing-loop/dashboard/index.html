@@ -55,6 +55,7 @@
 <header>
   <h1>Testing Loop</h1>
   <div class="live"><span class="dot" id="dot"></span><span id="status">connecting…</span></div>
+  <div class="live"><span class="dot" id="wdot"></span><span id="wstatus">watchdog…</span></div>
   <div class="hint">drag a bug into <b>Fix it</b> to hand it to a coder</div>
 </header>
 <div class="board" id="board"></div>
@@ -152,6 +153,39 @@ const es = new EventSource("/api/stream");
 es.onopen = () => { dot.classList.add("on"); status.textContent = "live"; };
 es.onerror = () => { dot.classList.remove("on"); status.textContent = "reconnecting…"; };
 es.onmessage = (e) => render(JSON.parse(e.data));
+
+// Watchdog liveness. Polled rather than pushed: the daemon writes a file, it
+// does not talk to this server. "Last tick 3m ago, next in 2m" is the thing
+// that would have made two silently-dead schedulers obvious immediately.
+const wdot = document.getElementById("wdot"), wstatus = document.getElementById("wstatus");
+const ago = (iso) => {
+  const s = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 1000));
+  return s < 90 ? s + "s" : Math.round(s / 60) + "m";
+};
+async function pollHeartbeat() {
+  try {
+    const h = await (await fetch("/api/heartbeat")).json();
+    if (!h.alive || !h.finishedAt) {
+      wdot.classList.remove("on");
+      wstatus.textContent = "watchdog: " + (h.reason || "stopped");
+      return;
+    }
+    // Stale = more than two intervals since the last finish. A process that
+    // died leaves its last heartbeat behind looking healthy otherwise.
+    const stale = (Date.now() - Date.parse(h.finishedAt)) / 1000 > (h.intervalSeconds || 300) * 2;
+    wdot.classList.toggle("on", !stale);
+    const c = h.corpus || {};
+    const corpus = c.skipped ? "corpus skipped" : `corpus ${c.passed}/${c.passed + c.failed}`;
+    wstatus.textContent = stale
+      ? `watchdog stale — last tick ${ago(h.finishedAt)} ago`
+      : `watchdog tick ${h.tick} · ${ago(h.finishedAt)} ago · unit ${h.unit.tests} · ${corpus}`;
+  } catch {
+    wdot.classList.remove("on");
+    wstatus.textContent = "watchdog: unknown";
+  }
+}
+pollHeartbeat();
+setInterval(pollHeartbeat, 5000);
 </script>
 </body>
 </html>

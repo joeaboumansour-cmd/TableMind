@@ -78,6 +78,20 @@ createServer((req, res) => {
 
   if (url.pathname === "/api/bugs") return json(res, 200, listBugs());
 
+  // Whether the watchdog is actually ticking. This exists because two
+  // in-session schedulers reported success and never fired, and nothing on
+  // screen said so — the board just quietly stopped moving. Liveness has to be
+  // visible or "is it running?" is unanswerable.
+  if (url.pathname === "/api/heartbeat") {
+    const p = resolve(HERE, "..", "heartbeat.json");
+    if (!existsSync(p)) return json(res, 200, { alive: false, reason: "watchdog has never run" });
+    try {
+      return json(res, 200, JSON.parse(readFileSync(p, "utf8")));
+    } catch {
+      return json(res, 200, { alive: false, reason: "heartbeat unreadable" });
+    }
+  }
+
   res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
   res.end(readFileSync(resolve(HERE, "index.html")));
 }).listen(PORT, () => {

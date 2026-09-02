@@ -36,26 +36,74 @@ flight and up to 1800s when idle.
 file, so it stops even if nobody is at the keyboard. Delete it before starting
 again.
 
-### What actually drives a tick — read this before believing the loop is running
+### What actually drives a tick
 
-Ticks are driven by a **session-only cron job** (`CronCreate`, currently every
-10 minutes at :04/:14/:24/…). Three properties matter, and the first two were
-learned by getting them wrong:
+**Neither in-session scheduler works here. Both were tried; both failed
+silently.** `ScheduleWakeup` registered a wakeup and reported success — twice —
+and neither fired. `CronCreate` registered a recurring job that `CronList`
+still listed afterwards, and it never fired either. They are the same
+mechanism, which only runs while the REPL is idle. A delegated bug sat
+untouched for eighteen minutes while the loop was believed to be running, and
+nothing on screen said otherwise.
 
-1. **`ScheduleWakeup` did not fire in this environment.** It registered the job
-   and reported success, twice, and neither wakeup arrived — a delegated bug
-   sat untouched for eighteen minutes while the loop was believed to be
-   running. A recurring cron gives repeated chances to fire instead of one
-   missed shot; a one-shot that misses is simply lost.
-2. **Jobs only fire while the REPL is idle.** A tick cannot start mid-turn, so
-   a long turn pushes ticks back.
-3. **The job dies with the session** and auto-expires after 7 days. It is not
-   written to disk. Restarting Claude means re-arming it.
+So the work is split by **what actually needs Claude**:
 
-The one trigger that is always reliable is **you sending any message** — the
-next turn runs a tick. So: never report that the loop is running on the
-strength of having scheduled something. Check `CronList`, and check whether the
-board actually moved.
+| Half | Driver | Never stops? |
+|---|---|---|
+| Replay the locks, run the unit suite, notice failures, prove liveness | `npm run loop:watch` — a plain Node process | **yes**, genuinely |
+| Exploratory charters, dispatching a coder, hand re-testing a fix | this Claude session | only while you are here |
+
+The watchdog has no dependency on Claude being idle, focused, or even open. It
+cannot explore — charters drive the Browser pane, which lives in the session —
+and it cannot dispatch a coder. It does the deterministic half, which is also
+the half that costs no tokens.
+
+Full autonomy would need the Claude Code **CLI** installed so an external
+process could run `claude -p` per tick. There is no usable `claude` binary on
+this machine (the one on PATH is a broken stub inside an unrelated package), so
+that route is closed until someone installs it.
+
+**Liveness is visible, and that is the point.** The watchdog writes
+`heartbeat.json` every tick and the dashboard shows `watchdog tick N · 12s ago
+· unit 178 · corpus 3/3`, going grey and saying **stale** once two intervals
+pass with no tick. The two dead schedulers were invisible precisely because
+nothing showed their absence.
+
+> Never report that the loop is running because scheduling returned success.
+> Check the heartbeat, or check whether the board moved.
+
+### A lock belongs on the same branch as its fix
+
+`harness:unit` runs on **every push**. A unit lock authored in `main` while its
+fix sits on a branch turns `main` red — and it did: the watchdog's tick 5
+reported `unit: FAILED` about ninety seconds after `bug-0005`'s lock was
+written into `main`.
+
+That is the watchdog earning its keep, and also a rule:
+
+- **Unit lock → commit it on the fix's branch**, so the two land together.
+  `ratchet.mjs lock --bug X --dir .worktrees/X` runs it against that branch's
+  source (it copies the lock in, runs, and restores the worktree's copy).
+- **E2E lock → `harness/e2e/regressions/` in `main` is fine.** Those run
+  nightly, not on push, so a red one does not block anyone. They will fail
+  against `main` until the fix merges, which the watchdog reports as
+  "not merged into this target yet".
+- **A fix made directly on `main`** (like `bug-0003`'s guard) keeps its lock in
+  `main`, and `ratchet.mjs lock` with no `--dir` is correct.
+
+### The watchdog does not file bugs, on purpose
+
+Its first version filed a `critical` regression for every failing spec, and got
+it wrong twice over: it created a NEW record instead of reopening the bug whose
+spec failed, and because `fingerprint()` normalises digits, `bug-0002 …` and
+`bug-0004 …` collapsed to one key and every failure deduped into a single wrong
+record.
+
+The deeper mistake was filing at all. A lock is verified against the fix's own
+**branch**, so it fails on `main` until that branch is merged — that is "not
+merged yet", not a regression. A board that shouts CRITICAL at the expected
+state is a board people stop reading. The watchdog now names the failing locks
+in its log and heartbeat and leaves the judgement to a human or a tick.
 
 ## Under a fix
 

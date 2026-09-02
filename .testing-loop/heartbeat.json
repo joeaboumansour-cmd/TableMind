@@ -1,0 +1,22 @@
+{
+  "alive": true,
+  "tick": 6,
+  "startedAt": "2026-09-02T10:35:42.608Z",
+  "finishedAt": "2026-09-02T10:36:13.367Z",
+  "nextRunAt": "2026-09-02T10:38:13.367Z",
+  "intervalSeconds": 120,
+  "base": "http://localhost:3000",
+  "unit": {
+    "ok": true,
+    "tests": "178"
+  },
+  "corpus": {
+    "ok": false,
+    "passed": 1,
+    "failed": 2,
+    "failingLocks": [
+      "bug-0002",
+      "bug-0004"
+    ]
+  }
+}
