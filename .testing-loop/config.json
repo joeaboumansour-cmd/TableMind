@@ -1,6 +1,4 @@
 {
-  "appUrl": "http://localhost:3000",
-  "verifyUrl": "http://localhost:3001",
   "dashboardPort": 4000,
   "budget": {
     "chartersPerHour": 6,
@@ -9,8 +7,9 @@
     "maxCoderConcurrency": 1
   },
   "safety": {
-    "requireStoreId": "00000000-0000-4000-8000-000000000001",
-    "forbiddenRoutes": ["/admin"],
+    "forbiddenRoutes": [
+      "/admin"
+    ],
     "coderDenyPaths": [
       "harness/guard/**",
       "supabase/migrations/**",
@@ -23,6 +22,16 @@
       "src/lib/stores/cartStore.ts",
       "src/lib/sync/engine.ts",
       "src/lib/auth/**"
-    ]
+    ],
+    "allowedStoreIds": {
+      "local": "00000000-0000-4000-8000-000000000001",
+      "prod": "110f3369-d187-4ebf-b6a0-cc5d6a9467b0"
+    },
+    "note": "The tester asserts the logged-in store matches the target BEFORE any write. prod = daoud, confirmed disposable by the owner on 2026-09-02 despite carrying 2,280 products and 93 transactions."
+  },
+  "targets": {
+    "local": "http://localhost:3000",
+    "prod": "https://goldensquirrel.vercel.app",
+    "verify": "http://localhost:3001"
   }
 }

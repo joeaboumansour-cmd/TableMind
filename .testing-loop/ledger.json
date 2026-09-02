@@ -70,6 +70,13 @@
       "risk": 2,
       "lastTested": null,
       "failures": 0
+    },
+    {
+      "id": "011",
+      "path": "sale lands correctly (receipt + history)",
+      "risk": 9,
+      "lastTested": "2026-09-02T09:00:50.102Z",
+      "failures": 0
     }
   ]
 }

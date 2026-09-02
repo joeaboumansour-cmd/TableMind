@@ -74,9 +74,15 @@ and busy ones are prompt:
 
 | Situation | Delay |
 |---|---|
-| a coder is running, or a fix is waiting to be re-tested | **120s** |
+| a coder is running in the background | **1200s** — a *fallback*, not a poll |
+| a fix is waiting to be re-tested, or work is queued for you | **300s** |
 | exploring, nothing pending | **600s** |
 | nothing to do at all (no charters left to author, no bugs) | **1800s** |
+
+> **Do not short-poll a running coder.** A background subagent re-invokes this
+> session the moment it finishes, so a 120s wakeup buys nothing and pays a full
+> tick each time. The long delay is only there in case the agent hangs and the
+> notification never arrives.
 
 Pass the same `/loop` input back each time. Stop only when the user says stop,
 or when `.testing-loop/STOP` exists — check for it every tick and call

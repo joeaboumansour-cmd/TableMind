@@ -30,9 +30,29 @@
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 
-/** Hosts the harness must never touch. Additions only, never removals. */
-const PRODUCTION_HOSTS = new Set([
-  "xflmpowmxcuiqxzhuqbl.supabase.co", // PRODUCTION — paying stores
+/**
+ * Hosts the harness must never touch. Additions only, never removals.
+ *
+ * BOTH entries stay. The database moved Seoul -> Ireland on 2026-09-01
+ * (docs/REGION-MIGRATION.md) and this constant was not updated with it, so for
+ * a day the guard named only the ABANDONED project: it would have printed
+ * "ok — target is slxqufndzuuetykqmtfa.supabase.co" and allowed a full
+ * seed-and-mutate run against the database serving live stores, with neither
+ * HARNESS_ALLOW_PRODUCTION_HOST nor HARNESS_STORE_ID required.
+ *
+ * That is the failure this file's own header warns about, arrived at from the
+ * inside: a guard whose hardcoded list goes stale is a guard that depends on
+ * configuration being correct after all. Found by the exploratory tester on
+ * 2026-09-02 (bug-0003) by reading the project ref out of the deployed
+ * client bundle and comparing it against this set.
+ *
+ * **If the database ever moves again, add the new host HERE in the same commit
+ * as the move** — and leave the old one, because a stale env file pointed at a
+ * decommissioned project is its own kind of bad run.
+ */
+export const PRODUCTION_HOSTS = new Set([
+  "slxqufndzuuetykqmtfa.supabase.co", // PRODUCTION — Ireland (eu-west-1), current
+  "xflmpowmxcuiqxzhuqbl.supabase.co", // PRODUCTION — Seoul, pre-2026-09-01
 ]);
 
 /** Extra hosts to block, comma-separated. Cannot unblock the set above. */

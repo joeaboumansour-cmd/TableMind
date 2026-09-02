@@ -8,7 +8,7 @@
 //   node .testing-loop/ratchet.mjs run  [--base http://localhost:3000]
 //   node .testing-loop/ratchet.mjs corpus
 import { execSync } from "node:child_process";
-import { existsSync, readdirSync, mkdirSync } from "node:fs";
+import { existsSync, readdirSync, mkdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { getBug, move } from "./lib/store.mjs";
 
@@ -25,6 +25,24 @@ const arg = (n) => {
 };
 
 const specFor = (bug) => resolve(DIR, bug + ".spec.ts");
+
+/**
+ * A unit test that names this bug counts as its lock.
+ *
+ * Matching on the bug id INSIDE the file rather than on a filename convention:
+ * a pure-logic lock belongs in a file named after the thing it protects
+ * (guard-hosts.test.ts), not after the ticket, and it may sit alongside other
+ * cases in that file.
+ */
+function unitLockFor(bug) {
+  const dir = resolve(ROOT, "harness/unit");
+  if (!existsSync(dir)) return null;
+  for (const f of readdirSync(dir).filter((f) => f.endsWith(".test.ts"))) {
+    const p = resolve(dir, f);
+    if (readFileSync(p, "utf8").includes(bug)) return p;
+  }
+  return null;
+}
 const rel = (p) => p.replace(ROOT + "\\", "").replace(ROOT + "/", "").replace(/\\/g, "/");
 
 /**
@@ -46,19 +64,42 @@ function lock(bug, base) {
   if (b.status !== "verified") {
     throw new Error("bug is '" + b.status + "', not 'verified'. The tester must confirm the fix by hand first.");
   }
+  // A lock is EITHER an e2e spec or a unit test, and the unit one is better
+  // whenever the defect is reachable without a browser — free forever, runs on
+  // every push, no server to point at. bug-0003 was a stale constant in the
+  // production guard: locking that behind Playwright would have been absurd.
+  //
+  // This mirrors harness/README.md's own table: put the case at the cheapest
+  // tier that can actually catch it.
   const spec = specFor(bug);
-  if (!existsSync(spec)) {
+  const unitSpec = unitLockFor(bug);
+
+  if (!existsSync(spec) && !unitSpec) {
     throw new Error(
-      "no spec at " + rel(spec) + ".\nWrite the regression case first — it must FAIL on the original bug and pass on the fix."
+      "no lock for " + bug + ". Write the regression case first — it must FAIL on the\n" +
+        "original bug and pass on the fix. Either:\n" +
+        "  " + rel(specFor(bug)) + "        (browser flow)\n" +
+        "  harness/unit/<name>.test.ts  mentioning " + bug + "   (pure logic — preferred)"
     );
   }
 
-  // Against the fix's own server (:3001) while it is still a branch, so a spec
-  // is never locked in on evidence from a tree nobody has verified.
-  play(rel(spec), base);
+  let lock;
+  if (unitSpec) {
+    // No server, no base URL, nothing to point at.
+    execSync("npx vitest run --config harness/vitest.config.mts " + rel(unitSpec), {
+      cwd: ROOT,
+      stdio: "inherit",
+    });
+    lock = rel(unitSpec);
+  } else {
+    // Against the fix's own server (:3001) while it is still a branch, so a
+    // spec is never locked in on evidence from a tree nobody has verified.
+    play(rel(spec), base);
+    lock = rel(spec);
+  }
 
-  move(bug, "closed", "regression spec passing: " + rel(spec));
-  console.log(JSON.stringify({ ok: true, bug, spec: rel(spec), status: "closed" }));
+  move(bug, "closed", "regression lock passing: " + lock);
+  console.log(JSON.stringify({ ok: true, bug, lock, status: "closed" }));
 }
 
 function corpus() {
