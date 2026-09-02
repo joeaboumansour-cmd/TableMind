@@ -812,10 +812,18 @@ export const useCartStore = create<CartStore>()(
 
         getSubtotal: () => subtotalOf(get().items),
 
-        getSubtotalUsd: () => {
-          const { items } = get();
-          return items.reduce((sum, item) => sum + item.total_price_usd, 0);
-        },
+        // The USD equivalent of the EXACT (unrounded) LL subtotal, derived the
+        // same way getTotalUsd() derives from the rounded LL total, so the two
+        // share a basis and differ only by the rounding.
+        //
+        // This used to sum item.total_price_usd, which addItem stamps on a
+        // CURRENCY-DEPENDENT basis: an LL-priced line holds a RETURN_RATE
+        // figure, a USD-priced line holds its native price, which is a
+        // SELL_RATE one. Unlike the display sites, that mixture reached the
+        // database — checkout persists this as transactions.usd_subtotal on
+        // every sale, and the sync engine forwards it on offline replay — where
+        // it could not reconcile with usd_total_amount, permanently.
+        getSubtotalUsd: () => convertLlToUsdForReturn(get().getSubtotal()),
 
         getTotal: () => totalOf(get().items),
 
