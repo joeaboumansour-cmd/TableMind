@@ -225,6 +225,7 @@ export default function POSPage() {
   // Confirm before ending the session — see the header button.
   const [isLogoutDialogOpen, setIsLogoutDialogOpen] = useState(false);
   const [isAccountOpen, setIsAccountOpen] = useState(false);
+  const [isClearCartOpen, setIsClearCartOpen] = useState(false);
   const lockTill = useLockTill();
 
   // The cart check in PWAUpdateListener already covers a sale in progress. What
@@ -233,7 +234,10 @@ export default function POSPage() {
   // dialog awaiting an answer.
   // (isScannerActive is deliberately NOT a hold: it is a persisted preference
   // that defaults to on, so holding on it would defer updates forever.)
-  useReloadGuard(isLogoutDialogOpen || isAccountOpen, "pos-busy");
+  useReloadGuard(
+    isLogoutDialogOpen || isAccountOpen || isClearCartOpen,
+    "pos-busy",
+  );
 
   // Open the Dexie chunk/connection now rather than at checkout, where it
   // would sit in front of the receipt.
@@ -833,7 +837,7 @@ export default function POSPage() {
       // The lock overlay covers this page without unmounting it, so this
       // listener is still live behind it and the lock screen owns the keyboard.
       if (isLocked) return;
-      if (isLogoutDialogOpen) return; // the modal owns the keyboard
+      if (isLogoutDialogOpen || isClearCartOpen) return; // the modal owns the keyboard
       if (e.key === "F3") {
         e.preventDefault();
         toggleScanner();
@@ -841,7 +845,7 @@ export default function POSPage() {
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isDesktopMode, toggleScanner, isLogoutDialogOpen, isLocked]);
+  }, [isDesktopMode, toggleScanner, isLogoutDialogOpen, isClearCartOpen, isLocked]);
 
   // Cleanup timeout on unmount
   useEffect(() => {
@@ -999,12 +1003,14 @@ export default function POSPage() {
   );
 
   // Clearing the cart is destructive and one tap away, so it keeps its confirm.
-  const handleClearCart = () => {
-    if (window.confirm("Clear all items from the cart?")) {
-      clearCart();
-      toast.success("Cart cleared");
-    }
-  };
+  //
+  // It used to be a native window.confirm(). On a phone that is a grey system
+  // sheet whose default button a cashier dismisses by reflex — the exact thing
+  // ConfirmDialog was introduced to replace everywhere else in the app, and the
+  // one place still doing it. Now it raises the same dialog the Pro till uses,
+  // with the same wording and the same figures, so the two layouts agree about
+  // what clearing a cart costs. No cooldown: see the note at that call site.
+  const handleClearCart = () => setIsClearCartOpen(true);
 
   // Boot is "the till is usable", which is exactly the condition the render
   // guard below uses — not mount, and not the end of the background sync. The
@@ -1042,6 +1048,35 @@ export default function POSPage() {
         open={isAccountOpen}
         onOpenChange={setIsAccountOpen}
         onLogout={() => setIsLogoutDialogOpen(true)}
+      />
+
+      {/* ---- Confirm clear cart ----
+           Same wording, same figures and same instant confirm as the Pro till,
+           so a cashier moving between a phone and the counter till is asked the
+           same question in the same words. */}
+      <ConfirmDialog
+        open={isClearCartOpen}
+        onOpenChange={setIsClearCartOpen}
+        title="Clear this cart?"
+        description="Removes every item. This cannot be undone."
+        details={
+          <div className="rounded-2xl bg-muted/50 px-4 py-3">
+            <p className="font-semibold">
+              {getItemCount()} unit{getItemCount() !== 1 ? "s" : ""} in the cart
+            </p>
+            <p className="mt-0.5 text-muted-foreground tnum">
+              {formatLL(getTotal())}
+            </p>
+          </div>
+        }
+        cancelLabel="Keep them"
+        confirmLabel="Clear"
+        countdownSeconds={0}
+        onConfirm={() => {
+          clearCart();
+          setIsClearCartOpen(false);
+          toast.success("Cart cleared");
+        }}
       />
 
       {/* ---- Confirm sign out ---- */}

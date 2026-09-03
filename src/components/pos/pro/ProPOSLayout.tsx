@@ -908,6 +908,17 @@ export default function ProPOSLayout({
         onOpenChange={setClearConfirmOpen}
         title="Clear this cart?"
         description="Removes every item from this lane. The lane itself stays open."
+        // No cooldown on this one, unlike every other destructive confirm.
+        //
+        // The three seconds exist to break muscle memory on actions that are
+        // rare and unrecoverable — deleting a product, wiping a catalogue,
+        // signing the till out. Clearing a cart is neither: it happens many
+        // times a day, the customer is standing right there, and the worst case
+        // is re-scanning a basket. Making a frequent, recoverable action wait is
+        // how a cashier learns to ignore the confirm on the ones that matter.
+        // The dialog stays — it is the accidental tap this guards against, not
+        // the deliberate one.
+        countdownSeconds={0}
         details={
           <div className="rounded-2xl bg-muted/50 px-4 py-3">
             <p className="font-semibold">
@@ -937,6 +948,11 @@ export default function ProPOSLayout({
             : "Clear this lane?"
         }
         description="The items in it are discarded. This cannot be undone."
+        // Instant, for the same reason as the cart clear above: parking and
+        // closing lanes is routine counter work, not a rare irreversible
+        // administrative act. The dialog still names the lane and its total, so
+        // the accidental tap is caught by READING it, not by waiting.
+        countdownSeconds={0}
         details={
           laneToCloseSummary ? (
             <div className="rounded-2xl bg-muted/50 px-4 py-3">
