@@ -94,6 +94,18 @@ export const ACTIVITY_ACTIONS = [
   "auth.login_failed",
   "auth.logout",
   "auth.permission_denied",
+  // Lock/unlock is a session freeze, not a sign-out: the cart, the lanes and
+  // the open cash shift all survive it. Logged separately from login/logout so
+  // the trail can tell "stepped away for five minutes" from "handed the till
+  // over", which is exactly the question asked of a shift with a variance.
+  "auth.lock",
+  "auth.unlock",
+  "auth.pin_set",
+  "auth.pin_cleared",
+  // Carries { reason, attemptsRemaining } and NEVER the attempted PIN. The
+  // redaction regex in logger.ts already scrubs a details key called `pin`,
+  // but do not rely on that — simply never put it in the event.
+  "auth.pin_failed",
 
   // --- Navigation
   "nav.route",

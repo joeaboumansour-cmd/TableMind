@@ -26,8 +26,20 @@ import { useAuth } from "@/lib/auth/AuthContext";
 import { useCartStore } from "@/lib/stores/cartStore";
 import { formatLL } from "@/lib/utils/format";
 
-export default function LogoutButton() {
-  const [open, setOpen] = useState(false);
+/**
+ * The confirm on its own, so other surfaces can raise it.
+ *
+ * The account dialog has a "Log out" row and must show the same cart warning
+ * and the same cooldown; giving it its own copy is how the two would end up
+ * disagreeing about what signing out costs.
+ */
+export function LogoutConfirm({
+  open,
+  onOpenChange,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
   const router = useRouter();
   const { logout } = useAuth();
 
@@ -36,23 +48,19 @@ export default function LogoutButton() {
   const getTotal = useCartStore((s) => s.getTotal);
   const itemCount = getItemCount();
 
+  const setOpen = onOpenChange;
+
   return (
     <>
-      <Button
-        variant="ghost"
-        size="icon"
-        className="h-9 w-9 rounded-lg text-muted-foreground hover:text-foreground"
-        onClick={() => setOpen(true)}
-        aria-label="Log out"
-      >
-        <LogOut className="h-4 w-4" />
-      </Button>
-
       <ConfirmDialog
         open={open}
         onOpenChange={setOpen}
         title="Log out?"
-        description="You'll need your username and password to get back in."
+        // Accurate now that PINs exist: a cashier who has set one on this
+        // device gets back in with four digits. The second sentence points at
+        // Lock, which is what a break actually calls for — logging out to visit
+        // the toilet is the friction this whole feature exists to remove.
+        description="You can sign back in with your PIN, or your username and password. Just stepping away? Lock the till instead."
         // An open cart is the reason this needs a confirm at all — it survives
         // the logout, but the cashier should know that before they hand the
         // till over.
@@ -78,6 +86,25 @@ export default function LogoutButton() {
           router.push("/login");
         }}
       />
+    </>
+  );
+}
+
+export default function LogoutButton() {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <>
+      <Button
+        variant="ghost"
+        size="icon"
+        className="h-9 w-9 rounded-lg text-muted-foreground hover:text-foreground"
+        onClick={() => setOpen(true)}
+        aria-label="Log out"
+      >
+        <LogOut className="h-4 w-4" />
+      </Button>
+      <LogoutConfirm open={open} onOpenChange={setOpen} />
     </>
   );
 }

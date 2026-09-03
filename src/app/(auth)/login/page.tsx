@@ -1,272 +1,146 @@
 "use client";
 
-import { useState, useEffect } from "react";
+// =============================================
+// Login
+//
+// A till lives on one counter, in one shop, and serves the same handful of
+// people every day — so almost everything the old three-field form asked for
+// was already known to the device. The store is remembered and pinned at the
+// top; the people this device has seen appear as chips; four digits gets you
+// back in. Typing a full credential is now the exception (a new hire, a new
+// till, a cold PIN), not the daily path.
+//
+// The flow itself lives in AuthFlow, shared with the lock overlay, so the two
+// can never drift on who is allowed in. This page is chrome plus navigation.
+//
+// LAYOUT: structure branches on Tailwind `md:` utilities, not useIsDesktop().
+// CSS has no hydration flash and cannot drift from the breakpoint.
+// AuthFlow keeps the one behavioural desktop branch (autofocus), where the
+// difference is about input hardware rather than about layout.
+// =============================================
+
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth/AuthContext";
-import { hasCachedCredentials, getMostRecentCachedEntry, getCachedUsernamesForStore } from "@/lib/auth/offlineAuth";
-import { connectivity } from "@/lib/connectivity";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Loader2, Eye, EyeOff, AlertTriangle, Store, User, WifiOff, Wifi } from "lucide-react";
-import { toast } from "@/lib/toast";
+import { useLandingRoute } from "@/hooks/useLandingRoute";
+import { Loader2 } from "lucide-react";
+import AuthFlow from "@/components/auth/AuthFlow";
+import OfflinePill from "@/components/auth/OfflinePill";
+
+function BrandMark() {
+  return (
+    <div className="flex items-center gap-3">
+      <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-primary shadow-lg shadow-primary/20">
+        <svg viewBox="0 0 32 32" className="h-6 w-6 text-primary-foreground" fill="currentColor" aria-hidden>
+          <ellipse cx="18" cy="22" rx="6" ry="7" />
+          <circle cx="24" cy="14" r="5" />
+          <ellipse cx="28" cy="15" rx="3" ry="2.5" />
+          <path d="M22 10 L24 6 L26 10 Z" />
+          <circle cx="25" cy="13" r="1.2" fill="#FEF3C7" />
+          <ellipse cx="22" cy="20" rx="2" ry="3" />
+          <ellipse cx="14" cy="24" rx="2.5" ry="4" />
+          <path d="M12 20 C 8 18, 6 14, 6 10 C 6 4, 10 2, 14 4 C 17 5, 18 8, 16 10 C 14 12, 11 10, 12 8 C 12 6, 14 6, 15 7 C 16 8, 16 10, 14 12 C 12 14, 10 16, 12 20 Z" />
+        </svg>
+      </div>
+      <div className="leading-tight">
+        <p className="text-[17px] font-bold tracking-tight">GoldenSquirrel</p>
+        <p className="text-[12px] text-muted-foreground">Point of Sale</p>
+      </div>
+    </div>
+  );
+}
 
 export default function LoginPage() {
   const router = useRouter();
-  const { user, login, loginOffline, isLoading } = useAuth();
-  const [showPassword, setShowPassword] = useState(false);
+  const { user, isLoading: authLoading } = useAuth();
+  const { href: landingHref, resolved: landingResolved } = useLandingRoute();
 
-  // Form fields
-  const [storeUsername, setStoreUsername] = useState("");
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
+  // Set when AuthFlow says it is FINISHED — which is not the same moment the
+  // credential is accepted. The screen keeps its own chrome up while the landing
+  // route resolves, rather than flashing an empty page or dropping the cashier
+  // on a screen their permissions bounce them off.
+  const [navigating, setNavigating] = useState(false);
 
-  // Offline state tracking (heartbeat-based)
-  const [isOffline, setIsOffline] = useState(connectivity.isOffline);
-  const [cachedStoreUsername, setCachedStoreUsername] = useState<string | null>(null);
-  const [cachedUsernames, setCachedUsernames] = useState<string[]>([]);
-
-  // If already logged in, redirect to POS
-  useEffect(() => {
-    if (user) {
-      router.replace("/pos");
-    }
-  }, [user, router]);
-
-  // Track online/offline status and check for cached credentials
-  useEffect(() => {
-    const unsubscribe = connectivity.subscribe((status) => {
-      setIsOffline(status === "offline");
-    });
-
-    // Check for cached credentials
-    if (hasCachedCredentials()) {
-      const cached = getMostRecentCachedEntry();
-      if (cached) {
-        setCachedStoreUsername(cached.storeUsername);
-        // Everyone who has signed in online on this device can sign in offline,
-        // so name them — otherwise a cashier has no way to know whether the
-        // till will let them in during an outage.
-        setCachedUsernames(getCachedUsernamesForStore(cached.storeUsername));
-        // Pre-fill the store username if the form is empty
-        setStoreUsername((prev) => prev || cached.storeUsername);
-      }
-    }
-
-    return unsubscribe;
+  const handleAuthenticated = useCallback(() => {
+    setNavigating(true);
   }, []);
 
-  // Main login handler — works for both store owners and employees
-  const handleLoginSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  // Was there already a session when this screen mounted?
+  //
+  // This distinction is load-bearing. "A user exists" is NOT the signal to
+  // navigate: a password sign-in creates the session and THEN offers to set a
+  // PIN, so navigating the moment `user` appears yanks the screen out from under
+  // that offer mid-tap. Someone who merely lands on /login with a live session
+  // has no flow to finish and should be moved on at once.
+  const arrivedSignedIn = useRef<boolean | null>(null);
+  if (arrivedSignedIn.current === null && !authLoading) {
+    arrivedSignedIn.current = Boolean(user);
+  }
 
-    if (!storeUsername.trim() || !username.trim() || !password.trim()) {
-      toast.error("Please fill in all fields");
-      return;
-    }
+  // The one navigation effect, covering both cases above.
+  //
+  // router.replace, NOT window.location.href. The old page did a hard navigation
+  // behind a setTimeout(100), which threw away the JS context — the service
+  // worker, the warm Dexie connection, the whole module graph — and rebuilt it
+  // from scratch on the slowest screen transition in the app. Nothing needs the
+  // delay: both localStorage writes complete before login() resolves.
+  useEffect(() => {
+    if (authLoading || !user) return;
+    if (!arrivedSignedIn.current && !navigating) return;
+    if (!landingResolved) return;
+    router.replace(landingHref ?? "/pos");
+  }, [authLoading, user, navigating, landingResolved, landingHref, router]);
 
-    // If offline, use cached credentials
-    if (!connectivity.isOnline) {
-      if (!hasCachedCredentials()) {
-        toast.error("You are offline and no cached credentials are available. Please connect to the internet to log in.");
-        return;
-      }
-
-      const result = await loginOffline(storeUsername.trim(), password, username.trim());
-      if (result.success) {
-        toast.success("Welcome back! (offline login)");
-        setTimeout(() => {
-          window.location.href = "/pos";
-        }, 100);
-      } else {
-        toast.error(result.error || "Invalid credentials");
-      }
-      return;
-    }
-
-    // Online: the server does every lookup and the password comparison.
-    //
-    // This page used to select the store row itself — `password_hash` and all
-    // — compare the password in the browser, and decide owner-vs-employee from
-    // the result. That is bug-0006: it put the store's credential in every
-    // till's memory and needed a Supabase key that bypasses RLS to work at all.
-    // `POST /api/auth/login` answers both cases now, and `login()` writes the
-    // legacy `goldensquirrel_auth` blob (the x-auth-data tenancy header) as
-    // part of establishing the session, so it cannot be forgotten here.
-    const result = await login(storeUsername.trim(), username.trim(), password);
-    if (result.success) {
-      toast.success("Welcome back!");
-      setTimeout(() => {
-        window.location.href = "/pos";
-      }, 100);
-    } else {
-      toast.error(result.error || "Invalid store credentials");
-    }
-  };
+  // Signed in, no reachable section. Navigating would drop them into a guard
+  // that bounces straight back here, so say what is wrong instead.
+  const strandedNoAccess = Boolean(user && landingResolved && landingHref === null);
 
   return (
-    <div className="min-h-dvh flex flex-col items-center justify-center bg-gradient-to-br from-background to-muted p-4">
-      {/* Logo */}
-      <div className="mb-8 flex items-center gap-3">
-        <div className="h-12 w-12 rounded-xl bg-amber-500 flex items-center justify-center shadow-lg">
-          <svg viewBox="0 0 32 32" className="h-7 w-7 text-white" fill="currentColor">
-            {/* Side Profile Squirrel */}
-            <ellipse cx="18" cy="22" rx="6" ry="7" />
-            <circle cx="24" cy="14" r="5" />
-            <ellipse cx="28" cy="15" rx="3" ry="2.5" />
-            <path d="M22 10 L24 6 L26 10 Z" />
-            <circle cx="25" cy="13" r="1.2" fill="#FEF3C7" />
-            <ellipse cx="22" cy="20" rx="2" ry="3" />
-            <ellipse cx="14" cy="24" rx="2.5" ry="4" />
-            <path d="M12 20 C 8 18, 6 14, 6 10 C 6 4, 10 2, 14 4 C 17 5, 18 8, 16 10 C 14 12, 11 10, 12 8 C 12 6, 14 6, 15 7 C 16 8, 16 10, 14 12 C 12 14, 10 16, 12 20 Z" />
-          </svg>
-        </div>
-        <div>
-          <h1 className="text-3xl font-bold">GoldenSquirrel</h1>
-          <p className="text-muted-foreground">Point of Sale System</p>
+    <div className="flex min-h-dvh flex-col bg-background">
+      {/* ---- Mobile: header, flow, footer. The pad sits in the thumb zone. ----
+           ---- Desktop (md:): the same column, centred and capped.        ---- */}
+      <div className="safe-top flex items-center justify-between px-5 pb-3 pt-4 md:justify-center md:pt-10">
+        <BrandMark />
+        <div className="md:hidden">
+          <OfflinePill />
         </div>
       </div>
 
-      {/* Offline Banner */}
-      {isOffline && (
-        <div className="mb-4 w-full max-w-md">
-          <div className="flex items-center gap-3 p-4 bg-amber-500/10 border border-amber-500/30 rounded-lg">
-            <WifiOff className="h-5 w-5 text-amber-600 shrink-0" />
-            <div className="flex-1">
-              <p className="font-medium text-amber-700 text-sm">
-                You are offline
-              </p>
-              <p className="text-amber-600/80 text-xs mt-0.5">
-                {cachedStoreUsername
-                  ? cachedUsernames.length > 1
-                    ? `Store "${cachedStoreUsername}" — ${cachedUsernames.length} users can sign in offline: ${cachedUsernames.join(", ")}.`
-                    : `Cached credentials available for "${cachedStoreUsername}". You can log in while offline.`
-                  : "No cached credentials available. Please connect to the internet to log in."}
-              </p>
-            </div>
-            <div className="flex items-center text-amber-600">
-              {isOffline ? <WifiOff className="h-4 w-4" /> : <Wifi className="h-4 w-4" />}
-            </div>
-          </div>
-        </div>
-      )}
-
-      <Card className="w-full max-w-md border-2">
-        <CardHeader className="text-center">
-          <CardTitle className="text-2xl">Store Login</CardTitle>
-          <CardDescription>
-            {isOffline
-              ? "Offline mode — using cached credentials"
-              : "Enter your store credentials to access the POS"}
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <form onSubmit={handleLoginSubmit} className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="storeUsername">Store Username</Label>
-              <Input
-                id="storeUsername"
-                type="text"
-                placeholder="e.g., downtown_store"
-                value={storeUsername}
-                onChange={(e) => setStoreUsername(e.target.value)}
-                required
-                className="h-12"
-                autoComplete="username"
-              />
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="username">Username (or store username for owner)</Label>
-              <Input
-                id="username"
-                type="text"
-                placeholder="Your username or store username"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                required
-                className="h-12"
-                autoComplete="username"
-              />
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="password">Password</Label>
-              <div className="relative">
-                <Input
-                  id="password"
-                  type={showPassword ? "text" : "password"}
-                  placeholder="••••••••"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  required
-                  className="h-12 pr-10"
-                  autoComplete="current-password"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                >
-                  {showPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
-                </button>
-              </div>
-            </div>
-
-            <Button
-              type="submit"
-              className="w-full h-12 text-lg font-bold"
-              disabled={isLoading}
-            >
-              {isLoading ? (
+      <main className="flex min-h-0 flex-1 flex-col md:items-center md:justify-center">
+        <div className="flex min-h-0 w-full flex-1 flex-col md:max-w-[420px] md:flex-none md:rounded-3xl md:border md:border-white/[0.07] md:bg-card md:py-5">
+          {navigating || strandedNoAccess ? (
+            <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-8 py-16 text-center">
+              {strandedNoAccess ? (
                 <>
-                  <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-                  Signing in...
-                </>
-              ) : isOffline ? (
-                "Sign In (Offline)"
-              ) : (
-                "Sign In"
-              )}
-            </Button>
-
-            {/* Cached credentials hint */}
-            {isOffline && cachedStoreUsername && (
-              <div className="flex items-start gap-2 p-3 bg-muted/50 rounded-lg">
-                <AlertTriangle className="h-4 w-4 text-amber-500 mt-0.5 flex-shrink-0" />
-                <div className="text-sm text-muted-foreground">
-                  <p className="font-medium">Offline Login</p>
-                  <p className="text-xs">
-                    Enter your credentials to log in using cached data. Your password was securely cached during your last online session.
+                  <p className="text-[15px] font-semibold">No sections are enabled</p>
+                  <p className="max-w-[20rem] text-[13px] leading-snug text-muted-foreground">
+                    Your account is signed in but has nothing it can open. Ask
+                    the store owner to give you access.
                   </p>
-                </div>
-              </div>
-            )}
-          </form>
-
-          <div className="mt-6 p-4 bg-muted rounded-lg space-y-2">
-            <div className="flex items-start gap-2">
-              <Store className="h-4 w-4 text-amber-500 mt-0.5 flex-shrink-0" />
-              <div className="text-sm text-muted-foreground">
-                <p className="font-medium">Store Owner</p>
-                <p className="text-xs">Use your store username in both fields or as username</p>
-              </div>
+                </>
+              ) : (
+                <>
+                  <Loader2 className="h-6 w-6 animate-spin text-primary" />
+                  <p className="text-[14px] font-semibold text-muted-foreground">
+                    Opening your till…
+                  </p>
+                </>
+              )}
             </div>
-            <div className="flex items-start gap-2">
-              <User className="h-4 w-4 text-amber-500 mt-0.5 flex-shrink-0" />
-              <div className="text-sm text-muted-foreground">
-                <p className="font-medium">Employee</p>
-                <p className="text-xs">Use your assigned personal username. Contact your store owner if you don't have one.</p>
-              </div>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+          ) : (
+            <AuthFlow mode="login" onAuthenticated={handleAuthenticated} />
+          )}
+        </div>
+      </main>
 
-      <p className="mt-8 text-center text-sm text-muted-foreground">
-        © 2026 GoldenSquirrel. All rights reserved.
-      </p>
+      <footer className="safe-bottom flex items-center justify-center gap-3 px-5 pb-4 pt-2">
+        <span className="hidden md:inline">
+          <OfflinePill />
+        </span>
+        <span className="text-[11px] text-muted-foreground md:hidden">
+          Golden Squirrel POS
+        </span>
+      </footer>
     </div>
   );
 }

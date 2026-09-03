@@ -9,7 +9,7 @@ import {
   startTransition,
 } from "react";
 import { useRouter } from "next/navigation";
-import { LogOut, ScanLine, Squirrel } from "lucide-react";
+import { Lock, LogOut, ScanLine, Squirrel } from "lucide-react";
 import { cn } from "@/lib/utils";
 import CartSheet from "@/components/pos/CartSheet";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
@@ -37,6 +37,10 @@ import { useFeatureFlags } from "@/hooks/useFeatureFlags";
 import { isDesktop } from "@/lib/device";
 import { getFrequentlyUsedProductIds } from "@/lib/frequentlyUsed";
 import { connectivity } from "@/lib/connectivity";
+import { useIsLocked } from "@/lib/auth/lockStore";
+import { useLockTill } from "@/components/auth/LockButton";
+import AccountDialog from "@/components/auth/AccountDialog";
+import { initialsFor } from "@/lib/auth/initials";
 import { useReloadGuard } from "@/lib/pwa/useReloadGuard";
 import { warmAppShell } from "@/lib/pwa/warmAppShell";
 import { scheduleWhenIdle } from "@/lib/pwa/whenIdle";
@@ -81,6 +85,9 @@ export default function POSPage() {
   const router = useRouter();
   const { user, logout: authLogout, isLoading: authLoading } = useAuth();
   const { isEnabled, flagsResolved } = useFeatureFlags();
+  // Locking covers this page rather than unmounting it, so the F3 shortcut and
+  // the camera both need to stand down while the overlay is up.
+  const isLocked = useIsLocked();
   const [isDesktopMode, setIsDesktopMode] = useState(false);
   const [isScannerActive, setIsScannerActive] = useState(() => {
     if (typeof window !== "undefined" && "localStorage" in window) {
@@ -217,6 +224,8 @@ export default function POSPage() {
   const barcodeIndexRef = useRef<Map<string, Product>>(new Map());
   // Confirm before ending the session — see the header button.
   const [isLogoutDialogOpen, setIsLogoutDialogOpen] = useState(false);
+  const [isAccountOpen, setIsAccountOpen] = useState(false);
+  const lockTill = useLockTill();
 
   // The cart check in PWAUpdateListener already covers a sale in progress. What
   // it does not cover is the moment AFTER the cart is cleared but while the
@@ -224,7 +233,7 @@ export default function POSPage() {
   // dialog awaiting an answer.
   // (isScannerActive is deliberately NOT a hold: it is a persisted preference
   // that defaults to on, so holding on it would defer updates forever.)
-  useReloadGuard(isLogoutDialogOpen, "pos-busy");
+  useReloadGuard(isLogoutDialogOpen || isAccountOpen, "pos-busy");
 
   // Open the Dexie chunk/connection now rather than at checkout, where it
   // would sit in front of the receipt.
@@ -821,6 +830,9 @@ export default function POSPage() {
 
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.repeat) return;
+      // The lock overlay covers this page without unmounting it, so this
+      // listener is still live behind it and the lock screen owns the keyboard.
+      if (isLocked) return;
       if (isLogoutDialogOpen) return; // the modal owns the keyboard
       if (e.key === "F3") {
         e.preventDefault();
@@ -829,7 +841,7 @@ export default function POSPage() {
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isDesktopMode, toggleScanner, isLogoutDialogOpen]);
+  }, [isDesktopMode, toggleScanner, isLogoutDialogOpen, isLocked]);
 
   // Cleanup timeout on unmount
   useEffect(() => {
@@ -1025,12 +1037,21 @@ export default function POSPage() {
   // (and drop its open/close animation) on every cart change.
   const dialogs = (
     <>
+      {/* ---- Account, PIN and session ---- */}
+      <AccountDialog
+        open={isAccountOpen}
+        onOpenChange={setIsAccountOpen}
+        onLogout={() => setIsLogoutDialogOpen(true)}
+      />
+
       {/* ---- Confirm sign out ---- */}
       <ConfirmDialog
         open={isLogoutDialogOpen}
         onOpenChange={setIsLogoutDialogOpen}
         title="Log out?"
-        description="You'll need your username and password to get back in."
+        // Kept in step with the desktop confirm now that a PIN can bring you
+        // back, and pointing at Lock, which is what a break actually calls for.
+        description="You can sign back in with your PIN, or your username and password. Just stepping away? Lock the till instead."
         // An open cart is the reason this needs a confirm at all — it survives
         // the logout, but the cashier should know that before they hand the
         // till over.
@@ -1104,7 +1125,11 @@ export default function POSPage() {
                 onAdd={handleTileAdd}
               />
             </div>
-          ) : isScannerActive ? (
+          ) : isScannerActive && !isLocked ? (
+            /* `!isLocked` releases the camera while the till is locked. A
+               reload while locked (a service-worker update, say) would
+               otherwise remount the scanner behind the overlay and, on a fresh
+               device, prompt whoever is holding the till for camera access. */
             /* Unmounted (not merely deactivated) when off. Unmount runs the
                scanner's stopEverything() cleanup — stop all MediaStream
                tracks, reset ZXing, tear down Quagga — and removes the <video>
@@ -1151,21 +1176,35 @@ export default function POSPage() {
           <div className="flex items-center gap-2">
             {/* Brand chip. min-w-0 + truncate so it yields space to the
                 controls on a narrow handset rather than pushing them off. */}
-            <div className="glass flex min-w-0 items-center gap-2 rounded-full py-1.5 pl-1.5 pr-3 ring-1 ring-white/10">
-              {/* Same mark as the desktop header — one identity across both
-                  layouts instead of a letter here and a logo there. */}
-              <span className="flex h-7 w-7 flex-none items-center justify-center rounded-full bg-primary">
-                <Squirrel className="h-4 w-4 text-primary-foreground" />
+            {/* Tappable: this chip was already the "where am I / who am I"
+                affordance, so it is where the account, PIN and sign-out
+                controls belong. Mobile has no room for a settings screen and
+                does not need one for four rows. */}
+            <button
+              type="button"
+              onClick={() => setIsAccountOpen(true)}
+              aria-label="Account and PIN settings"
+              className="tap glass flex min-w-0 items-center gap-2 rounded-full py-1.5 pl-1.5 pr-3 ring-1 ring-white/10"
+            >
+              {/* The signed-in person's initials, so a shared till says at a
+                  glance whose shift the next sale lands on. Falls back to the
+                  brand mark before the session has hydrated. */}
+              <span className="flex h-7 w-7 flex-none items-center justify-center rounded-full bg-primary text-[10px] font-bold text-primary-foreground">
+                {user ? (
+                  initialsFor(user.displayName || user.username)
+                ) : (
+                  <Squirrel className="h-4 w-4 text-primary-foreground" />
+                )}
               </span>
               {/* Decorative, so it is the first thing to go: below ~390px the
                   wordmark would truncate to "GoldenSqui…" to make room for the
                   scanner switch. The avatar and the connectivity dot beside it
                   are the functional parts and always stay. */}
               <span className="hidden truncate text-sm font-bold leading-none min-[390px]:inline">
-                GoldenSquirrel
+                {user?.displayName || user?.username || "GoldenSquirrel"}
               </span>
               <SyncIndicator dot />
-            </div>
+            </button>
 
             <div className="ml-auto flex flex-none items-center gap-2">
               {/* ---- Scanner switch ----
@@ -1213,17 +1252,22 @@ export default function POSPage() {
                 </span>
               </button>
 
-              {/* Signing out mid-shift loses the till to whoever knows the
-                  next password — it gets a confirm, and the universally
-                  understood door icon rather than a power symbol that reads
-                  as "turn the device off". */}
+              {/* LOCK, not log out. Stepping away for two minutes happens many
+                  times a shift; handing the till over happens once. The frequent
+                  action gets the one tap out here, and sign-out moved one tap
+                  deeper into the account dialog behind the brand chip — where it
+                  keeps its confirm and its cart warning.
+
+                  No confirm on this one: locking destroys nothing. The cart, the
+                  parked lanes and the open shift are all exactly where they were
+                  when the screen comes back. */}
               <button
                 type="button"
-                onClick={() => setIsLogoutDialogOpen(true)}
-                aria-label="Log out"
+                onClick={lockTill}
+                aria-label="Lock the till"
                 className="tap glass flex h-11 w-11 items-center justify-center rounded-full text-muted-foreground ring-1 ring-white/10"
               >
-                <LogOut className="h-5 w-5" />
+                <Lock className="h-5 w-5" />
               </button>
             </div>
           </div>

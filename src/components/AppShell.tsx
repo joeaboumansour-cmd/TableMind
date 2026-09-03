@@ -27,7 +27,7 @@
 
 import BottomTabBar from "@/components/BottomTabBar";
 import DesktopNav from "@/components/nav/DesktopNav";
-import { useVisibleTabs } from "@/components/nav/tabs";
+import { useVisibleTabs } from "@/components/nav/useVisibleTabs";
 
 export default function AppShell({
   children,

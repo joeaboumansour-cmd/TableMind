@@ -1,4 +1,9 @@
-@import "tailwindcss";
+/* `source(...)` pins automatic content detection to src/.
+   Without it Tailwind v4 scans the whole repo (minus .gitignore), so prose and
+   code in docs/, harness/ and scripts/ generate real utilities — a hazard TABLE
+   in scripts/verify-legacy-css.mjs was enough to emit `.text-wrap`, which that
+   same script then flagged. Junk CSS, and a gate arguing with itself. */
+@import "tailwindcss" source("../../src");
 @import "shadcn/tailwind.css";
 
 @theme inline {
@@ -431,6 +436,31 @@ html {
   animation: value-bump 150ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
+/* A wrong PIN. Transform-only so it composites on the GPU and cannot reflow
+   the pad underneath it — the next attempt starts while this is still playing. */
+@keyframes pin-shake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  20% {
+    transform: translateX(-4px);
+  }
+  40% {
+    transform: translateX(4px);
+  }
+  60% {
+    transform: translateX(-3px);
+  }
+  80% {
+    transform: translateX(3px);
+  }
+}
+
+.animate-pin-shake {
+  animation: pin-shake 220ms ease-in-out both;
+}
+
 @keyframes reticle-sweep {
   0% {
     opacity: 0;
@@ -613,6 +643,7 @@ html {
   .animate-fade-in,
   .animate-pulse-success,
   .animate-value-bump,
+  .animate-pin-shake,
   .animate-reticle-sweep,
   .animate-status-ping {
     animation: none;
@@ -669,6 +700,19 @@ html {
 
 /* Purely decorative loops. Left running they repaint forever on a machine that
    has better things to do; nothing waits on their animationend. */
+/* Every OTHER backdrop-filter, not just .glass.
+   The dialog overlay carries `backdrop-blur-sm`, so a Windows 7 till was
+   compositing a full-screen blur behind every confirm, every modifier sheet
+   and the account dialog — the same cost .glass is switched off for, on the
+   same GPUs, for less benefit: the overlay is already bg-black/70, which does
+   all the separating on its own. Matched on the utility rather than a
+   component class so a new surface cannot reintroduce it by accident. */
+.legacy [class*="backdrop-blur"],
+.low-power [class*="backdrop-blur"] {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
 .legacy .skeleton,
 .legacy .animate-pulse-success {
   animation: none;

@@ -21,7 +21,10 @@ import { Loader2 } from "lucide-react";
 import { useAuth } from "@/lib/auth/AuthContext";
 import { cn } from "@/lib/utils";
 import { SyncIndicator } from "@/components/SyncIndicator";
-import LogoutButton from "./LogoutButton";
+import LogoutButton, { LogoutConfirm } from "./LogoutButton";
+import LockButton from "@/components/auth/LockButton";
+import AccountDialog from "@/components/auth/AccountDialog";
+import { initialsFor } from "@/lib/auth/initials";
 import { isTabActive, shouldShowTabList, type Tab } from "./tabs";
 
 export default function DesktopNav({ tabs }: { tabs: Tab[] }) {
@@ -33,6 +36,10 @@ export default function DesktopNav({ tabs }: { tabs: Tab[] }) {
   // href and spin only that one — same fix, same reason, as BottomTabBar.
   const [isPending, startTransition] = useTransition();
   const [pendingHref, setPendingHref] = useState<string | null>(null);
+  const [accountOpen, setAccountOpen] = useState(false);
+  // Raised from the account dialog's "Log out" row, so that route shows the
+  // same cart warning and the same cooldown as the icon button beside it.
+  const [logoutOpen, setLogoutOpen] = useState(false);
 
   // Render whenever there is a signed-in user, NOT only when there are tabs to
   // show. This bar is the only sign-out on desktop -- the POS page's own header
@@ -101,13 +108,34 @@ export default function DesktopNav({ tabs }: { tabs: Tab[] }) {
       {/* Connection state and sign-out are the same question on every screen,
           so they live here rather than being re-implemented per page. The POS
           desktop header used to carry its own copies. */}
-      <div className="ml-auto flex items-center gap-2 pl-3">
+      <div className="ml-auto flex items-center gap-1.5 pl-3">
         <SyncIndicator />
-        <span className="max-w-[12rem] truncate text-xs text-muted-foreground">
-          {user.displayName || user.username}
-        </span>
+        {/* The identity label was already the "am I still signed in as Rana"
+            affordance; making it a button puts PIN and session controls where
+            someone is already looking, without inventing a settings screen. */}
+        <button
+          type="button"
+          onClick={() => setAccountOpen(true)}
+          aria-label="Account and PIN settings"
+          className="tap flex max-w-[13rem] items-center gap-2 rounded-lg px-2 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
+        >
+          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-primary/12 text-[10px] font-bold text-primary">
+            {initialsFor(user.displayName || user.username)}
+          </span>
+          <span className="truncate">{user.displayName || user.username}</span>
+        </button>
+        {/* Out in the open, next to sign-out and never behind the dialog: this
+            is the control the whole PIN feature exists to make cheap. */}
+        <LockButton />
         <LogoutButton />
       </div>
+
+      <AccountDialog
+        open={accountOpen}
+        onOpenChange={setAccountOpen}
+        onLogout={() => setLogoutOpen(true)}
+      />
+      <LogoutConfirm open={logoutOpen} onOpenChange={setLogoutOpen} />
     </nav>
   );
 }

@@ -74,6 +74,53 @@ which 19 ms was the database doing work.** The rest was distance.
 The runbook, including the two `pg_restore` traps that silently strip the grants
 PostgREST needs, is `docs/REGION-MIGRATION.md`.
 
+### There are TWO deployments, and Windows 7 is why
+
+Some shops run Windows 7 tills. **Chrome 109 is the last Chrome that exists for
+Windows 7/8.1** (and Edge 109 the last Edge) — there is no route around it:
+Electron 22 was the last with Windows 7 support and WebView2 dropped it too. So
+109 is the maximum engine those machines can ever run.
+
+Chrome 109 runs the app's JavaScript fine. What it cannot parse is
+`oklch()` / `color-mix()`, which Tailwind v4 emits by default — and that is not
+a graceful degradation. A custom property *stores* `oklch()` happily, but
+substituting it into `color:` makes the declaration invalid at computed-value
+time, so it resolves to `unset`: inherited black text, transparent backgrounds,
+no borders. **The reported symptom is "the till is black and white."**
+
+| | |
+|---|---|
+| `npm run build` | modern, wide-gamut. What most shops get. |
+| `npm run build:legacy` | Chrome 109 target + a Lightning CSS downlevel pass. A **separate deployment**. |
+
+- `src/components/BrowserGate.tsx` is an ES5 inline script that tags
+  `<html class="legacy">` when `CSS.supports('color','oklch(0 0 0)')` is false,
+  and — on the modern deployment — redirects to the legacy origin, so a shop can
+  bookmark either address and still land on a till that renders.
+- **`NEXT_PUBLIC_LEGACY_URL` is what makes that redirect exist, and leaving it
+  unset fails SILENTLY** — the modern build just keeps serving Windows 7 the
+  oklch stylesheet. Nothing errors, nothing logs. See `.env.example`.
+- `src/middleware.ts` serves a plain HTML upgrade page below Chrome 109, server
+  side, because a browser that old may not parse the bundle at all.
+- **`.legacy` and `.low-power` switch off cost, never colour** — `backdrop-filter`
+  and decorative loops. Colour is handled by the sRGB fallbacks.
+
+**Writing CSS for both:** sRGB hex is the floor. A modern colour function is
+allowed only inside an `@supports (color: oklch(0 0 0))` guard, or immediately
+after a fallback declaration of the same property (old Chrome keeps the first
+and drops the second). `npm run verify:legacy-css` runs inside `build:legacy`
+and fails on anything else — it also covers native nesting, `subgrid`,
+`light-dark()`, relative colour syntax and anchor positioning, and reports
+harmless-but-newer things (`text-wrap`, `@starting-style`) as notes rather than
+failing, so the gate stays worth reading. The stylesheet is generated and
+gitignored, so nothing else would catch a regression.
+
+**`@import "tailwindcss" source("../../src")` in `globals.css` is load-bearing.**
+Without the `source(...)` pin, Tailwind v4 scans the whole repo minus
+`.gitignore`, and prose in `docs/`, `harness/` or `scripts/` becomes real
+utilities — a hazard table listing `text-wrap` in `verify-legacy-css.mjs` was
+enough to emit `.text-wrap`, which that same script then flagged.
+
 ---
 
 ## 3. Money rules — read this before touching any price
@@ -244,6 +291,47 @@ onto `products/write.ts` is an open task.
 - **Auth may run *alongside* a store-scoped read, never after it, and never instead of it.** `GET /api/cash-shifts`, `/api/transactions`, `/api/categories`, `/api/recipes` and `/api/combos` all issue the read concurrently with `resolveCaller()` and return nothing until the caller is confirmed. Safe only because the read is scoped to the `store_id` the caller is claiming, so a failed auth discards a read of their own store.
 - `src/lib/auth/jwt.ts` contains the correct primitive (`jose`-based verify) and is **imported by nothing**. It is the intended replacement.
 
+### Sign in, lock and the quick-unlock PIN
+
+The till is a shared device on one counter, so signing back in is a thing that
+happens many times a day. Three states, and they are not interchangeable:
+
+| | What survives | Way back in |
+|---|---|---|
+| **Locked** (`src/lib/auth/lockStore.ts`) | Everything — session, cart, lanes, open shift | PIN, or password |
+| **Logged out** (`AuthContext.logout`) | Cached credentials, cart, IndexedDB queue | PIN, or password |
+| **Forgotten** (`forgetCachedEntry`) | Nothing for that person on this device | Password only |
+
+- **Locking is an OVERLAY, never a route.** `LockScreenHost` mounts in
+  `providers.tsx` — above every route, inside `AuthProvider`, never remounted by
+  navigation — and renders on top of a tree that stays exactly where it was. A
+  `/lock` route would unmount `(shell)` and lose the scanner's `MediaStream`,
+  the lane derivation, checkout's typed amounts and every in-flight fetch.
+- **`isLocked()` is readable outside React**, and that is the point. The
+  window-level `keydown` handlers on `/checkout` and `/pos` stay mounted under
+  the overlay, and one of them **completes a sale on F4** — it fires even with a
+  field focused, by design. Both early-return on `isLocked`. **Any new
+  window-level key handler must do the same.**
+- **The lock takes NO `useReloadGuard` hold**, deliberately: a locked till is
+  the best moment to apply a service-worker update, and the lock is persisted so
+  the reload comes back identical. `PWAUpdateListener` still refuses while
+  `hasAnyLaneItems()`, which is the part that protects money.
+- **The PIN is device-local.** It unlocks the credential `offlineAuth.ts`
+  already caches, so it works offline for free and needs no migration and no API
+  route. It is plaintext beside the plaintext password (audit P0-4 — no worse,
+  but no better). The throttle in **`src/lib/auth/pinPolicy.ts`** is what makes
+  it safe enough: 5 attempts, then 60s during which the PIN is **not compared at
+  all**, so a cooldown cannot act as an oracle. Pure and harness-pinned.
+- **`AuthContext.establishSessionFromCache()` is the single writer** for both
+  offline password login and PIN unlock. It exists so neither path can forget
+  `goldensquirrel_auth` — the `x-auth-data` tenancy header whose omission made
+  every queued sale 401 in production on 2026-08-24.
+- **`cacheCredentials()` carries the PIN forward.** Signing in with a password
+  again must not silently wipe someone's quick unlock.
+- Login lands on `pickLandingRoute()` (`src/components/nav/tabs.ts`), not a
+  hardcoded `/pos` — a cash-only employee was previously dropped on a screen
+  their own guard bounced them off.
+
 ### Permissions vs roles — don't mix them up
 
 - ✅ **`src/lib/auth/permissions.ts`** is the real system. Six `SECTIONS`: `pos`, `inventory`, `transactions`, `receipts`, `cash_register`, `kitchen`. Guard with `PermissionGuard` from `src/lib/auth/guards.tsx`. **Parse a stored permissions blob with `parsePermissions()`**, which is driven by `SECTIONS` — three hand-written copies of that mapping used to exist in `AuthContext`, and a new section silently arrived as `undefined` (i.e. denied) at every one that was not updated.
@@ -272,6 +360,7 @@ There are more mechanisms than there should be. Know which is authoritative:
 | Products / transactions offline | Dexie via `src/lib/db/localDB.ts` |
 | Pulling products from Supabase | `refreshProductsIntoCache()` in `src/lib/products/refresh.ts` — the only place that fetches products. Delta against an `updated_at` watermark, full pull when the cache is short, guarded reconcile for deletions, and one in-flight run per store. |
 | Connectivity + sync status | `connectivity` and `syncEngine` singletons |
+| Is the till locked | `src/lib/auth/lockStore.ts` — module store, `useIsLocked()` in React and `isLocked()` outside it |
 
 ### 6a. Lanes and one-off lines
 
@@ -328,6 +417,8 @@ Adding a flag: add to `FEATURES`, add to the `general` preset in `FEATURE_PRESET
 ```bash
 npm run dev          # localhost:3000, bound to 0.0.0.0 for phone testing on LAN
 npm run build        # production build + THREE verification gates (below)
+npm run build:legacy # the SECOND deployment, for Windows 7 / Chrome 109 (see §2)
+npm run verify:legacy-css # Chrome 109 can parse the whole stylesheet (in build:legacy)
 npm run verify:sw    # assert the generated public/sw.js has the required rules
 npm run verify:budgets    # no route's JS and no precache total grew
 npm run verify:invariants # the statically checkable §1 invariants

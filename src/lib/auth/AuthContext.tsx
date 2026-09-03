@@ -3,7 +3,17 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from "react";
 import { StoreUser, canAccess, getFullPermissions, parsePermissions, SectionKey, UserPermissions } from "./permissions";
 import { buildAuthHeaders } from "./apiHeaders";
-import { cacheCredentials, clearCachedCredentials, validateCachedCredentials } from "./offlineAuth";
+import {
+  cacheCredentials,
+  clearCachedCredentials,
+  validateCachedCredentials,
+  verifyPin,
+  forgetCachedEntryByStoreId,
+  type CachedStoreData,
+  type CachedEmployeeData,
+} from "./offlineAuth";
+import type { PinVerdict } from "./pinPolicy";
+import { unlockSession } from "./lockStore";
 import { purgeCredentialCache } from "@/lib/pwa/purgeCredentialCache";
 import { logActivity, invalidateActivityIdentity, flushActivity } from "@/lib/activity/logger";
 import { connectivity } from "@/lib/connectivity";
@@ -24,6 +34,18 @@ interface AuthContextValue {
    */
   login: (storeUsername: string, username: string, password: string) => Promise<{ success: boolean; error?: string }>;
   loginOffline: (storeUsername: string, password: string, username?: string) => Promise<{ success: boolean; error?: string }>;
+  /**
+   * Quick unlock from a PIN held on THIS device.
+   *
+   * Resolves entirely from the credential cache and never blocks on the
+   * network — that is the whole point: a cashier back from a break gets the
+   * till in four taps whether or not the internet is up.
+   */
+  unlockWithPin: (
+    storeUsername: string,
+    username: string,
+    pin: string
+  ) => Promise<{ success: true } | { success: false; verdict: PinVerdict }>;
   logout: () => void;
   canAccess: (section: SectionKey) => boolean;
   refresh: () => Promise<void>;
@@ -154,6 +176,38 @@ function clearUserFromStorage() {
   // can still log in offline after logging out.
 }
 
+/**
+ * Rebuild a `StoreUser` from a cached credential. Pure — no storage, no state.
+ *
+ * Owner and employee differ only in where the identity comes from: an owner has
+ * no `store_users` row, so their session id IS the store id and they get every
+ * permission; an employee gets theirs parsed, fail-closed, from the cached blob.
+ */
+function userFromCache(
+  storeData: CachedStoreData,
+  employeeData?: CachedEmployeeData | null
+): StoreUser {
+  if (employeeData) {
+    const perms: UserPermissions = parsePermissions(employeeData.permissions);
+    return {
+      id: employeeData.id,
+      storeId: employeeData.store_id,
+      username: employeeData.username,
+      displayName: employeeData.display_name || employeeData.username,
+      isOwner: false,
+      permissions: perms,
+    };
+  }
+  return {
+    id: storeData.id,
+    storeId: storeData.id,
+    username: storeData.username,
+    displayName: storeData.username,
+    isOwner: true,
+    permissions: getFullPermissions(),
+  };
+}
+
 export function AuthProvider({ children }: AuthProviderProps) {
   const [user, setUser] = useState<StoreUser | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -281,6 +335,76 @@ export function AuthProvider({ children }: AuthProviderProps) {
   }, []);
 
   /**
+   * Establish a session from a cached credential — the ONE path shared by
+   * offline password login and PIN unlock.
+   *
+   * ## Why this is a single function
+   *
+   * The two writes below used to be duplicated across the owner and employee
+   * branches of loginOffline. Adding a third caller (unlockWithPin) by copying
+   * them again is exactly how `goldensquirrel_auth` came to be missing on the
+   * offline path in the first place: the sync engine sends that key verbatim as
+   * `x-auth-data`, and without it every queued sale answered
+   * `401 - No store_id in auth data`. Confirmed on production 2026-08-24.
+   * One writer means no future caller can forget it.
+   *
+   * ## Ordering
+   *
+   * Both localStorage writes land BEFORE setUser. setUser is what re-renders
+   * consumers, and several of them immediately fire store-scoped fetches that
+   * read `goldensquirrel_auth` through buildAuthHeaders. Today that survives on
+   * React batching; making the order explicit removes the race and costs
+   * nothing.
+   */
+  const establishSessionFromCache = useCallback(
+    (
+      storeData: CachedStoreData,
+      employeeData: CachedEmployeeData | null | undefined,
+      mode: "offline_login" | "pin_unlock"
+    ): StoreUser => {
+      const nextUser = userFromCache(storeData, employeeData);
+
+      saveUserToStorage(nextUser);
+      saveLegacyAuthToStorage(
+        nextUser.storeId,
+        nextUser.username,
+        storeData.license_expires_at
+      );
+
+      setUser(nextUser);
+      invalidateActivityIdentity();
+
+      // Attribution passed explicitly rather than looked up, so the event does
+      // not depend on the writes above having landed first.
+      const identity = nextUser.isOwner
+        ? { store_id: nextUser.storeId, user_name: nextUser.username }
+        : {
+            store_id: nextUser.storeId,
+            user_id: nextUser.id,
+            user_name: nextUser.displayName,
+          };
+      const role = nextUser.isOwner ? "owner" : "employee";
+
+      if (mode === "pin_unlock") {
+        logActivity("auth.unlock", {
+          target: nextUser.displayName,
+          identity,
+          details: { role, method: "pin" },
+        });
+      } else {
+        logActivity("auth.login", {
+          target: nextUser.displayName,
+          identity,
+          details: { role, mode: "offline" },
+        });
+      }
+
+      return nextUser;
+    },
+    []
+  );
+
+  /**
    * Offline login fallback — validates credentials against cached data.
    * Used when the user is offline and cannot reach Supabase.
    */
@@ -295,60 +419,9 @@ export function AuthProvider({ children }: AuthProviderProps) {
         return { success: false, error: "No cached credentials found for this user. Please connect to the internet to log in." };
       }
 
-      const { storeData, employeeData } = cached;
-
-      // If employee data exists, this was an employee login
-      if (employeeData) {
-        const perms: UserPermissions = parsePermissions(employeeData.permissions);
-
-        const employeeUser: StoreUser = {
-          id: employeeData.id,
-          storeId: employeeData.store_id,
-          username: employeeData.username,
-          displayName: employeeData.display_name || employeeData.username,
-          isOwner: false,
-          permissions: perms,
-        };
-
-        setUser(employeeUser);
-        saveUserToStorage(employeeUser);
-        // Without this the session cannot sync — see saveLegacyAuthToStorage.
-        saveLegacyAuthToStorage(
-          employeeData.store_id,
-          employeeData.username,
-          storeData.license_expires_at
-        );
-        invalidateActivityIdentity();
-        logActivity("auth.login", {
-          target: employeeUser.displayName,
-          details: { role: "employee", mode: "offline" },
-        });
-        return { success: true };
-      }
-
-      // Owner login from cached data
-      const ownerUser: StoreUser = {
-        id: storeData.id,
-        storeId: storeData.id,
-        username: storeData.username,
-        displayName: storeData.username,
-        isOwner: true,
-        permissions: getFullPermissions(),
-      };
-
-      setUser(ownerUser);
-      saveUserToStorage(ownerUser);
-      // Without this the session cannot sync — see saveLegacyAuthToStorage.
-      saveLegacyAuthToStorage(
-        storeData.id,
-        storeData.username,
-        storeData.license_expires_at
-      );
-      invalidateActivityIdentity();
-      logActivity("auth.login", {
-        target: storeData.username,
-        details: { role: "owner", mode: "offline" },
-      });
+      establishSessionFromCache(cached.storeData, cached.employeeData, "offline_login");
+      // A password login is also a way back in from a lock, so clear the flag.
+      unlockSession();
       return { success: true };
     } catch (err) {
       console.error("Offline login error:", err);
@@ -356,7 +429,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [establishSessionFromCache]);
 
   const logout = useCallback(() => {
     // Logged and flushed BEFORE the auth keys are removed. clearUserFromStorage
@@ -371,6 +444,10 @@ export function AuthProvider({ children }: AuthProviderProps) {
     setUser(null);
     clearUserFromStorage();
     invalidateActivityIdentity();
+    // A lock is a frozen session. Signing out ends the session, so the flag
+    // must go with it — a stale one would paint a lock screen over /login,
+    // which is a dead end nobody can get out of.
+    unlockSession();
 
     // Signing out must also drop any credential response the service worker
     // cached, or "log out" on a shared till leaves the owner's password
@@ -423,7 +500,8 @@ export function AuthProvider({ children }: AuthProviderProps) {
    * keeps the session. Nothing here throws, and nothing here clears a session
    * except on a confirmed `active: false`.
    */
-  const refresh = useCallback(async () => {
+  const revalidate = useCallback(async (target: StoreUser | null) => {
+    const user = target;
     if (!user) return;
     if (!user.isOwner) {
       // Nothing to learn while offline, and asking anyway only invites the
@@ -458,6 +536,19 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
         // Now this IS an answer: the row is gone, or it is switched off.
         if (!payload.active) {
+          // Also drop this person's cached credential from the device.
+          //
+          // Cached credentials deliberately survive logout, so that a cashier
+          // who signs off during an outage can sign back in. That same
+          // property means a dismissed employee could PIN straight back into
+          // the till offline, indefinitely. Removing the entry closes it.
+          //
+          // ONLY on a confirmed `active: false`. Never on silence — a dropped
+          // packet or a 500 must not strand someone who still works here. Same
+          // rule as evaluateReconcile(): destructive action requires proof.
+          // Addressed by store id, because a live session only carries that —
+          // goldensquirrel_auth holds no store username to key the cache by.
+          forgetCachedEntryByStoreId(user.storeId, user.username);
           logout();
           return;
         }
@@ -484,7 +575,77 @@ export function AuthProvider({ children }: AuthProviderProps) {
         // case, and must never sign a cashier out mid-shift.
       }
     }
-  }, [user, logout]);
+  }, [logout]);
+
+  /** Re-read the CURRENT session's permissions. */
+  const refresh = useCallback(async () => {
+    await revalidate(user);
+  }, [revalidate, user]);
+
+  /**
+   * Quick unlock from a device-local PIN.
+   *
+   * Resolves from the credential cache and NEVER blocks on the network — that
+   * is the product goal, and it is what makes the four-tap return work in a
+   * shop with no internet.
+   *
+   * It deliberately does NOT re-POST /api/auth/login in the background: that
+   * would put the plaintext password on the wire dozens of times a day and
+   * hammer an unauthenticated endpoint from the till itself. `revalidate()`
+   * already carries the right rule — it acts only on a confirmed
+   * `active: false` and keeps the session on any silence.
+   */
+  const unlockWithPin = useCallback(
+    async (
+      storeUsername: string,
+      username: string,
+      pin: string
+    ): Promise<{ success: true } | { success: false; verdict: PinVerdict }> => {
+      const { verdict, entry } = verifyPin(storeUsername, username, pin);
+
+      if (!verdict.ok || !entry) {
+        // Attribution passed explicitly: signed out, the logger has no
+        // goldensquirrel_auth to read a store_id from, and an event with no
+        // tenant is discarded at ingest.
+        const storeId = entry?.storeData?.id;
+        logActivity("auth.pin_failed", {
+          target: username,
+          // Signed out, the logger has no goldensquirrel_auth to read a tenant
+          // from, and an event with no store_id is dropped at ingest. Attach
+          // one when the cache can supply it; a failure with no cached entry at
+          // all simply has no tenant to attribute and is allowed to fall away.
+          identity: storeId ? { store_id: storeId, user_name: username } : undefined,
+          details: {
+            reason: verdict.ok ? "unknown" : verdict.reason,
+            attemptsRemaining:
+              !verdict.ok && verdict.reason === "wrong"
+                ? verdict.attemptsRemaining
+                : undefined,
+          },
+        });
+        return {
+          success: false,
+          verdict: verdict.ok ? { ok: false, reason: "no_entry" } : verdict,
+        };
+      }
+
+      const nextUser = establishSessionFromCache(
+        entry.storeData,
+        entry.employeeData,
+        "pin_unlock"
+      );
+      unlockSession();
+
+      // Fire and forget. The session is already live; this only ever takes it
+      // away again, and only on a confirmed deactivation. Passing the fresh
+      // user explicitly matters — refresh() closes over the PREVIOUS `user`,
+      // which is still null on this tick.
+      void revalidate(nextUser);
+
+      return { success: true };
+    },
+    [establishSessionFromCache, revalidate]
+  );
 
   const checkAccess = useCallback((section: SectionKey): boolean => {
     return canAccess(user, section);
@@ -496,6 +657,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
       isLoading,
       login,
       loginOffline,
+      unlockWithPin,
       logout,
       canAccess: checkAccess,
       refresh,

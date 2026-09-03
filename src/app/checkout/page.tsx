@@ -31,7 +31,6 @@ import {
   Check,
   CloudOff,
   Copy,
-  Delete,
   Loader2,
   Printer,
   Share2,
@@ -61,6 +60,8 @@ import { cn } from "@/lib/utils";
 import { logActivity, flushActivity } from "@/lib/activity/logger";
 import { perfNow, logPerfSale } from "@/lib/activity/perf";
 import { connectivity } from "@/lib/connectivity";
+import { Keypad, digitKeys } from "@/components/ui/Keypad";
+import { useIsLocked } from "@/lib/auth/lockStore";
 
 /** Which amount the keypad is typing into. Both are always displayed. */
 type PayField = "LL" | "USD";
@@ -85,6 +86,10 @@ function appendUSD(prev: string, key: string): string {
 
 function CheckoutContent() {
   const router = useRouter();
+
+  // The lock overlay covers this page without unmounting it, so both of the
+  // window-level keydown handlers below stay live behind it. See their guards.
+  const isLocked = useIsLocked();
 
   const [activeField, setActiveField] = useState<PayField>("LL");
   const [amountPaidLL, setAmountPaidLL] = useState<string>("");
@@ -229,6 +234,12 @@ function CheckoutContent() {
   // ---- Hardware keyboard (desktop tills) ----
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
+      // The lock overlay does NOT unmount this page — that is the whole point
+      // of locking. So this listener is still live underneath it, and a PIN
+      // typed on the lock screen would land in the amount paid. The target
+      // check above does not help: the PIN pad deliberately focuses no input,
+      // or the software keyboard would cover it on a phone.
+      if (isLocked) return;
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
       if (transactionComplete) return;
 
@@ -253,7 +264,7 @@ function CheckoutContent() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [activeField, pressKey, pressBackspace, handleClear, transactionComplete]);
+  }, [activeField, pressKey, pressBackspace, handleClear, transactionComplete, isLocked]);
 
   // ---- F4: complete the sale ----
   //
@@ -280,6 +291,11 @@ function CheckoutContent() {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.repeat || e.key !== "F4") return;
       e.preventDefault();
+      // Mandatory, not defensive. Unlike the handler above this one fires even
+      // while a field has focus, by design — and what it does is COMPLETE THE
+      // SALE. Without this line, F4 pressed on the lock screen takes a real
+      // customer's money from behind a screen that says the till is locked.
+      if (isLocked) return;
       if (transactionComplete || isProcessing || items.length === 0) return;
 
       if (totalPaid >= total) {
@@ -292,7 +308,7 @@ function CheckoutContent() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [transactionComplete, isProcessing, items.length, totalPaid, total]);
+  }, [transactionComplete, isProcessing, items.length, totalPaid, total, isLocked]);
 
   // Generate transaction number
   const generateTransactionNumber = () => {
@@ -1039,27 +1055,18 @@ function CheckoutContent() {
            than letting them sprawl. */}
       <div className="flex min-h-0 flex-1 flex-col md:w-[380px] md:flex-none">
 
-      {/* ---- Keypad ---- */}
-      <div className="grid min-h-[212px] flex-1 shrink-0 grid-cols-3 auto-rows-fr gap-2 px-5 py-3">
-        {keypadKeys.map((key) => (
-          <button
-            key={key}
-            type="button"
-            onClick={() => pressKey(key)}
-            className="tap flex items-center justify-center rounded-2xl bg-muted/50 text-2xl font-semibold tnum active:bg-muted"
-          >
-            {key}
-          </button>
-        ))}
-        <button
-          type="button"
-          onClick={pressBackspace}
-          aria-label="Delete last digit"
-          className="tap flex items-center justify-center rounded-2xl bg-muted/50 active:bg-muted"
-        >
-          <Delete className="h-6 w-6" />
-        </button>
-      </div>
+      {/* ---- Keypad ----
+           Shared with the login PIN pad. hapticMs={0} because pressKey and
+           pressBackspace already call vibrate() — they are also what the
+           HARDWARE keyboard handler calls, so letting Keypad buzz too would
+           double-pulse every touch press. */}
+      <Keypad
+        aria-label="Amount keypad"
+        keys={[...digitKeys(keypadKeys), { kind: "backspace" }]}
+        onKey={pressKey}
+        onBackspace={pressBackspace}
+        hapticMs={0}
+      />
 
       {/* ---- Confirm ----
            No safe-bottom here: the tab bar below now owns the home-indicator

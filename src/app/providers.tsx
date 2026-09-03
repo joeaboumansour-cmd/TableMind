@@ -7,6 +7,7 @@ import { AuthProvider } from "@/lib/auth/AuthContext";
 import ViewportHeightSync from "@/components/ViewportHeightSync";
 import ActivityTracker from "@/components/ActivityTracker";
 import { purgeCredentialCache } from "@/lib/pwa/purgeCredentialCache";
+import LockScreenHost from "@/components/auth/LockScreenHost";
 
 // NOTE: TanStack Query was previously mounted here but never used — there were
 // zero useQuery/useMutation calls in the app. It was removed in the Aug 2026
@@ -36,6 +37,11 @@ export function Providers({ children }: { children: React.ReactNode }) {
             /admin and whenever the activity_logging flag is off. */}
         <ActivityTracker />
         {children}
+        {/* The lock overlay. Mounted HERE, above every route and inside
+            AuthProvider, because locking must freeze the app rather than
+            navigate away from it — the tree below stays mounted with its cart,
+            its lanes and its open shift intact. Renders null unless locked. */}
+        <LockScreenHost />
         {/* Pushed down clear of the floating POS header (status chip, scanner
             toggle, power) — at the default offset a toast sat directly on top
             of those buttons. The offset includes the iOS safe-area inset
