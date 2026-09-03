@@ -35,12 +35,13 @@ import { primeFeedback, playSuccessSound } from "@/lib/feedback";
 import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import StoreChip from "./StoreChip";
+import StorePicker from "./StorePicker";
 import RosterGrid from "./RosterGrid";
 import PinPad from "./PinPad";
 import PasswordForm from "./PasswordForm";
 import PinSetupCard from "./PinSetupCard";
 
-type Stage = "roster" | "pin" | "password" | "pin-setup";
+type Stage = "store" | "roster" | "pin" | "password" | "pin-setup";
 
 export interface AuthFlowProps {
   /**
@@ -94,6 +95,12 @@ export function AuthFlow({
   const [pinTone, setPinTone] = useState<"error" | "muted">("muted");
   const [cooldownUntil, setCooldownUntil] = useState<number | null>(null);
   const [now, setNow] = useState(() => Date.now());
+
+  // The store in force when the picker was opened, so Cancel can UNDO rather
+  // than leave you wherever the picker happened to put you. "Another store"
+  // clears the store and the roster on purpose, and without this a cancel from
+  // there dropped the cashier into the very form they were backing out of.
+  const storeBeforeChange = useRef<string>("");
 
   // Who the pin-setup offer is for, once a password sign-in has landed.
   const pendingSetup = useRef<{
@@ -306,6 +313,9 @@ export function AuthFlow({
 
         playSuccessSound();
         refreshRoster(store);
+        // Signing into a shop this device had never seen adds it to the list
+        // the picker offers next time.
+        setKnownStores(getCachedStoreUsernames());
         finish(store, who);
       } finally {
         setIsSubmitting(false);
@@ -340,7 +350,8 @@ export function AuthFlow({
   }, [onAuthenticated]);
 
   // ---- Render ----
-  const showStoreChip = Boolean(storeUsername) && stage !== "pin-setup";
+  const showStoreChip =
+    Boolean(storeUsername) && stage !== "pin-setup" && stage !== "store";
   const canChangeStore =
     mode === "login" && stage !== "pin-setup" && knownStores.length > 0;
 
@@ -350,17 +361,62 @@ export function AuthFlow({
         <div className="px-5 pb-3">
           <StoreChip
             storeUsername={storeUsername}
+            // Goes to the PICKER, not straight to the password form.
+            // It used to set stage="password" while leaving storeUsername
+            // set — and PasswordForm hides the store field precisely when the
+            // device already knows the store, so "Change" landed you on the
+            // same two fields with no way to name a different shop. It looked
+            // like a dead button.
             onChange={
               canChangeStore
                 ? () => {
-                    setSelected(null);
-                    setUsername("");
-                    setStage("password");
+                    storeBeforeChange.current = storeUsername;
+                    setStage("store");
                   }
                 : undefined
             }
           />
         </div>
+      )}
+
+      {stage === "store" && (
+        <StorePicker
+          stores={knownStores}
+          current={storeUsername}
+          countFor={(store) => getRosterForStore(store).length}
+          onPick={(store) => {
+            setStoreUsername(store);
+            refreshRoster(store);
+            setSelected(null);
+            setUsername("");
+            setPinMessage(null);
+            setCooldownUntil(null);
+            setStage("roster");
+          }}
+          onOther={() => {
+            // Clearing the store is what makes PasswordForm show its store
+            // field again, and empties the roster so the old shop's staff are
+            // not offered under a new one.
+            setStoreUsername("");
+            setRoster([]);
+            setSelected(null);
+            setUsername("");
+            setStage("password");
+          }}
+          onCancel={() => {
+            const previous = storeBeforeChange.current;
+            if (!previous) {
+              setStage("password");
+              return;
+            }
+            setStoreUsername(previous);
+            const restored = getRosterForStore(previous);
+            setRoster(restored);
+            setSelected(null);
+            setUsername("");
+            setStage(restored.length > 0 ? "roster" : "password");
+          }}
+        />
       )}
 
       {stage === "roster" && (
@@ -426,7 +482,7 @@ export function AuthFlow({
           />
 
           <div className="mt-4 flex flex-col items-center gap-1.5">
-            {roster.length > 0 && (
+            {roster.length > 0 ? (
               <button
                 type="button"
                 onClick={() => {
@@ -437,6 +493,19 @@ export function AuthFlow({
               >
                 Back to the list
               </button>
+            ) : (
+              // Reached by "Another store", which empties the roster on
+              // purpose. Without this there is no way back out of the form.
+              mode === "login" &&
+              knownStores.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setStage("store")}
+                  className="tap rounded-xl px-4 py-2 text-[13px] font-semibold text-primary hover:bg-primary/10"
+                >
+                  Back to the store list
+                </button>
+              )
             )}
             {mode === "lock" && onSignOut && (
               <button
